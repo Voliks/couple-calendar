@@ -1,34 +1,21 @@
 import os
-from libsql_client import create_client
+import aiosqlite
 
-TURSO_URL = os.getenv("TURSO_URL")
-TURSO_TOKEN = os.getenv("TURSO_TOKEN")
-
-
-def get_client():
-    if TURSO_URL and TURSO_TOKEN:
-        url = TURSO_URL
-        if "://" in url:
-            url = "https://" + url.split("://", 1)[1]
-        else:
-            url = f"https://{url}"
-
-        return create_client(url=url, auth_token=TURSO_TOKEN)
-    return create_client(url="file:calendar.db")
+DB_PATH = os.getenv("DB_PATH", "calendar.db")
 
 
 async def init_db():
-    async with get_client() as client:
-        await client.execute(
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id INTEGER PRIMARY KEY,
                 invite_code TEXT UNIQUE NOT NULL,
-                partner_id INTEGER
+                partner_id INTEGER REFERENCES users(telegram_id)
             )
             """
         )
-        await client.execute(
+        await db.execute(
             """
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,142 +29,130 @@ async def init_db():
             )
             """
         )
-        await client.execute(
+        await db.execute(
             """
             CREATE TABLE IF NOT EXISTS checklist_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id INTEGER NOT NULL,
+                event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
                 title TEXT NOT NULL,
                 is_completed INTEGER DEFAULT 0
             )
             """
         )
+        # Миграция: проверяем наличие колонки category в старых БД
+        cursor = await db.execute("PRAGMA table_info(events)")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if "category" not in columns:
+            await db.execute("ALTER TABLE events ADD COLUMN category TEXT DEFAULT 'Свободное время'")
+
+        await db.commit()
 
 
 async def get_or_create_user(telegram_id: int):
     import secrets
-    async with get_client() as client:
-        rs = await client.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
-        if rs.rows:
-            r = rs.rows[0]
-            return {"telegram_id": r[0], "invite_code": r[1], "partner_id": r[2]}
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)) as cursor:
+            user = await cursor.fetchone()
+            if user:
+                return dict(user)
 
         invite_code = secrets.token_hex(4)
-        await client.execute(
+        await db.execute(
             "INSERT INTO users (telegram_id, invite_code) VALUES (?, ?)",
             (telegram_id, invite_code),
         )
+        await db.commit()
         return {"telegram_id": telegram_id, "invite_code": invite_code, "partner_id": None}
 
 
 async def get_user_by_code(code: str):
-    async with get_client() as client:
-        rs = await client.execute("SELECT * FROM users WHERE invite_code = ?", (code,))
-        if rs.rows:
-            r = rs.rows[0]
-            return {"telegram_id": r[0], "invite_code": r[1], "partner_id": r[2]}
-        return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM users WHERE invite_code = ?", (code,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
 
 async def link_partners(user1_id: int, user2_id: int):
-    async with get_client() as client:
-        await client.execute("UPDATE users SET partner_id = ? WHERE telegram_id = ?", (user2_id, user1_id))
-        await client.execute("UPDATE users SET partner_id = ? WHERE telegram_id = ?", (user1_id, user2_id))
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET partner_id = ? WHERE telegram_id = ?", (user2_id, user1_id))
+        await db.execute("UPDATE users SET partner_id = ? WHERE telegram_id = ?", (user1_id, user2_id))
+        await db.commit()
 
 
 async def create_event(created_by: int, target_user: int, title: str, description: str, category: str, date: str, items: list = None):
-    status = "accepted" if category == "Магазин" else "pending"
-
-    async with get_client() as client:
-        rs = await client.execute(
-            "INSERT INTO events (created_by, target_user, title, description, category, date, status) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
-            (created_by, target_user, title, description, category, date, status),
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "INSERT INTO events (created_by, target_user, title, description, category, date) VALUES (?, ?, ?, ?, ?, ?)",
+            (created_by, target_user, title, description, category, date),
         )
-        event_id = rs.rows[0][0]
-
+        event_id = cursor.lastrowid
+        
         if category == "Магазин" and items:
             for item in items:
                 item_title = str(item).strip()
                 if item_title:
-                    await client.execute(
+                    await db.execute(
                         "INSERT INTO checklist_items (event_id, title) VALUES (?, ?)",
                         (event_id, item_title),
                     )
 
-        return {
-            "id": event_id,
-            "created_by": created_by,
-            "target_user": target_user,
-            "title": title,
-            "description": description,
-            "category": category,
-            "date": date,
-            "status": status,
-            "items": []
-        }
-
-
-async def update_event(event_id: int, description: str, date: str):
-    async with get_client() as client:
-        await client.execute(
-            "UPDATE events SET description = ?, date = ? WHERE id = ?",
-            (description, date, event_id),
-        )
-
-
-async def delete_event(event_id: int):
-    async with get_client() as client:
-        await client.execute("DELETE FROM checklist_items WHERE event_id = ?", (event_id,))
-        await client.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        await db.commit()
+        async with db.execute("SELECT * FROM events WHERE id = ?", (event_id,)) as cur:
+            row = await cur.fetchone()
+            return dict(row)
 
 
 async def get_event(event_id: int):
-    async with get_client() as client:
-        rs = await client.execute("SELECT * FROM events WHERE id = ?", (event_id,))
-        if rs.rows:
-            r = rs.rows[0]
-            return {
-                "id": r[0], "created_by": r[1], "target_user": r[2],
-                "title": r[3], "description": r[4], "category": r[5],
-                "date": r[6], "status": r[7]
-            }
-        return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM events WHERE id = ?", (event_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
 
 async def list_events(user_id: int):
-    async with get_client() as client:
-        rs = await client.execute(
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
             "SELECT * FROM events WHERE created_by = ? OR target_user = ? ORDER BY date ASC",
             (user_id, user_id),
-        )
-        events = []
-        for r in rs.rows:
-            e = {
-                "id": r[0], "created_by": r[1], "target_user": r[2],
-                "title": r[3], "description": r[4], "category": r[5],
-                "date": r[6], "status": r[7], "items": []
-            }
+        ) as cursor:
+            events = [dict(r) for r in await cursor.fetchall()]
+
+        for e in events:
             if e["category"] == "Магазин":
-                c_rs = await client.execute("SELECT id, title, is_completed FROM checklist_items WHERE event_id = ?", (e["id"],))
-                e["items"] = [{"id": ci[0], "title": ci[1], "is_completed": bool(ci[2])} for ci in c_rs.rows]
-            events.append(e)
+                async with db.execute(
+                    "SELECT id, title, is_completed FROM checklist_items WHERE event_id = ?",
+                    (e["id"],),
+                ) as c_cursor:
+                    e["items"] = [dict(item) for item in await c_cursor.fetchall()]
+            else:
+                e["items"] = []
+
         return events
 
 
 async def set_status(event_id: int, status: str):
-    async with get_client() as client:
-        await client.execute("UPDATE events SET status = ? WHERE id = ?", (status, event_id))
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE events SET status = ? WHERE id = ?", (status, event_id))
+        await db.commit()
 
 
 async def toggle_checklist_item(item_id: int):
-    async with get_client() as client:
-        await client.execute("UPDATE checklist_items SET is_completed = NOT is_completed WHERE id = ?", (item_id,))
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE checklist_items SET is_completed = NOT is_completed WHERE id = ?", (item_id,))
+        await db.commit()
 
 
 async def add_checklist_item(event_id: int, title: str):
-    async with get_client() as client:
-        rs = await client.execute(
-            "INSERT INTO checklist_items (event_id, title) VALUES (?, ?) RETURNING id",
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO checklist_items (event_id, title) VALUES (?, ?)",
             (event_id, title),
         )
-        return {"id": rs.rows[0][0], "title": title, "is_completed": 0}
+        item_id = cursor.lastrowid
+        await db.commit()
+        return {"id": item_id, "title": title, "is_completed": 0}
