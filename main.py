@@ -65,7 +65,7 @@ async def cmd_start(message: Message, command: CommandObject):
         inviter = await db.get_user_by_code(args[4:])
         if inviter is None or inviter["telegram_id"] == me.id:
             notice = "⚠️ Эта пригласительная ссылка недействительна.\n\n"
-        elif user["partner_id"] == inviter["telegram_id"]:
+        elif user["partner_id"] == inviter["partner_id"] and user["partner_id"] is not None:
             notice = "Вы уже связаны с этим партнёром 💞\n\n"
         elif user["partner_id"] or inviter["partner_id"]:
             notice = "⚠️ У одного из вас уже есть пара, связать не получилось.\n\n"
