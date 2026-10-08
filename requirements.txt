@@ -1,4 +1,4 @@
 aiogram>=3.13,<4
 aiohttp>=3.9
-aiosqlite>=0.20
+libsql-client>=0.3.0
 python-dotenv>=1.0
