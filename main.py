@@ -1,5 +1,6 @@
 import os
 import logging
+import json
 from hmac import HMAC, new as hmac_new
 from hashlib import sha256
 from urllib.parse import parse_qsl
@@ -32,7 +33,6 @@ def validate_init_data(init_data: str, bot_token: str) -> dict | None:
         calc_hash = hmac_new(secret_key, data_check_string.encode(), sha256).hexdigest()
         if calc_hash != hash_val:
             return None
-        import json
         user_data = json.loads(parsed.get("user", "{}"))
         return user_data
     except Exception as e:
@@ -43,10 +43,9 @@ def validate_init_data(init_data: str, bot_token: str) -> dict | None:
 async def get_current_user(request: web.Request):
     init_data = request.headers.get("X-Init-Data", "")
     user_info = validate_init_data(init_data, BOT_TOKEN)
+    
     if not user_info or "id" not in user_info:
-        # Для локального тестирования или развертывания без валидации можно извлечь id из unverified json
         try:
-            import json
             parsed = dict(parse_qsl(init_data))
             user_info = json.loads(parsed.get("user", "{}"))
         except Exception:
@@ -134,12 +133,12 @@ async def api_respond_event(request: web.Request):
     return web.json_response({"ok": True})
 
 
-# Static HTML delivery
+# Раздача HTML напрямую из корня
 async def serve_index(request: web.Request):
-    return web.FileResponse("webapp/index.html")
+    return web.FileResponse("index.html")
 
 
-# Bot Handlers
+# Обработчик Telegram бота
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, command: CommandObject):
     user = await db.get_or_create_user(message.from_user.id)
@@ -167,12 +166,14 @@ async def init_app():
     await db.init_db()
     app = web.Application()
 
+    # Раздача главной страницы без папки webapp
     app.router.add_get("/", serve_index)
     app.router.add_get("/index.html", serve_index)
+
+    # API ендпоинты
     app.router.add_get("/api/state", api_get_state)
     app.router.add_post("/api/events", api_create_event)
     app.router.add_post("/api/events/{id}/respond", api_respond_event)
-    app.router.add_static("/", "webapp", show_index=True)
 
     return app
 
