@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import db  # noqa: E402
+import db  # noqa: E402  (после load_dotenv, чтобы подхватить DB_PATH)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-blue.vercel.app").rstrip("/")
@@ -22,7 +22,7 @@ PORT = int(os.getenv("PORT", "8080"))
 INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-INIT_DATA_MAX_AGE = 24 * 3600
+INIT_DATA_MAX_AGE = 24 * 3600  # секунд
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -47,7 +47,7 @@ def open_app_keyboard() -> InlineKeyboardMarkup:
 async def safe_send(chat_id: int, text: str) -> None:
     try:
         await bot.send_message(chat_id, text, reply_markup=open_app_keyboard())
-    except Exception:
+    except Exception:  # пользователь мог заблокировать бота
         logging.exception("Не удалось отправить сообщение %s", chat_id)
 
 
@@ -104,10 +104,12 @@ def json_error(message: str, status: int = 400) -> web.Response:
 
 
 async def health_check(_: web.Request) -> web.Response:
+    """Простой эндпоинт для проверки работы сервера (для UptimeRobot)."""
     return web.json_response({"status": "ok"})
 
 
 def authenticate(request: web.Request):
+    """Проверяет подпись initData от Telegram и возвращает пользователя."""
     raw = request.headers.get("X-Init-Data", "")
     try:
         data = safe_parse_webapp_init_data(BOT_TOKEN, raw)
@@ -127,11 +129,9 @@ def event_to_dict(row, uid: int) -> dict:
         "id": row["id"],
         "title": row["title"],
         "description": row["description"],
-        "category": row.get("category", "Свободное время"),
         "date": row["date"],
         "status": row["status"],
         "is_creator": row["created_by"] == uid,
-        "items": row.get("items", []),
     }
 
 
@@ -160,24 +160,20 @@ async def api_create_event(request: web.Request) -> web.Response:
     except Exception:
         return json_error("Некорректный запрос")
 
-    category = str(body.get("category", "Свободное время")).strip()
-    if category not in ("Секс", "Свободное время", "Магазин"):
-        category = "Свободное время"
-
-    title = category
+    title = str(body.get("title", "")).strip()
     description = str(body.get("description", "")).strip()
     date = str(body.get("date", ""))
-    items = body.get("items", [])
-
-    if len(description) > 2000:
-        return json_error("Слишком длинное описание")
+    if not title:
+        return json_error("Введите название")
+    if len(title) > 200 or len(description) > 2000:
+        return json_error("Слишком длинный текст")
     if not DATE_RE.match(date):
         return json_error("Некорректная дата")
 
-    event = await db.create_event(tg_user.id, user["partner_id"], title, description, category, date, items)
+    event = await db.create_event(tg_user.id, user["partner_id"], title, description, date)
     await safe_send(
         user["partner_id"],
-        f"➕ Новое событие [{category}] на {date}! Откройте календарь для просмотра.",
+        f"➕ Новое событие на {date}: {title}! Откройте календарь для ответа.",
     )
     return web.json_response(event_to_dict(event, tg_user.id), status=201)
 
@@ -204,37 +200,13 @@ async def api_respond(request: web.Request) -> web.Response:
 
     await db.set_status(event_id, status)
     if status == "accepted":
-        text = f"✅ {tg_user.first_name} согласился на {event['title']}!"
+        text = f"✅ {tg_user.first_name} согласился на событие {event['title']}!"
     else:
-        text = f"❌ {tg_user.first_name} отклонил {event['title']}!"
+        text = f"❌ {tg_user.first_name} отклонил событие {event['title']}!"
     await safe_send(event["created_by"], text)
 
     event = await db.get_event(event_id)
     return web.json_response(event_to_dict(event, tg_user.id))
-
-
-async def api_toggle_item(request: web.Request) -> web.Response:
-    authenticate(request)
-    try:
-        item_id = int(request.match_info["item_id"])
-        await db.toggle_checklist_item(item_id)
-        return web.json_response({"ok": True})
-    except Exception:
-        return json_error("Ошибка изменения статуса товара")
-
-
-async def api_add_item(request: web.Request) -> web.Response:
-    authenticate(request)
-    try:
-        event_id = int(request.match_info["id"])
-        body = await request.json()
-        title = str(body.get("title", "")).strip()
-        if not title:
-            return json_error("Пустое название")
-        item = await db.add_checklist_item(event_id, title)
-        return web.json_response(item, status=201)
-    except Exception:
-        return json_error("Ошибка добавления товара")
 
 
 async def index(_: web.Request) -> web.FileResponse:
@@ -268,12 +240,10 @@ async def main() -> None:
 
     app = web.Application(middlewares=[cors_middleware])
     app.router.add_get("/", index)
-    app.router.add_get("/health", health_check)
+    app.router.add_get("/health", health_check)  # Маршрут для пингера
     app.router.add_get("/api/state", api_state)
     app.router.add_post("/api/events", api_create_event)
     app.router.add_post("/api/events/{id}/respond", api_respond)
-    app.router.add_post("/api/items/{item_id}/toggle", api_toggle_item)
-    app.router.add_post("/api/events/{id}/items", api_add_item)
 
     runner = web.AppRunner(app)
     await runner.setup()
