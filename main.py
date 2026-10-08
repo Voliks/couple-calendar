@@ -208,7 +208,20 @@ async def api_respond(request: web.Request) -> web.Response:
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
+# ───────────────────────── CORS Middleware ─────────────────────────
 
+
+@web.middleware
+async def cors_middleware(request, handler):
+    if request.method == "OPTIONS":
+        response = web.Response()
+    else:
+        response = await handler(request)
+
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Init-Data"
+    return response
 # ───────────────────────── Запуск ─────────────────────────
 
 
