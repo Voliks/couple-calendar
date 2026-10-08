@@ -171,7 +171,6 @@ let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
 
 /* ── API ── */
-// ⚠️ УКАЖИТЕ ЗДЕСЬ ИМЯ ВАШЕГО СЕРВИСА НА RENDER (например: https://nautiibot.onrender.com)
 const RENDER_SERVER_URL = "https://couple-calendar-ycu9.onrender.com";
 
 async function api(path, options = {}) {
