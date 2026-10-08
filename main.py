@@ -16,7 +16,7 @@ load_dotenv()
 
 import db  # noqa: E402  (после load_dotenv, чтобы подхватить DB_PATH)
 
-BOT_TOKEN = os.environ["8963055626:AAEWcigfT1lo_ZZSc7a50Ie-xF__J1DJX5w"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBAPP_URL = os.environ["https://vercel.com/kon-k/couple-calendar"].rstrip("/")
 PORT = int(os.getenv("PORT", "8080"))
 INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
