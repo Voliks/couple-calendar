@@ -211,6 +211,9 @@ async def index(_: web.Request) -> web.FileResponse:
 # ───────────────────────── CORS Middleware ─────────────────────────
 
 
+# ───────────────────────── Запуск ─────────────────────────
+
+
 @web.middleware
 async def cors_middleware(request, handler):
     if request.method == "OPTIONS":
@@ -222,6 +225,30 @@ async def cors_middleware(request, handler):
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Init-Data"
     return response
+
+
+async def main() -> None:
+    global bot_username
+    logging.basicConfig(level=logging.INFO)
+    await db.init_db()
+    bot_username = (await bot.get_me()).username
+
+    app = web.Application(middlewares=[cors_middleware])
+    app.router.add_get("/", index)
+    app.router.add_get("/api/state", api_state)
+    app.router.add_post("/api/events", api_create_event)
+    app.router.add_post("/api/events/{id}/respond", api_respond)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", PORT).start()
+    logging.info("Web app: http://0.0.0.0:%s  (public: %s)", PORT, WEBAPP_URL)
+
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await runner.cleanup()
+        await bot.session.close()
 # ───────────────────────── Запуск ─────────────────────────
 
 
