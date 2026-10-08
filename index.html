@@ -13,343 +13,315 @@
     --hint: var(--tg-theme-hint-color, #8a8a8e);
     --accent: var(--tg-theme-button-color, #2481cc);
     --accent-text: var(--tg-theme-button-text-color, #ffffff);
-    --pending: 245, 158, 11;
-    --accepted: 34, 197, 94;
-    --declined: 239, 68, 68;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--text);
     font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-  body { padding: 12px 14px calc(96px + env(safe-area-inset-bottom, 0px)); max-width: 560px; margin: 0 auto; }
-  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
-  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  [hidden] { display: none !important; }
+  body { padding: 12px 12px 80px; max-width: 480px; margin: 0 auto; }
 
-  /* Календарь */
-  .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-  .cal-title { font-size: 20px; font-weight: 600; text-transform: capitalize; }
-  .nav { width: 40px; height: 40px; border-radius: 50%; font-size: 22px; color: var(--accent); }
-  .nav:active { background: var(--bg2); }
-  .weekdays, .grid { display: grid; grid-template-columns: repeat(7, 1fr); }
-  .weekdays span { text-align: center; font-size: 12px; color: var(--hint); padding: 4px 0; }
-  .grid { gap: 2px; }
-  .day { position: relative; aspect-ratio: 1 / 1; max-height: 54px; border-radius: 12px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-    border: 2px solid transparent; font-size: 16px; }
-  .day.today .num { color: var(--accent); font-weight: 700; }
-  .day.selected { border-color: var(--accent); background: var(--bg2); }
-  .dots { display: flex; gap: 3px; height: 6px; }
-  .dot { width: 6px; height: 6px; border-radius: 50%; }
-  .dot.pending { background: rgb(var(--pending)); }
-  .dot.accepted { background: rgb(var(--accepted)); }
-  .dot.declined { background: rgb(var(--declined)); }
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .month-title { font-size: 20px; font-weight: 700; text-transform: capitalize; }
+  .nav-btn { background: var(--bg2); border: 0; color: var(--text); padding: 8px 14px; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; }
 
-  /* Список */
-  .list-title { margin: 20px 0 10px; font-size: 15px; font-weight: 600; color: var(--hint); }
-  .empty { padding: 28px 12px; text-align: center; color: var(--hint); }
-  .card { border-radius: 14px; padding: 12px 14px; margin-bottom: 10px;
-    border-left: 5px solid rgb(var(--c)); background: rgba(var(--c), .13); }
-  .card.pending  { --c: var(--pending); }
-  .card.accepted { --c: var(--accepted); }
-  .card.declined { --c: var(--declined); }
-  .card h3 { margin: 0; font-size: 17px; word-break: break-word; }
-  .card p { margin: 4px 0 0; color: var(--text); opacity: .8; white-space: pre-wrap; word-break: break-word; }
-  .meta { margin-top: 8px; font-size: 13px; color: var(--hint); display: flex; justify-content: space-between; gap: 8px; }
-  .meta b { color: rgb(var(--c)); font-weight: 600; }
-  .answer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
-  .answer button { padding: 13px 0; border-radius: 12px; font-weight: 600; font-size: 17px; color: #fff; }
-  .answer .yes { background: rgb(var(--accepted)); }
-  .answer .no { background: rgb(var(--declined)); }
-  .answer button:disabled { opacity: .5; }
+  .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
+  .dow { font-size: 12px; color: var(--hint); padding: 4px 0; font-weight: 600; }
+  .day { aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: var(--bg2); border-radius: 10px; position: relative; font-weight: 500; font-size: 14px; cursor: pointer; }
+  .day.empty { background: transparent; cursor: default; }
+  .day.today { border: 2px solid var(--accent); }
+  .day.selected { background: var(--accent); color: var(--accent-text); }
+  .dots { display: flex; gap: 2px; position: absolute; bottom: 4px; }
+  .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--hint); }
 
-  /* Кнопка + */
-  .fab { position: fixed; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom, 0px));
-    width: 58px; height: 58px; border-radius: 50%; background: var(--accent); color: var(--accent-text);
-    font-size: 32px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
-  .fab:active { transform: scale(.94); }
+  .card { background: var(--bg2); border-radius: 14px; padding: 14px; margin-top: 12px; }
+  .card-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
 
-  /* Форма */
-  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; z-index: 10; }
-  .sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
-    padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px)); animation: up .18s ease-out; }
-  @keyframes up { from { transform: translateY(40px); opacity: 0; } }
-  @media (prefers-reduced-motion: reduce) { .sheet { animation: none; } }
-  .sheet h2 { margin: 0 0 14px; font-size: 19px; }
-  label { display: block; font-size: 13px; color: var(--hint); margin: 12px 0 4px; }
-  input, textarea { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid transparent;
-    background: var(--bg2); color: var(--text); font: inherit; }
-  textarea { resize: none; min-height: 80px; }
-  .row { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; margin-top: 18px; }
-  .btn { padding: 14px; border-radius: 12px; font-weight: 600; }
-  .btn.primary { background: var(--accent); color: var(--accent-text); }
-  .btn.ghost { background: var(--bg2); }
-  .btn:disabled { opacity: .5; }
-  .error { color: rgb(var(--declined)); font-size: 14px; margin-top: 10px; min-height: 1em; }
+  .event { background: var(--bg); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+  .event-hdr { display: flex; justify-content: space-between; align-items: center; }
+  .event-title { font-weight: 600; font-size: 15px; }
+  .badge { font-size: 11px; padding: 2px 6px; border-radius: 6px; font-weight: 600; background: var(--bg2); }
+  .event-desc { font-size: 13px; color: var(--hint); margin-top: 4px; }
+  .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .btn { flex: 1; border: 0; padding: 8px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; }
+  .btn-acc { background: #22c55e; color: #fff; }
+  .btn-dec { background: #ef4444; color: #fff; }
 
-  /* Нет партнёра */
-  .welcome { text-align: center; padding: 60px 8px 0; }
-  .welcome h1 { font-size: 24px; margin: 0 0 10px; }
-  .welcome p { color: var(--hint); margin: 0 0 24px; }
-  .welcome .btn { display: block; width: 100%; margin-bottom: 10px; }
+  .fab { position: fixed; bottom: 20px; right: 20px; background: var(--accent); color: var(--accent-text);
+    border: 0; width: 52px; height: 52px; border-radius: 26px; font-size: 28px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); cursor: pointer; }
 
-  .toast { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); background: var(--text); color: var(--bg);
-    padding: 10px 16px; border-radius: 12px; font-size: 14px; z-index: 20; max-width: 90%; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: none; align-items: flex-end; justify-content: center; z-index: 100; }
+  .modal.open { display: flex; }
+  .sheet { background: var(--bg); width: 100%; max-width: 480px; border-radius: 20px 20px 0 0; padding: 16px; }
+
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; color: var(--hint); margin-bottom: 4px; }
+  .field input, .field select, .field textarea { width: 100%; background: var(--bg2); border: 0; color: var(--text); padding: 10px; border-radius: 10px; font-size: 15px; }
+
+  .chk-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 14px; cursor: pointer; }
+  .chk-item.done { text-decoration: line-through; color: var(--hint); }
+
+  #toast { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: #fff;
+    padding: 8px 16px; border-radius: 20px; font-size: 13px; display: none; z-index: 200; }
 </style>
 </head>
 <body>
 
-<!-- Экран: партнёр не привязан -->
-<section id="welcome" class="welcome" hidden>
-  <h1>Календарь на двоих</h1>
-  <p>Чтобы начать, отправьте пригласительную ссылку второму человеку. Когда он откроет её в боте, вы будете связаны.</p>
-  <button class="btn primary" id="share">Отправить ссылку партнёру</button>
-  <button class="btn ghost" id="copy">Скопировать ссылку</button>
-</section>
+<div id="toast"></div>
 
-<!-- Экран: календарь -->
-<main id="app" hidden>
-  <div class="cal-head">
-    <button class="nav" id="prev" aria-label="Предыдущий месяц">‹</button>
-    <div class="cal-title" id="title"></div>
-    <button class="nav" id="next" aria-label="Следующий месяц">›</button>
+<div id="noPartner" class="card" style="display:none; text-align:center;">
+  <div class="card-title">Пригласите партнёра</div>
+  <p style="font-size:14px; color:var(--hint);">Чтобы вести календарь вместе, отправьте ссылку вашей половинке.</p>
+  <button id="share" class="btn btn-acc" style="width:100%; padding:10px;">Отправить ссылку</button>
+  <button id="copy" class="btn" style="width:100%; margin-top:8px; background:var(--bg2);">Скопировать ссылку</button>
+</div>
+
+<div id="app">
+  <div class="header">
+    <button class="nav-btn" id="prev">‹</button>
+    <div class="month-title" id="mTitle"></div>
+    <button class="nav-btn" id="next">›</button>
   </div>
-  <div class="weekdays"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
-  <div class="grid" id="grid"></div>
 
-  <div class="list-title" id="listTitle"></div>
-  <div id="list"></div>
+  <div class="grid">
+    <div class="dow">Пн</div><div class="dow">Вт</div><div class="dow">Ср</div>
+    <div class="dow">Чт</div><div class="dow">Пт</div><div class="dow">Сб</div><div class="dow">Вс</div>
+  </div>
+  <div class="grid" id="days"></div>
 
-  <button class="fab" id="add" aria-label="Добавить событие">+</button>
-</main>
+  <div class="card">
+    <div class="card-title" id="dayTitle">События</div>
+    <div id="eventList"></div>
+  </div>
 
-<!-- Форма создания -->
-<div class="overlay" id="overlay" hidden>
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
-    <h2 id="sheetTitle">Новое событие</h2>
-    <label for="fDate">Дата</label>
-    <input type="date" id="fDate">
-    <label for="fTitle">Название</label>
-    <input type="text" id="fTitle" maxlength="200" placeholder="Например, ужин в субботу" autocomplete="off">
-    <label for="fDesc">Описание (необязательно)</label>
-    <textarea id="fDesc" maxlength="2000"></textarea>
-    <div class="error" id="fError"></div>
-    <div class="row">
-      <button class="btn ghost" id="fCancel">Отмена</button>
-      <button class="btn primary" id="fSave">Отправить партнёру</button>
+  <button class="fab" id="addBtn">+</button>
+</div>
+
+<div class="modal" id="fModal">
+  <div class="sheet">
+    <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
+      <b style="font-size:17px;">Новое событие</b>
+      <span id="fClose" style="cursor:pointer; color:var(--hint);">Закрыть</span>
     </div>
+    <div class="field">
+      <label>Категория</label>
+      <select id="fCategory">
+        <option value="Свободное время">Свободное время</option>
+        <option value="Секс">Секс</option>
+        <option value="Магазин">Магазин</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Дата</label>
+      <input type="date" id="fDate">
+    </div>
+    <div class="field" id="fTitleBox" style="display:none;">
+      <label>Название</label>
+      <input type="text" id="fTitle" placeholder="Введите название">
+    </div>
+    <div class="field">
+      <label>Описание</label>
+      <textarea id="fDesc" rows="2" placeholder="Необязательно"></textarea>
+    </div>
+    <div class="field" id="fItemsBox" style="display:none;">
+      <label>Список покупок (каждая с новой строки)</label>
+      <textarea id="fItems" rows="3" placeholder="Молоко&#10;Хлеб"></textarea>
+    </div>
+    <div id="fError" style="color:#ef4444; font-size:13px; margin-bottom:8px;"></div>
+    <button id="fSave" class="btn btn-acc" style="width:100%; padding:12px;">Создать</button>
   </div>
 </div>
 
 <script>
-// Безопасная инициализация Telegram SDK
-const tg = window.Telegram?.WebApp || {
-  initData: "",
-  ready: () => {},
-  expand: () => {},
-  openTelegramLink: (url) => window.open(url, "_blank")
-};
+const tg = window.Telegram.WebApp;
+tg.expand();
 
-try {
-  tg.ready();
-  tg.expand();
-} catch (e) {
-  console.log("Запуск вне Telegram");
+const $ = id => document.getElementById(id);
+let state = { me: null, partner: null, events: [], invite_link: "" };
+let now = new Date();
+let view = { y: now.getFullYear(), m: now.getMonth() };
+let selected = fmt(now);
+
+function fmt(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
-const $ = (id) => document.getElementById(id);
-const STATUS_TEXT = { pending: "Ждёт ответа", accepted: "Принято", declined: "Отклонено" };
-const MONTHS_FORMAT = new Intl.DateTimeFormat("ru", { month: "long", year: "numeric" });
-const DAY_FORMAT = new Intl.DateTimeFormat("ru", { day: "numeric", month: "long" });
-
-const pad = (n) => String(n).padStart(2, "0");
-const fmt = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;      // m: 0..11
-const todayStr = () => { const t = new Date(); return fmt(t.getFullYear(), t.getMonth(), t.getDate()); };
-const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
-
-let state = { has_partner: false, invite_link: "", events: [] };
-let selected = todayStr();
-let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
-
-/* ── API ── */
-const RENDER_SERVER_URL = "https://couple-calendar-ycu9.onrender.com";
-
-async function api(path, options = {}) {
-  const res = await fetch(RENDER_SERVER_URL + "/api" + path, {
-    ...options,
-    headers: { "Content-Type": "application/json", "X-Init-Data": tg.initData || "" }
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Что-то пошло не так");
-  return data;
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  setTimeout(() => t.style.display = "none", 2000);
 }
 
-function toast(text) {
-  const el = document.createElement("div");
-  el.className = "toast";
-  el.textContent = text;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 2500);
+async function api(path, opts = {}) {
+  opts.headers = { ...opts.headers, "X-Init-Data": tg.initData, "Content-Type": "application/json" };
+  const res = await fetch("/api" + path, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Ошибка запроса");
+  }
+  return res.json();
 }
 
 async function load() {
   try {
     state = await api("/state");
-    render();
+    if (!state.partner) {
+      $("noPartner").style.display = "block";
+      $("app").style.display = "none";
+    } else {
+      $("noPartner").style.display = "none";
+      $("app").style.display = "block";
+      renderCalendar();
+      renderEvents();
+    }
   } catch (e) {
     toast(e.message);
   }
-}
-
-/* ── Рендер ── */
-function render() {
-  $("welcome").hidden = state.has_partner;
-  $("app").hidden = !state.has_partner;
-  if (state.has_partner) { renderCalendar(); renderList(); }
 }
 
 function renderCalendar() {
-  $("title").textContent = MONTHS_FORMAT.format(new Date(view.y, view.m, 1));
+  const months = ["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
+  $("mTitle").textContent = `${months[view.m]} ${view.y}`;
 
-  // статусы по дням
-  const byDay = {};
-  for (const e of state.events) (byDay[e.date] ||= new Set()).add(e.status);
+  const first = new Date(view.y, view.m, 1);
+  let pad = first.getDay() - 1; if (pad < 0) pad = 6;
+  const daysInM = new Date(view.y, view.m + 1, 0).getDate();
 
-  const offset = (new Date(view.y, view.m, 1).getDay() + 6) % 7;   // неделя с понедельника
-  const days = new Date(view.y, view.m + 1, 0).getDate();
-  const today = todayStr();
   let html = "";
-  for (let i = 0; i < offset; i++) html += "<div></div>";
-  for (let d = 1; d <= days; d++) {
-    const date = fmt(view.y, view.m, d);
-    const st = byDay[date] || new Set();
-    const dots = ["pending", "accepted", "declined"]
-      .filter((s) => st.has(s)).map((s) => `<i class="dot ${s}"></i>`).join("");
-    const cls = ["day", date === today && "today", date === selected && "selected"].filter(Boolean).join(" ");
-    html += `<button class="${cls}" data-date="${date}" aria-pressed="${date === selected}">
-               <span class="num">${d}</span><span class="dots">${dots}</span></button>`;
+  for (let i = 0; i < pad; i++) html += `<div class="day empty"></div>`;
+
+  const todayStr = fmt(new Date());
+
+  for (let d = 1; d <= daysInM; d++) {
+    const dateStr = `${view.y}-${String(view.m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isToday = dateStr === todayStr ? "today" : "";
+    const isSel = dateStr === selected ? "selected" : "";
+    const evs = state.events.filter(e => e.date === dateStr);
+
+    let dots = "";
+    if (evs.length) {
+      dots = `<div class="dots">${evs.slice(0,3).map(() => `<div class="dot"></div>`).join("")}</div>`;
+    }
+
+    html += `<div class="day ${isToday} ${isSel}" onclick="selectDay('${dateStr}')">${d}${dots}</div>`;
   }
-  $("grid").innerHTML = html;
+  $("days").innerHTML = html;
 }
 
-const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function selectDay(d) {
+  selected = d;
+  renderCalendar();
+  renderEvents();
+}
 
-function renderList() {
-  $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
-  const items = state.events.filter((e) => e.date === selected);
-  if (!items.length) {
-    $("list").innerHTML = `<div class="empty">На этот день ничего нет. Нажмите «+», чтобы добавить событие.</div>`;
+function renderEvents() {
+  $("dayTitle").textContent = `События: ${selected}`;
+  const list = state.events.filter(e => e.date === selected);
+  if (!list.length) {
+    $("eventList").innerHTML = `<div style="color:var(--hint); font-size:14px;">Нет событий</div>`;
     return;
   }
-  $("list").innerHTML = items.map((e) => {
-    const answer = !e.is_creator && e.status === "pending"
-      ? `<div class="answer">
-           <button class="yes" data-id="${e.id}" data-status="accepted">Да</button>
-           <button class="no" data-id="${e.id}" data-status="declined">Нет</button>
-         </div>` : "";
-    return `<article class="card ${e.status}">
-      <h3>${esc(e.title)}</h3>
-      ${e.description ? `<p>${esc(e.description)}</p>` : ""}
-      <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span><b>${STATUS_TEXT[e.status]}</b></div>
-      ${answer}
-    </article>`;
+
+  $("eventList").innerHTML = list.map(e => {
+    const isMine = e.created_by === state.me.id;
+    let badge = e.category;
+    let actions = "";
+
+    if (e.category !== "Магазин" && !isMine && e.status === "pending") {
+      actions = `
+        <div class="actions">
+          <button class="btn btn-acc" onclick="respond(${e.id}, 'accepted')">Пойду</button>
+          <button class="btn btn-dec" onclick="respond(${e.id}, 'declined')">Не могу</button>
+        </div>`;
+    } else if (e.category !== "Магазин") {
+      const st = { pending: "Ожидает", accepted: "Принято", declined: "Отклонено" }[e.status];
+      badge += ` • ${st}`;
+    }
+
+    let itemsHtml = "";
+    if (e.category === "Магазин" && e.items) {
+      itemsHtml = `<div style="margin-top:8px;">` + e.items.map(i => `
+        <div class="chk-item ${i.is_done ? 'done' : ''}" onclick="toggleItem(${i.id})">
+          <input type="checkbox" ${i.is_done ? 'checked' : ''} readonly>
+          <span>${i.text}</span>
+        </div>
+      `).join("") + `
+        <div style="display:flex; gap:4px; margin-top:6px;">
+          <input type="text" id="add_in_${e.id}" placeholder="Добавить товар" style="font-size:12px; padding:4px 8px; border:0; background:var(--bg2); border-radius:6px; flex:1;">
+          <button onclick="addItem(${e.id})" style="border:0; background:var(--accent); color:#fff; border-radius:6px; padding:0 8px;">+</button>
+        </div>
+      </div>`;
+    }
+
+    return `
+      <div class="event">
+        <div class="event-hdr">
+          <div class="event-title">${e.title}</div>
+          <div class="badge">${badge}</div>
+        </div>
+        ${e.description ? `<div class="event-desc">${e.description}</div>` : ""}
+        ${itemsHtml}
+        ${actions}
+      </div>`;
   }).join("");
 }
 
-/* ── Календарь: события ── */
-$("grid").addEventListener("click", (ev) => {
-  const btn = ev.target.closest(".day");
-  if (!btn) return;
-  selected = btn.dataset.date;
-  tg.HapticFeedback?.selectionChanged();
-  renderCalendar();
-  renderList();
-});
-
-function shiftMonth(delta) {
-  const d = new Date(view.y, view.m + delta, 1);
-  view = { y: d.getFullYear(), m: d.getMonth() };
-  const t = new Date();
-  const sameAsToday = view.y === t.getFullYear() && view.m === t.getMonth();
-  selected = sameAsToday ? todayStr() : fmt(view.y, view.m, 1);
-  renderCalendar();
-  renderList();
+async function respond(id, status) {
+  await api(`/events/${id}/respond`, { method: "POST", body: JSON.stringify({ status }) });
+  await load();
 }
-$("prev").onclick = () => shiftMonth(-1);
-$("next").onclick = () => shiftMonth(1);
 
-/* ── Ответ на событие ── */
-$("list").addEventListener("click", async (ev) => {
-  const btn = ev.target.closest("[data-status]");
-  if (!btn) return;
-  btn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
-  try {
-    await api(`/events/${btn.dataset.id}/respond`, {
-      method: "POST", body: JSON.stringify({ status: btn.dataset.status })
-    });
-    tg.HapticFeedback?.notificationOccurred("success");
-    await load();
-  } catch (e) {
-    toast(e.message);
-    await load();
-  }
-});
-
-/* ── Форма создания ── */
-function openForm() {
-  $("fDate").value = selected;               // дата подставляется из выбранного дня
-  $("fTitle").value = "";
-  $("fDesc").value = "";
-  $("fError").textContent = "";
-  $("overlay").hidden = false;
-  setTimeout(() => $("fTitle").focus(), 50);
+async function toggleItem(id) {
+  await api(`/items/${id}/toggle`, { method: "POST" });
+  await load();
 }
-const closeForm = () => { $("overlay").hidden = true; };
 
-$("add").onclick = openForm;
-$("fCancel").onclick = closeForm;
-$("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeForm(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeForm(); });
+async function addItem(eventId) {
+  const input = $(`add_in_${eventId}`);
+  const text = input.value.trim();
+  if (!text) return;
+  await api(`/events/${eventId}/items`, { method: "POST", body: JSON.stringify({ text }) });
+  await load();
+}
+
+$("fCategory").onchange = e => {
+  const cat = e.target.value;
+  $("fItemsBox").style.display = cat === "Магазин" ? "block" : "none";
+};
+
+$("addBtn").onclick = () => {
+  $("fDate").value = selected;
+  $("fModal").classList.add("open");
+};
+
+$("fClose").onclick = () => $("fModal").classList.remove("open");
 
 $("fSave").onclick = async () => {
-  const title = $("fTitle").value.trim();
+  const category = $("fCategory").value;
   const date = $("fDate").value;
-  if (!title) { $("fError").textContent = "Введите название события"; return; }
+  const description = $("fDesc").value.trim();
+  const itemsText = $("fItems").value.trim();
+  const items = itemsText ? itemsText.split("\n") : [];
+
   if (!date) { $("fError").textContent = "Выберите дату"; return; }
 
-  $("fSave").disabled = true;
   try {
     await api("/events", {
       method: "POST",
-      body: JSON.stringify({ title, description: $("fDesc").value.trim(), date })
+      body: JSON.stringify({ category, title: category, description, date, items })
     });
-    tg.HapticFeedback?.notificationOccurred("success");
-    selected = date;                          // переходим к дню созданного события
-    const d = parse(date);
-    view = { y: d.getFullYear(), m: d.getMonth() };
-    closeForm();
+    $("fModal").classList.remove("open");
     await load();
   } catch (e) {
     $("fError").textContent = e.message;
-  } finally {
-    $("fSave").disabled = false;
   }
 };
 
-/* ── Приглашение партнёра ── */
-$("share").onclick = () => {
-  const url = "https://t.me/share/url?url=" + encodeURIComponent(state.invite_link) +
-              "&text=" + encodeURIComponent("Давай вести общий календарь на двоих!");
-  tg.openTelegramLink(url);
-};
-$("copy").onclick = async () => {
-  try { await navigator.clipboard.writeText(state.invite_link); toast("Ссылка скопирована"); }
-  catch { toast(state.invite_link); }
-};
+$("prev").onclick = () => { view.m--; if (view.m < 0) { view.m = 11; view.y--; } renderCalendar(); };
+$("next").onclick = () => { view.m++; if (view.m > 11) { view.m = 0; view.y++; } renderCalendar(); };
 
-/* ── Старт и автообновление ── */
+$("share").onclick = () => tg.openTelegramLink("https://t.me/share/url?url=" + encodeURIComponent(state.invite_link));
+$("copy").onclick = () => { navigator.clipboard.writeText(state.invite_link); toast("Скопировано!"); };
+
 load();
-setInterval(() => { if (!document.hidden && $("overlay").hidden) load(); }, 15000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
 </script>
 </body>
 </html>
