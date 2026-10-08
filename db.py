@@ -7,7 +7,13 @@ TURSO_TOKEN = os.getenv("TURSO_TOKEN")
 
 def get_client():
     if TURSO_URL and TURSO_TOKEN:
-        return create_client(url=TURSO_URL, auth_token=TURSO_TOKEN)
+        url = TURSO_URL
+        if "://" in url:
+            url = "https://" + url.split("://", 1)[1]
+        else:
+            url = f"https://{url}"
+
+        return create_client(url=url, auth_token=TURSO_TOKEN)
     return create_client(url="file:calendar.db")
 
 
@@ -80,7 +86,6 @@ async def link_partners(user1_id: int, user2_id: int):
 
 
 async def create_event(created_by: int, target_user: int, title: str, description: str, category: str, date: str, items: list = None):
-    # Если категория "Магазин" — создаем сразу в статусе accepted
     status = "accepted" if category == "Магазин" else "pending"
 
     async with get_client() as client:
