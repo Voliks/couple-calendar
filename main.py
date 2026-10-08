@@ -103,6 +103,11 @@ def json_error(message: str, status: int = 400) -> web.Response:
     return web.json_response({"error": message}, status=status)
 
 
+async def health_check(_: web.Request) -> web.Response:
+    """Простой эндпоинт для проверки работы сервера (для UptimeRobot)."""
+    return web.json_response({"status": "ok"})
+
+
 def authenticate(request: web.Request):
     """Проверяет подпись initData от Telegram и возвращает пользователя."""
     raw = request.headers.get("X-Init-Data", "")
@@ -188,7 +193,6 @@ async def api_respond(request: web.Request) -> web.Response:
     event = await db.get_event(event_id)
     if event is None:
         return json_error("Событие не найдено", 404)
-    # Отвечать может только адресат и только на событие в статусе pending
     if event["target_user"] != tg_user.id:
         return json_error("Нет доступа", 403)
     if event["status"] != "pending":
@@ -236,6 +240,7 @@ async def main() -> None:
 
     app = web.Application(middlewares=[cors_middleware])
     app.router.add_get("/", index)
+    app.router.add_get("/health", health_check)  # Маршрут для пингера
     app.router.add_get("/api/state", api_state)
     app.router.add_post("/api/events", api_create_event)
     app.router.add_post("/api/events/{id}/respond", api_respond)
