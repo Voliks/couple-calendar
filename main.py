@@ -3,7 +3,7 @@ import logging
 import json
 from hmac import HMAC, new as hmac_new
 from hashlib import sha256
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, unquote
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
@@ -20,36 +20,29 @@ bot = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
 
 
-def validate_init_data(init_data: str, bot_token: str) -> dict | None:
-    if not init_data or not bot_token:
+def extract_user_from_init_data(init_data: str) -> dict | None:
+    if not init_data:
         return None
     try:
         parsed = dict(parse_qsl(init_data, keep_blank_values=True))
-        hash_val = parsed.pop("hash", None)
-        if not hash_val:
-            return None
-        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
-        secret_key = hmac_new(b"WebAppData", bot_token.encode(), sha256).digest()
-        calc_hash = hmac_new(secret_key, data_check_string.encode(), sha256).hexdigest()
-        if calc_hash != hash_val:
-            return None
-        user_data = json.loads(parsed.get("user", "{}"))
-        return user_data
+        
+        # Если Telegram передал user в формате JSON-строки
+        if "user" in parsed:
+            return json.loads(parsed["user"])
+            
+        # Пробуем декодировать из unquote на случай двойного кодирования
+        decoded = unquote(init_data)
+        parsed_decoded = dict(parse_qsl(decoded, keep_blank_values=True))
+        if "user" in parsed_decoded:
+            return json.loads(parsed_decoded["user"])
     except Exception as e:
-        logging.error(f"Error validating initData: {e}")
-        return None
+        logging.error(f"Error parsing user from initData: {e}")
+    return None
 
 
 async def get_current_user(request: web.Request):
     init_data = request.headers.get("X-Init-Data", "")
-    user_info = validate_init_data(init_data, BOT_TOKEN)
-    
-    if not user_info or "id" not in user_info:
-        try:
-            parsed = dict(parse_qsl(init_data))
-            user_info = json.loads(parsed.get("user", "{}"))
-        except Exception:
-            pass
+    user_info = extract_user_from_init_data(init_data)
 
     if not user_info or "id" not in user_info:
         raise web.HTTPUnauthorized(reason="Invalid initData")
@@ -67,10 +60,18 @@ async def api_get_state(request: web.Request):
         return web.json_response({"error": "Ошибка авторизации в Telegram"}, status=401)
     except Exception as e:
         logging.exception("Error in /api/state")
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"error": f"Ошибка сервера: {str(e)}"}, status=500)
 
     has_partner = bool(user["partner_id"])
-    bot_username = (await bot.get_me()).username if bot else "bot"
+    
+    bot_username = "bot"
+    if bot:
+        try:
+            bot_me = await bot.get_me()
+            bot_username = bot_me.username
+        except Exception as e:
+            logging.error(f"Failed to get bot info: {e}")
+
     invite_link = f"https://t.me/{bot_username}?start={user['invite_code']}"
 
     events = []
@@ -94,7 +95,11 @@ async def api_get_state(request: web.Request):
 
 
 async def api_create_event(request: web.Request):
-    user = await get_current_user(request)
+    try:
+        user = await get_current_user(request)
+    except web.HTTPUnauthorized:
+        return web.json_response({"error": "Неавторизован"}, status=401)
+
     if not user["partner_id"]:
         return web.json_response({"error": "У вас нет партнёра"}, status=400)
 
@@ -117,7 +122,11 @@ async def api_create_event(request: web.Request):
 
 
 async def api_respond_event(request: web.Request):
-    user = await get_current_user(request)
+    try:
+        user = await get_current_user(request)
+    except web.HTTPUnauthorized:
+        return web.json_response({"error": "Неавторизован"}, status=401)
+
     event_id = int(request.match_info["id"])
     data = await request.json()
     status = data.get("status")
@@ -166,7 +175,7 @@ async def init_app():
     await db.init_db()
     app = web.Application()
 
-    # Раздача главной страницы без папки webapp
+    # Маршруты HTML
     app.router.add_get("/", serve_index)
     app.router.add_get("/index.html", serve_index)
 
