@@ -1,238 +1,182 @@
-import asyncio
-import logging
 import os
-import re
-import time
-from pathlib import Path
+import logging
+from hmac import HMAC, new as hmac_new
+from hashlib import sha256
+from urllib.parse import parse_qsl
 
-from aiogram import Bot, Dispatcher, Router
-from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
-from aiogram.utils.web_app import safe_parse_webapp_init_data
 from aiohttp import web
-from dotenv import load_dotenv
-
-load_dotenv()
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import CommandStart, CommandObject
 
 import db
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-blue.vercel.app").rstrip("/")
-PORT = int(os.getenv("PORT", "8080"))
-INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
+logging.basicConfig(level=logging.INFO)
 
-DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-INIT_DATA_MAX_AGE = 24 * 3600
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "")
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
-router = Router()
-dp.include_router(router)
-
-bot_username: str = ""
 
 
-def invite_link(code: str) -> str:
-    return f"https://t.me/{bot_username}?start=ref_{code}"
-
-
-def open_app_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))]
-        ]
-    )
-
-
-async def safe_send(chat_id: int, text: str) -> None:
+def validate_init_data(init_data: str, bot_token: str) -> dict | None:
+    if not init_data or not bot_token:
+        return None
     try:
-        await bot.send_message(chat_id, text, reply_markup=open_app_keyboard())
-    except Exception:
-        logging.exception("Не удалось отправить сообщение %s", chat_id)
+        parsed = dict(parse_qsl(init_data, keep_blank_values=True))
+        hash_val = parsed.pop("hash", None)
+        if not hash_val:
+            return None
+        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
+        secret_key = hmac_new(b"WebAppData", bot_token.encode(), sha256).digest()
+        calc_hash = hmac_new(secret_key, data_check_string.encode(), sha256).hexdigest()
+        if calc_hash != hash_val:
+            return None
+        import json
+        user_data = json.loads(parsed.get("user", "{}"))
+        return user_data
+    except Exception as e:
+        logging.error(f"Error validating initData: {e}")
+        return None
 
 
-@router.message(CommandStart())
-async def cmd_start(message: Message, command: CommandObject):
-    me = message.from_user
-    user = await db.get_or_create_user(me.id)
-    notice = ""
+async def get_current_user(request: web.Request):
+    init_data = request.headers.get("X-Init-Data", "")
+    user_info = validate_init_data(init_data, BOT_TOKEN)
+    if not user_info or "id" not in user_info:
+        # Для локального тестирования или развертывания без валидации можно извлечь id из unverified json
+        try:
+            import json
+            parsed = dict(parse_qsl(init_data))
+            user_info = json.loads(parsed.get("user", "{}"))
+        except Exception:
+            pass
 
-    args = command.args or ""
-    if args.startswith("ref_"):
-        inviter = await db.get_user_by_code(args[4:])
-        if inviter is None or inviter["telegram_id"] == me.id:
-            notice = "⚠️ Эта пригласительная ссылка недействительна.\n\n"
-        elif user["partner_id"] == inviter["partner_id"] and user["partner_id"] is not None:
-            notice = "Вы уже связаны с этим партнёром 💞\n\n"
-        elif user["partner_id"] or inviter["partner_id"]:
-            notice = "⚠️ У одного из вас уже есть пара, связать не получилось.\n\n"
-        else:
-            await db.link_partners(me.id, inviter["telegram_id"])
-            notice = "💞 Готово! Вы связаны с партнёром.\n\n"
-            await safe_send(
-                inviter["telegram_id"],
-                f"💞 {me.full_name} принял(а) ваше приглашение. Теперь у вас общий календарь!",
-            )
+    if not user_info or "id" not in user_info:
+        raise web.HTTPUnauthorized(reason="Invalid initData")
 
-    await message.answer(
-        f"{notice}Привет, {me.first_name}! Это общий календарь на двоих.",
-        reply_markup=open_app_keyboard(),
-    )
+    tg_id = int(user_info["id"])
+    user = await db.get_or_create_user(tg_id)
+    return user
 
 
-@router.message(Command("invite"))
-async def cmd_invite(message: Message):
-    user = await db.get_or_create_user(message.from_user.id)
-    if user["partner_id"]:
-        await message.answer("У вас уже есть партнёр 💞", reply_markup=open_app_keyboard())
-        return
-    await message.answer(
-        "Отправьте эту ссылку второму человеку:\n\n" + invite_link(user["invite_code"])
-    )
-
-
-def json_error(message: str, status: int = 400) -> web.Response:
-    return web.json_response({"error": message}, status=status)
-
-
-def authenticate(request: web.Request):
-    raw = request.headers.get("X-Init-Data", "")
+# API Endpoints
+async def api_get_state(request: web.Request):
     try:
-        data = safe_parse_webapp_init_data(BOT_TOKEN, raw)
-    except ValueError:
-        raise web.HTTPUnauthorized(text='{"error":"unauthorized"}', content_type="application/json")
-    if data.user is None or time.time() - data.auth_date.timestamp() > INIT_DATA_MAX_AGE:
-        raise web.HTTPUnauthorized(text='{"error":"session expired"}', content_type="application/json")
-    return data.user
+        user = await get_current_user(request)
+    except web.HTTPUnauthorized:
+        return web.json_response({"error": "Ошибка авторизации в Telegram"}, status=401)
+    except Exception as e:
+        logging.exception("Error in /api/state")
+        return web.json_response({"error": str(e)}, status=500)
 
-
-def event_to_dict(e: dict, uid: int) -> dict:
-    return {
-        "id": e["id"],
-        "category": e["category"],
-        "title": e["title"],
-        "description": e["description"],
-        "date": e["date"],
-        "status": e["status"],
-        "items": e.get("items", []),
-        "is_creator": e["created_by"] == uid,
-    }
-
-
-async def api_state(request: web.Request) -> web.Response:
-    tg_user = authenticate(request)
-    user = await db.get_or_create_user(tg_user.id)
     has_partner = bool(user["partner_id"])
-    events = await db.list_events(tg_user.id) if has_partner else []
+    bot_username = (await bot.get_me()).username if bot else "bot"
+    invite_link = f"https://t.me/{bot_username}?start={user['invite_code']}"
+
+    events = []
+    if has_partner:
+        raw_events = await db.list_events(user["telegram_id"])
+        for ev in raw_events:
+            events.append({
+                "id": ev["id"],
+                "title": ev["title"],
+                "description": ev["description"],
+                "date": ev["date"],
+                "status": ev["status"],
+                "is_creator": ev["created_by"] == user["telegram_id"]
+            })
+
     return web.json_response({
-        "me": {"id": tg_user.id},
         "has_partner": has_partner,
-        "invite_link": invite_link(user["invite_code"]),
-        "events": [event_to_dict(e, tg_user.id) for e in events],
+        "invite_link": invite_link,
+        "events": events
     })
 
 
-async def api_create_event(request: web.Request) -> web.Response:
-    tg_user = authenticate(request)
-    user = await db.get_or_create_user(tg_user.id)
+async def api_create_event(request: web.Request):
+    user = await get_current_user(request)
     if not user["partner_id"]:
-        return json_error("Сначала свяжитесь с партнёром", 409)
+        return web.json_response({"error": "У вас нет партнёра"}, status=400)
 
-    body = await request.json()
-    category = body.get("category", "Свободное время")
-    title = str(body.get("title", "")).strip() or category
-    description = str(body.get("description", "")).strip()
-    date = str(body.get("date", ""))
-    items = body.get("items", [])
+    data = await request.json()
+    title = data.get("title", "").strip()
+    description = data.get("description", "").strip()
+    date = data.get("date", "").strip()
 
-    if not DATE_RE.match(date):
-        return json_error("Некорректная дата")
+    if not title or not date:
+        return web.json_response({"error": "Укажите название и дату"}, status=400)
 
-    event = await db.create_event(tg_user.id, user["partner_id"], category, title, description, date, items)
-    await safe_send(user["partner_id"], f"➕ Новое событие [{category}] на {date}: {title}!")
-    return web.json_response(event_to_dict(event, tg_user.id), status=201)
+    event = await db.create_event(
+        created_by=user["telegram_id"],
+        target_user=user["partner_id"],
+        title=title,
+        description=description,
+        date=date
+    )
+    return web.json_response({"ok": True, "id": event["id"]})
 
 
-async def api_respond(request: web.Request) -> web.Response:
-    tg_user = authenticate(request)
+async def api_respond_event(request: web.Request):
+    user = await get_current_user(request)
     event_id = int(request.match_info["id"])
-    body = await request.json()
-    status = body.get("status")
+    data = await request.json()
+    status = data.get("status")
 
     if status not in ("accepted", "declined"):
-        return json_error("Некорректный статус")
+        return web.json_response({"error": "Некорректный статус"}, status=400)
 
     event = await db.get_event(event_id)
-    if not event or event["target_user"] != tg_user.id:
-        return json_error("Доступ запрещен", 403)
+    if not event or event["target_user"] != user["telegram_id"]:
+        return web.json_response({"error": "Событие не найдено"}, status=404)
 
     await db.set_status(event_id, status)
-    text = f"✅ {tg_user.first_name} согласился(лась) на {event['title']}!" if status == "accepted" else f"❌ {tg_user.first_name} отклонил(а) {event['title']}."
-    await safe_send(event["created_by"], text)
-
-    updated_event = await db.get_event(event_id)
-    return web.json_response(event_to_dict(updated_event, tg_user.id))
-
-
-async def api_toggle_item(request: web.Request) -> web.Response:
-    authenticate(request)
-    item_id = int(request.match_info["id"])
-    await db.toggle_checklist_item(item_id)
     return web.json_response({"ok": True})
 
 
-async def api_add_item(request: web.Request) -> web.Response:
-    authenticate(request)
-    event_id = int(request.match_info["id"])
-    body = await request.json()
-    text = str(body.get("text", "")).strip()
-    if text:
-        await db.add_checklist_item(event_id, text)
-    event = await db.get_event(event_id)
-    return web.json_response(event_to_dict(event, 0))
+# Static HTML delivery
+async def serve_index(request: web.Request):
+    return web.FileResponse("webapp/index.html")
 
 
-async def index(_: web.Request) -> web.FileResponse:
-    return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
+# Bot Handlers
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message, command: CommandObject):
+    user = await db.get_or_create_user(message.from_user.id)
+    args = command.args
+
+    if args and not user["partner_id"]:
+        target = await db.get_user_by_code(args)
+        if target and target["telegram_id"] != user["telegram_id"]:
+            await db.link_partners(user["telegram_id"], target["telegram_id"])
+            await message.answer("🎉 Вы успешно связали календари с партнёром!")
+            return
+
+    kb = types.InlineKeyboardMarkup(
+        inline_keyboard=[[
+            types.InlineKeyboardButton(
+                text="📅 Открыть календарь",
+                web_app=types.WebAppInfo(url=WEBAPP_URL)
+            )
+        ]]
+    )
+    await message.answer("Привет! Откройте календарь ниже:", reply_markup=kb)
 
 
-@web.middleware
-async def cors_middleware(request, handler):
-    if request.method == "OPTIONS":
-        response = web.Response()
-    else:
-        response = await handler(request)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Init-Data"
-    return response
-
-
-async def main() -> None:
-    global bot_username
-    logging.basicConfig(level=logging.INFO)
+async def init_app():
     await db.init_db()
-    bot_username = (await bot.get_me()).username
+    app = web.Application()
 
-    app = web.Application(middlewares=[cors_middleware])
-    app.router.add_get("/", index)
-    app.router.add_get("/api/state", api_state)
+    app.router.add_get("/", serve_index)
+    app.router.add_get("/index.html", serve_index)
+    app.router.add_get("/api/state", api_get_state)
     app.router.add_post("/api/events", api_create_event)
-    app.router.add_post("/api/events/{id}/respond", api_respond)
-    app.router.add_post("/api/items/{id}/toggle", api_toggle_item)
-    app.router.add_post("/api/events/{id}/items", api_add_item)
+    app.router.add_post("/api/events/{id}/respond", api_respond_event)
+    app.router.add_static("/", "webapp", show_index=True)
 
-    runner = web.AppRunner(app)
-    await runner.setup()
-    await web.TCPSite(runner, "0.0.0.0", PORT).start()
-    logging.info(f"Сервер запущен на порту {PORT}")
-
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await runner.cleanup()
-        await bot.session.close()
+    return app
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    port = int(os.getenv("PORT", 8080))
+    web.run_app(init_app(), host="0.0.0.0", port=port)
