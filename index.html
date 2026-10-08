@@ -98,6 +98,7 @@
 </head>
 <body>
 
+<!-- Экран: партнёр не привязан -->
 <section id="welcome" class="welcome" hidden>
   <h1>Календарь на двоих</h1>
   <p>Чтобы начать, отправьте пригласительную ссылку второму человеку. Когда он откроет её в боте, вы будете связаны.</p>
@@ -105,6 +106,7 @@
   <button class="btn ghost" id="copy">Скопировать ссылку</button>
 </section>
 
+<!-- Экран: календарь -->
 <main id="app" hidden>
   <div class="cal-head">
     <button class="nav" id="prev" aria-label="Предыдущий месяц">‹</button>
@@ -120,6 +122,7 @@
   <button class="fab" id="add" aria-label="Добавить событие">+</button>
 </main>
 
+<!-- Форма создания -->
 <div class="overlay" id="overlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <h2 id="sheetTitle">Новое событие</h2>
@@ -138,6 +141,7 @@
 </div>
 
 <script>
+// Безопасная инициализация Telegram SDK
 const tg = window.Telegram?.WebApp || {
   initData: "",
   ready: () => {},
@@ -158,7 +162,7 @@ const MONTHS_FORMAT = new Intl.DateTimeFormat("ru", { month: "long", year: "nume
 const DAY_FORMAT = new Intl.DateTimeFormat("ru", { day: "numeric", month: "long" });
 
 const pad = (n) => String(n).padStart(2, "0");
-const fmt = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
+const fmt = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;      // m: 0..11
 const todayStr = () => { const t = new Date(); return fmt(t.getFullYear(), t.getMonth(), t.getDate()); };
 const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 
@@ -166,9 +170,11 @@ let state = { has_partner: false, invite_link: "", events: [] };
 let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
 
-/* Запросы отправляются напрямую на текущий домен */
+/* ── API ── */
+const RENDER_SERVER_URL = "https://couple-calendar-ycu9.onrender.com";
+
 async function api(path, options = {}) {
-  const res = await fetch("/api" + path, {
+  const res = await fetch(RENDER_SERVER_URL + "/api" + path, {
     ...options,
     headers: { "Content-Type": "application/json", "X-Init-Data": tg.initData || "" }
   });
@@ -194,6 +200,7 @@ async function load() {
   }
 }
 
+/* ── Рендер ── */
 function render() {
   $("welcome").hidden = state.has_partner;
   $("app").hidden = !state.has_partner;
@@ -203,10 +210,11 @@ function render() {
 function renderCalendar() {
   $("title").textContent = MONTHS_FORMAT.format(new Date(view.y, view.m, 1));
 
+  // статусы по дням
   const byDay = {};
   for (const e of state.events) (byDay[e.date] ||= new Set()).add(e.status);
 
-  const offset = (new Date(view.y, view.m, 1).getDay() + 6) % 7;
+  const offset = (new Date(view.y, view.m, 1).getDay() + 6) % 7;   // неделя с понедельника
   const days = new Date(view.y, view.m + 1, 0).getDate();
   const today = todayStr();
   let html = "";
@@ -247,6 +255,7 @@ function renderList() {
   }).join("");
 }
 
+/* ── Календарь: события ── */
 $("grid").addEventListener("click", (ev) => {
   const btn = ev.target.closest(".day");
   if (!btn) return;
@@ -268,6 +277,7 @@ function shiftMonth(delta) {
 $("prev").onclick = () => shiftMonth(-1);
 $("next").onclick = () => shiftMonth(1);
 
+/* ── Ответ на событие ── */
 $("list").addEventListener("click", async (ev) => {
   const btn = ev.target.closest("[data-status]");
   if (!btn) return;
@@ -284,8 +294,9 @@ $("list").addEventListener("click", async (ev) => {
   }
 });
 
+/* ── Форма создания ── */
 function openForm() {
-  $("fDate").value = selected;
+  $("fDate").value = selected;               // дата подставляется из выбранного дня
   $("fTitle").value = "";
   $("fDesc").value = "";
   $("fError").textContent = "";
@@ -312,7 +323,7 @@ $("fSave").onclick = async () => {
       body: JSON.stringify({ title, description: $("fDesc").value.trim(), date })
     });
     tg.HapticFeedback?.notificationOccurred("success");
-    selected = date;
+    selected = date;                          // переходим к дню созданного события
     const d = parse(date);
     view = { y: d.getFullYear(), m: d.getMonth() };
     closeForm();
@@ -324,6 +335,7 @@ $("fSave").onclick = async () => {
   }
 };
 
+/* ── Приглашение партнёра ── */
 $("share").onclick = () => {
   const url = "https://t.me/share/url?url=" + encodeURIComponent(state.invite_link) +
               "&text=" + encodeURIComponent("Давай вести общий календарь на двоих!");
@@ -334,6 +346,7 @@ $("copy").onclick = async () => {
   catch { toast(state.invite_link); }
 };
 
+/* ── Старт и автообновление ── */
 load();
 setInterval(() => { if (!document.hidden && $("overlay").hidden) load(); }, 15000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });

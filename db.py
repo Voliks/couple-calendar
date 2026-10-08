@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS events (
     target_user INTEGER NOT NULL,
     title       TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    date        TEXT NOT NULL,
+    date        TEXT NOT NULL,                      -- YYYY-MM-DD
     status      TEXT NOT NULL DEFAULT 'pending'
                 CHECK (status IN ('pending', 'accepted', 'declined'))
 );
@@ -68,6 +68,7 @@ async def get_user_by_code(code: str):
 
 
 async def link_partners(a: int, b: int) -> None:
+    """Связывает двух пользователей в одной транзакции."""
     async with connect() as conn:
         await conn.execute("UPDATE users SET partner_id = ? WHERE telegram_id = ?", (b, a))
         await conn.execute("UPDATE users SET partner_id = ? WHERE telegram_id = ?", (a, b))
