@@ -161,7 +161,7 @@ let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getM
 
 /* ── API ── */
 async function api(path, options = {}) {
-  const res = await fetch("/api" + path, {
+  const res = await fetch("https://couple-calendar-api.onrender.com/api" + path, {
     ...options,
     headers: { "Content-Type": "application/json", "X-Init-Data": tg.initData }
   });
