@@ -80,10 +80,13 @@ async def link_partners(user1_id: int, user2_id: int):
 
 
 async def create_event(created_by: int, target_user: int, title: str, description: str, category: str, date: str, items: list = None):
+    # Если Магазин — создаем сразу в статусе accepted
+    status = "accepted" if category == "Магазин" else "pending"
+
     async with get_client() as client:
         rs = await client.execute(
-            "INSERT INTO events (created_by, target_user, title, description, category, date) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
-            (created_by, target_user, title, description, category, date),
+            "INSERT INTO events (created_by, target_user, title, description, category, date, status) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (created_by, target_user, title, description, category, date, status),
         )
         event_id = rs.rows[0][0]
 
@@ -104,9 +107,23 @@ async def create_event(created_by: int, target_user: int, title: str, descriptio
             "description": description,
             "category": category,
             "date": date,
-            "status": "pending",
+            "status": status,
             "items": []
         }
+
+
+async def update_event(event_id: int, description: str, date: str):
+    async with get_client() as client:
+        await client.execute(
+            "UPDATE events SET description = ?, date = ? WHERE id = ?",
+            (description, date, event_id),
+        )
+
+
+async def delete_event(event_id: int):
+    async with get_client() as client:
+        await client.execute("DELETE FROM checklist_items WHERE event_id = ?", (event_id,))
+        await client.execute("DELETE FROM events WHERE id = ?", (event_id,))
 
 
 async def get_event(event_id: int):
