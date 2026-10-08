@@ -15,311 +15,191 @@
     --accent-text: var(--tg-theme-button-text-color, #ffffff);
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; background: var(--bg); color: var(--text);
-    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-  body { padding: 12px 12px 80px; max-width: 480px; margin: 0 auto; }
-
-  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-  .month-title { font-size: 20px; font-weight: 700; text-transform: capitalize; }
-  .nav-btn { background: var(--bg2); border: 0; color: var(--text); padding: 8px 14px; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; }
-
-  .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
-  .dow { font-size: 12px; color: var(--hint); padding: 4px 0; font-weight: 600; }
-  .day { aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    background: var(--bg2); border-radius: 10px; position: relative; font-weight: 500; font-size: 14px; cursor: pointer; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { padding: 12px 14px 90px; max-width: 500px; margin: 0 auto; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  
+  .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .cal-title { font-size: 20px; font-weight: 700; text-transform: capitalize; }
+  .nav { background: var(--bg2); border: 0; border-radius: 8px; width: 36px; height: 36px; font-weight: bold; cursor: pointer; }
+  
+  .weekdays, .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
+  .weekdays span { font-size: 12px; color: var(--hint); padding-bottom: 4px; font-weight: 600; }
+  .day { aspect-ratio: 1; border-radius: 10px; background: var(--bg2); display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; position: relative; cursor: pointer; border: 2px solid transparent; }
   .day.empty { background: transparent; cursor: default; }
-  .day.today { border: 2px solid var(--accent); }
+  .day.today { border-color: var(--accent); font-weight: bold; }
   .day.selected { background: var(--accent); color: var(--accent-text); }
-  .dots { display: flex; gap: 2px; position: absolute; bottom: 4px; }
+  .dots { display: flex; gap: 2px; position: absolute; bottom: 3px; }
   .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--hint); }
 
-  .card { background: var(--bg2); border-radius: 14px; padding: 14px; margin-top: 12px; }
-  .card-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
-
-  .event { background: var(--bg); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
-  .event-hdr { display: flex; justify-content: space-between; align-items: center; }
-  .event-title { font-weight: 600; font-size: 15px; }
-  .badge { font-size: 11px; padding: 2px 6px; border-radius: 6px; font-weight: 600; background: var(--bg2); }
+  .card { background: var(--bg2); border-radius: 14px; padding: 14px; margin-top: 14px; }
+  .card-title { font-size: 16px; font-weight: 700; margin-bottom: 10px; }
+  .event { background: var(--bg); border-radius: 10px; padding: 12px; margin-bottom: 8px; }
+  .event-hdr { display: flex; justify-content: space-between; font-weight: 600; }
+  .badge { font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--bg2); }
   .event-desc { font-size: 13px; color: var(--hint); margin-top: 4px; }
-  .actions { display: flex; gap: 8px; margin-top: 8px; }
-  .btn { flex: 1; border: 0; padding: 8px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; }
-  .btn-acc { background: #22c55e; color: #fff; }
-  .btn-dec { background: #ef4444; color: #fff; }
 
-  .fab { position: fixed; bottom: 20px; right: 20px; background: var(--accent); color: var(--accent-text);
-    border: 0; width: 52px; height: 52px; border-radius: 26px; font-size: 28px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); cursor: pointer; }
-
-  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: none; align-items: flex-end; justify-content: center; z-index: 100; }
-  .modal.open { display: flex; }
-  .sheet { background: var(--bg); width: 100%; max-width: 480px; border-radius: 20px 20px 0 0; padding: 16px; }
-
-  .field { margin-bottom: 12px; }
+  .fab { position: fixed; right: 20px; bottom: 20px; width: 56px; height: 56px; border-radius: 28px; background: var(--accent); color: var(--accent-text); border: 0; font-size: 28px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); cursor: pointer; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: none; align-items: flex-end; z-index: 100; }
+  .overlay.open { display: flex; }
+  .sheet { background: var(--bg); width: 100%; border-radius: 20px 20px 0 0; padding: 16px; }
+  
+  .field { margin-bottom: 10px; }
   .field label { display: block; font-size: 12px; color: var(--hint); margin-bottom: 4px; }
-  .field input, .field select, .field textarea { width: 100%; background: var(--bg2); border: 0; color: var(--text); padding: 10px; border-radius: 10px; font-size: 15px; }
-
-  .chk-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 14px; cursor: pointer; }
-  .chk-item.done { text-decoration: line-through; color: var(--hint); }
-
-  #toast { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: #fff;
-    padding: 8px 16px; border-radius: 20px; font-size: 13px; display: none; z-index: 200; }
+  .field input, .field select, .field textarea { width: 100%; background: var(--bg2); border: 0; padding: 10px; border-radius: 8px; }
+  .chk-item { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 14px; }
+  .chk-item.done span { text-decoration: line-through; color: var(--hint); }
+  .btn { width: 100%; padding: 12px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-weight: 600; cursor: pointer; }
 </style>
 </head>
 <body>
 
-<div id="toast"></div>
-
-<div id="noPartner" class="card" style="display:none; text-align:center;">
-  <div class="card-title">Пригласите партнёра</div>
-  <p style="font-size:14px; color:var(--hint);">Чтобы вести календарь вместе, отправьте ссылку вашей половинке.</p>
-  <button id="share" class="btn btn-acc" style="width:100%; padding:10px;">Отправить ссылку</button>
-  <button id="copy" class="btn" style="width:100%; margin-top:8px; background:var(--bg2);">Скопировать ссылку</button>
+<div id="welcome" class="card" style="display:none; text-align:center;">
+  <h3>Календарь на двоих</h3>
+  <p style="color:var(--hint); font-size:14px;">Отправьте ссылку партнёру, чтобы вести общие планы.</p>
+  <button id="share" class="btn">Отправить ссылку</button>
 </div>
 
-<div id="app">
-  <div class="header">
-    <button class="nav-btn" id="prev">‹</button>
-    <div class="month-title" id="mTitle"></div>
-    <button class="nav-btn" id="next">›</button>
+<div id="app" style="display:none;">
+  <div class="cal-head">
+    <button class="nav" id="prev">‹</button>
+    <div class="cal-title" id="mTitle"></div>
+    <button class="nav" id="next">›</button>
   </div>
-
-  <div class="grid">
-    <div class="dow">Пн</div><div class="dow">Вт</div><div class="dow">Ср</div>
-    <div class="dow">Чт</div><div class="dow">Пт</div><div class="dow">Сб</div><div class="dow">Вс</div>
-  </div>
-  <div class="grid" id="days"></div>
+  <div class="weekdays"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
+  <div class="grid" id="grid"></div>
 
   <div class="card">
     <div class="card-title" id="dayTitle">События</div>
-    <div id="eventList"></div>
+    <div id="list"></div>
   </div>
 
   <button class="fab" id="addBtn">+</button>
 </div>
 
-<div class="modal" id="fModal">
+<div class="overlay" id="modal">
   <div class="sheet">
     <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
-      <b style="font-size:17px;">Новое событие</b>
-      <span id="fClose" style="cursor:pointer; color:var(--hint);">Закрыть</span>
+      <b>Новое событие</b>
+      <span id="mClose" style="cursor:pointer; color:var(--hint);">Закрыть</span>
     </div>
     <div class="field">
       <label>Категория</label>
-      <select id="fCategory">
+      <select id="fCat">
         <option value="Свободное время">Свободное время</option>
         <option value="Секс">Секс</option>
         <option value="Магазин">Магазин</option>
       </select>
     </div>
-    <div class="field">
-      <label>Дата</label>
-      <input type="date" id="fDate">
-    </div>
-    <div class="field" id="fTitleBox" style="display:none;">
-      <label>Название</label>
-      <input type="text" id="fTitle" placeholder="Введите название">
-    </div>
-    <div class="field">
-      <label>Описание</label>
-      <textarea id="fDesc" rows="2" placeholder="Необязательно"></textarea>
-    </div>
+    <div class="field"><label>Дата</label><input type="date" id="fDate"></div>
+    <div class="field"><label>Описание</label><textarea id="fDesc" rows="2"></textarea></div>
     <div class="field" id="fItemsBox" style="display:none;">
       <label>Список покупок (каждая с новой строки)</label>
-      <textarea id="fItems" rows="3" placeholder="Молоко&#10;Хлеб"></textarea>
+      <textarea id="fItems" rows="3"></textarea>
     </div>
-    <div id="fError" style="color:#ef4444; font-size:13px; margin-bottom:8px;"></div>
-    <button id="fSave" class="btn btn-acc" style="width:100%; padding:12px;">Создать</button>
+    <button id="fSave" class="btn">Создать</button>
   </div>
 </div>
 
 <script>
-const tg = window.Telegram.WebApp;
-tg.expand();
+const tg = window.Telegram?.WebApp || { initData: "" };
+if (tg.expand) tg.expand();
 
 const $ = id => document.getElementById(id);
-let state = { me: null, partner: null, events: [], invite_link: "" };
+let state = { has_partner: false, events: [], invite_link: "" };
 let now = new Date();
 let view = { y: now.getFullYear(), m: now.getMonth() };
-let selected = fmt(now);
-
-function fmt(d) {
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-}
-
-function toast(msg) {
-  const t = $("toast"); t.textContent = msg; t.style.display = "block";
-  setTimeout(() => t.style.display = "none", 2000);
-}
+let selected = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
 
 async function api(path, opts = {}) {
-  opts.headers = { ...opts.headers, "X-Init-Data": tg.initData, "Content-Type": "application/json" };
-  const res = await fetch("/api" + path, opts);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || "Ошибка запроса");
-  }
+  opts.headers = { ...opts.headers, "X-Init-Data": tg.initData || "", "Content-Type": "application/json" };
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error("Ошибка запроса");
   return res.json();
 }
 
 async function load() {
   try {
-    state = await api("/state");
-    if (!state.partner) {
-      $("noPartner").style.display = "block";
+    state = await api("/api/state");
+    if (!state.has_partner) {
+      $("welcome").style.display = "block";
       $("app").style.display = "none";
     } else {
-      $("noPartner").style.display = "none";
+      $("welcome").style.display = "none";
       $("app").style.display = "block";
-      renderCalendar();
-      renderEvents();
+      renderCal();
+      renderList();
     }
-  } catch (e) {
-    toast(e.message);
-  }
+  } catch (e) { console.error(e); }
 }
 
-function renderCalendar() {
+function renderCal() {
   const months = ["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
   $("mTitle").textContent = `${months[view.m]} ${view.y}`;
 
   const first = new Date(view.y, view.m, 1);
-  let pad = first.getDay() - 1; if (pad < 0) pad = 6;
+  let pad = (first.getDay() + 6) % 7;
   const daysInM = new Date(view.y, view.m + 1, 0).getDate();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
 
   let html = "";
   for (let i = 0; i < pad; i++) html += `<div class="day empty"></div>`;
 
-  const todayStr = fmt(new Date());
-
   for (let d = 1; d <= daysInM; d++) {
-    const dateStr = `${view.y}-${String(view.m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const isToday = dateStr === todayStr ? "today" : "";
-    const isSel = dateStr === selected ? "selected" : "";
-    const evs = state.events.filter(e => e.date === dateStr);
-
-    let dots = "";
-    if (evs.length) {
-      dots = `<div class="dots">${evs.slice(0,3).map(() => `<div class="dot"></div>`).join("")}</div>`;
-    }
-
-    html += `<div class="day ${isToday} ${isSel}" onclick="selectDay('${dateStr}')">${d}${dots}</div>`;
+    const dStr = `${view.y}-${String(view.m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const evs = state.events.filter(e => e.date === dStr);
+    const isToday = dStr === todayStr ? "today" : "";
+    const isSel = dStr === selected ? "selected" : "";
+    const dots = evs.length ? `<div class="dots">${evs.slice(0,3).map(()=>'<div class="dot"></div>').join("")}</div>` : "";
+    
+    html += `<div class="day ${isToday} ${isSel}" onclick="selDay('${dStr}')">${d}${dots}</div>`;
   }
-  $("days").innerHTML = html;
+  $("grid").innerHTML = html;
 }
 
-function selectDay(d) {
-  selected = d;
-  renderCalendar();
-  renderEvents();
-}
+function selDay(d) { selected = d; renderCal(); renderList(); }
 
-function renderEvents() {
+function renderList() {
   $("dayTitle").textContent = `События: ${selected}`;
-  const list = state.events.filter(e => e.date === selected);
-  if (!list.length) {
-    $("eventList").innerHTML = `<div style="color:var(--hint); font-size:14px;">Нет событий</div>`;
-    return;
-  }
+  const evs = state.events.filter(e => e.date === selected);
+  if (!evs.length) { $("list").innerHTML = `<div style="color:var(--hint); font-size:14px;">Нет событий</div>`; return; }
 
-  $("eventList").innerHTML = list.map(e => {
-    const isMine = e.created_by === state.me.id;
-    let badge = e.category;
-    let actions = "";
-
-    if (e.category !== "Магазин" && !isMine && e.status === "pending") {
-      actions = `
-        <div class="actions">
-          <button class="btn btn-acc" onclick="respond(${e.id}, 'accepted')">Пойду</button>
-          <button class="btn btn-dec" onclick="respond(${e.id}, 'declined')">Не могу</button>
-        </div>`;
-    } else if (e.category !== "Магазин") {
-      const st = { pending: "Ожидает", accepted: "Принято", declined: "Отклонено" }[e.status];
-      badge += ` • ${st}`;
-    }
-
-    let itemsHtml = "";
-    if (e.category === "Магазин" && e.items) {
-      itemsHtml = `<div style="margin-top:8px;">` + e.items.map(i => `
-        <div class="chk-item ${i.is_done ? 'done' : ''}" onclick="toggleItem(${i.id})">
-          <input type="checkbox" ${i.is_done ? 'checked' : ''} readonly>
-          <span>${i.text}</span>
-        </div>
-      `).join("") + `
-        <div style="display:flex; gap:4px; margin-top:6px;">
-          <input type="text" id="add_in_${e.id}" placeholder="Добавить товар" style="font-size:12px; padding:4px 8px; border:0; background:var(--bg2); border-radius:6px; flex:1;">
-          <button onclick="addItem(${e.id})" style="border:0; background:var(--accent); color:#fff; border-radius:6px; padding:0 8px;">+</button>
-        </div>
-      </div>`;
-    }
-
-    return `
-      <div class="event">
-        <div class="event-hdr">
-          <div class="event-title">${e.title}</div>
-          <div class="badge">${badge}</div>
-        </div>
-        ${e.description ? `<div class="event-desc">${e.description}</div>` : ""}
-        ${itemsHtml}
-        ${actions}
-      </div>`;
-  }).join("");
-}
-
-async function respond(id, status) {
-  await api(`/events/${id}/respond`, { method: "POST", body: JSON.stringify({ status }) });
-  await load();
+  $("list").innerHTML = evs.map(e => `
+    <div class="event">
+      <div class="event-hdr"><span>${e.title}</span><span class="badge">${e.category}</span></div>
+      ${e.description ? `<div class="event-desc">${e.description}</div>` : ""}
+      ${e.category === "Магазин" ? `<div style="margin-top:6px;">${e.items.map(i => `
+        <div class="chk-item ${i.is_done ? 'done':''}" onclick="toggleItem(${i.id})">
+          <input type="checkbox" ${i.is_done ? 'checked':''} readonly> <span>${i.text}</span>
+        </div>`).join("")}</div>` : ""}
+    </div>
+  `).join("");
 }
 
 async function toggleItem(id) {
-  await api(`/items/${id}/toggle`, { method: "POST" });
+  await api(`/api/items/${id}/toggle`, { method: "POST" });
   await load();
 }
 
-async function addItem(eventId) {
-  const input = $(`add_in_${eventId}`);
-  const text = input.value.trim();
-  if (!text) return;
-  await api(`/events/${eventId}/items`, { method: "POST", body: JSON.stringify({ text }) });
-  await load();
-}
-
-$("fCategory").onchange = e => {
-  const cat = e.target.value;
-  $("fItemsBox").style.display = cat === "Магазин" ? "block" : "none";
-};
-
-$("addBtn").onclick = () => {
-  $("fDate").value = selected;
-  $("fModal").classList.add("open");
-};
-
-$("fClose").onclick = () => $("fModal").classList.remove("open");
+$("fCat").onchange = e => $("fItemsBox").style.display = e.target.value === "Магазин" ? "block" : "none";
+$("addBtn").onclick = () => { $("fDate").value = selected; $("modal").classList.add("open"); };
+$("mClose").onclick = () => $("modal").classList.remove("open");
 
 $("fSave").onclick = async () => {
-  const category = $("fCategory").value;
+  const category = $("fCat").value;
   const date = $("fDate").value;
   const description = $("fDesc").value.trim();
-  const itemsText = $("fItems").value.trim();
-  const items = itemsText ? itemsText.split("\n") : [];
+  const items = $("fItems").value.trim().split("\n");
 
-  if (!date) { $("fError").textContent = "Выберите дату"; return; }
-
-  try {
-    await api("/events", {
-      method: "POST",
-      body: JSON.stringify({ category, title: category, description, date, items })
-    });
-    $("fModal").classList.remove("open");
-    await load();
-  } catch (e) {
-    $("fError").textContent = e.message;
-  }
+  if (!date) return;
+  await api("/api/events", { method: "POST", body: JSON.stringify({ category, title: category, description, date, items }) });
+  $("modal").classList.remove("open");
+  await load();
 };
 
-$("prev").onclick = () => { view.m--; if (view.m < 0) { view.m = 11; view.y--; } renderCalendar(); };
-$("next").onclick = () => { view.m++; if (view.m > 11) { view.m = 0; view.y++; } renderCalendar(); };
-
+$("prev").onclick = () => { view.m--; if (view.m < 0) { view.m = 11; view.y--; } renderCal(); };
+$("next").onclick = () => { view.m++; if (view.m > 11) { view.m = 0; view.y++; } renderCal(); };
 $("share").onclick = () => tg.openTelegramLink("https://t.me/share/url?url=" + encodeURIComponent(state.invite_link));
-$("copy").onclick = () => { navigator.clipboard.writeText(state.invite_link); toast("Скопировано!"); };
 
 load();
 </script>
