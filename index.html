@@ -52,7 +52,11 @@
   .card.pending  { --c: var(--pending); }
   .card.accepted { --c: var(--accepted); }
   .card.declined { --c: var(--declined); }
-  .card h3 { margin: 0; font-size: 17px; word-break: break-word; }
+  .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .card h3 { margin: 0; font-size: 17px; word-break: break-word; flex: 1; }
+  .card-actions { display: flex; gap: 6px; }
+  .icon-btn { font-size: 16px; padding: 4px 6px; opacity: .7; border-radius: 6px; }
+  .icon-btn:hover { opacity: 1; background: rgba(0,0,0,.05); }
   .card p { margin: 4px 0 0; color: var(--text); opacity: .8; white-space: pre-wrap; word-break: break-word; }
   .meta { margin-top: 8px; font-size: 13px; color: var(--hint); display: flex; justify-content: space-between; gap: 8px; }
   .meta b { color: rgb(var(--c)); font-weight: 600; }
@@ -122,7 +126,7 @@
   <button class="fab" id="add" aria-label="Добавить событие">+</button>
 </main>
 
-<!-- Форма создания -->
+<!-- Форма создания / редактирования -->
 <div class="overlay" id="overlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <h2 id="sheetTitle">Новое событие</h2>
@@ -135,7 +139,7 @@
     <div class="error" id="fError"></div>
     <div class="row">
       <button class="btn ghost" id="fCancel">Отмена</button>
-      <button class="btn primary" id="fSave">Отправить партнёру</button>
+      <button class="btn primary" id="fSave">Сохранить</button>
     </div>
   </div>
 </div>
@@ -169,6 +173,7 @@ const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Da
 let state = { has_partner: false, invite_link: "", events: [] };
 let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
+let editingEventId = null;
 
 /* ── API ── */
 const RENDER_SERVER_URL = "https://couple-calendar-ycu9.onrender.com";
@@ -246,8 +251,14 @@ function renderList() {
            <button class="yes" data-id="${e.id}" data-status="accepted">Да</button>
            <button class="no" data-id="${e.id}" data-status="declined">Нет</button>
          </div>` : "";
-    return `<article class="card ${e.status}">
-      <h3>${esc(e.title)}</h3>
+    return `<article class="card ${e.status}" data-id="${e.id}">
+      <div class="card-header">
+        <h3>${esc(e.title)}</h3>
+        <div class="card-actions">
+          <button class="icon-btn edit-btn" title="Редактировать">✏️</button>
+          <button class="icon-btn delete-btn" title="Удалить">🗑️</button>
+        </div>
+      </div>
       ${e.description ? `<p>${esc(e.description)}</p>` : ""}
       <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span><b>${STATUS_TEXT[e.status]}</b></div>
       ${answer}
@@ -277,26 +288,62 @@ function shiftMonth(delta) {
 $("prev").onclick = () => shiftMonth(-1);
 $("next").onclick = () => shiftMonth(1);
 
-/* ── Ответ на событие ── */
+/* ── Ответ, Редактирование, Удаление в списке ── */
 $("list").addEventListener("click", async (ev) => {
-  const btn = ev.target.closest("[data-status]");
-  if (!btn) return;
-  btn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
-  try {
-    await api(`/events/${btn.dataset.id}/respond`, {
-      method: "POST", body: JSON.stringify({ status: btn.dataset.status })
-    });
-    tg.HapticFeedback?.notificationOccurred("success");
-    await load();
-  } catch (e) {
-    toast(e.message);
-    await load();
+  const card = ev.target.closest(".card");
+  if (!card) return;
+  const eventId = card.dataset.id;
+  const event = state.events.find(e => String(e.id) === String(eventId));
+
+  // Ответ на событие
+  const statusBtn = ev.target.closest("[data-status]");
+  if (statusBtn) {
+    statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    try {
+      await api(`/events/${eventId}/respond`, {
+        method: "POST", body: JSON.stringify({ status: statusBtn.dataset.status })
+      });
+      tg.HapticFeedback?.notificationOccurred("success");
+      await load();
+    } catch (e) {
+      toast(e.message);
+      await load();
+    }
+    return;
+  }
+
+  // Редактирование
+  if (ev.target.closest(".edit-btn")) {
+    editingEventId = Number(eventId);
+    $("sheetTitle").textContent = "Редактировать событие";
+    $("fDate").value = event.date;
+    $("fTitle").value = event.title;
+    $("fDesc").value = event.description || "";
+    $("fError").textContent = "";
+    $("overlay").hidden = false;
+    setTimeout(() => $("fTitle").focus(), 50);
+    return;
+  }
+
+  // Удаление
+  if (ev.target.closest(".delete-btn")) {
+    if (!confirm("Удалить это событие?")) return;
+    try {
+      await api(`/events/${eventId}`, { method: "DELETE" });
+      tg.HapticFeedback?.notificationOccurred("success");
+      toast("Событие удалено");
+      await load();
+    } catch (e) {
+      toast(e.message);
+    }
   }
 });
 
-/* ── Форма создания ── */
+/* ── Форма создания / редактирования ── */
 function openForm() {
-  $("fDate").value = selected;               // дата подставляется из выбранного дня
+  editingEventId = null;
+  $("sheetTitle").textContent = "Новое событие";
+  $("fDate").value = selected;
   $("fTitle").value = "";
   $("fDesc").value = "";
   $("fError").textContent = "";
@@ -318,12 +365,20 @@ $("fSave").onclick = async () => {
 
   $("fSave").disabled = true;
   try {
-    await api("/events", {
-      method: "POST",
-      body: JSON.stringify({ title, description: $("fDesc").value.trim(), date })
-    });
+    if (editingEventId) {
+      await api(`/events/${editingEventId}`, {
+        method: "PUT",
+        body: JSON.stringify({ title, description: $("fDesc").value.trim(), date })
+      });
+      toast("Событие изменено");
+    } else {
+      await api("/events", {
+        method: "POST",
+        body: JSON.stringify({ title, description: $("fDesc").value.trim(), date })
+      });
+    }
     tg.HapticFeedback?.notificationOccurred("success");
-    selected = date;                          // переходим к дню созданного события
+    selected = date;
     const d = parse(date);
     view = { y: d.getFullYear(), m: d.getMonth() };
     closeForm();

@@ -178,6 +178,62 @@ async def api_create_event(request: web.Request) -> web.Response:
     return web.json_response(event_to_dict(event, tg_user.id), status=201)
 
 
+async def api_update_event(request: web.Request) -> web.Response:
+    tg_user = authenticate(request)
+    try:
+        event_id = int(request.match_info["id"])
+        body = await request.json()
+    except Exception:
+        return json_error("Некорректный запрос")
+
+    event = await db.get_event(event_id)
+    if event is None:
+        return json_error("Событие не найдено", 404)
+    
+    if event["created_by"] != tg_user.id and event["target_user"] != tg_user.id:
+        return json_error("Нет доступа", 403)
+
+    title = str(body.get("title", "")).strip()
+    description = str(body.get("description", "")).strip()
+    date = str(body.get("date", ""))
+    
+    if not title:
+        return json_error("Введите название")
+    if len(title) > 200 or len(description) > 2000:
+        return json_error("Слишком длинный текст")
+    if not DATE_RE.match(date):
+        return json_error("Некорректная дата")
+
+    updated = await db.update_event(event_id, title, description, date)
+    
+    partner_id = event["target_user"] if event["created_by"] == tg_user.id else event["created_by"]
+    await safe_send(partner_id, f"✏️ Событие «{title}» на {date} было изменено.")
+    
+    return web.json_response(event_to_dict(updated, tg_user.id))
+
+
+async def api_delete_event(request: web.Request) -> web.Response:
+    tg_user = authenticate(request)
+    try:
+        event_id = int(request.match_info["id"])
+    except Exception:
+        return json_error("Некорректный запрос")
+
+    event = await db.get_event(event_id)
+    if event is None:
+        return json_error("Событие не найдено", 404)
+
+    if event["created_by"] != tg_user.id and event["target_user"] != tg_user.id:
+        return json_error("Нет доступа", 403)
+
+    await db.delete_event(event_id)
+
+    partner_id = event["target_user"] if event["created_by"] == tg_user.id else event["created_by"]
+    await safe_send(partner_id, f"🗑️ Событие «{event['title']}» было удалено.")
+
+    return web.json_response({"status": "deleted"})
+
+
 async def api_respond(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     try:
@@ -224,7 +280,7 @@ async def cors_middleware(request, handler):
         response = await handler(request)
 
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Init-Data"
     return response
 
@@ -243,6 +299,8 @@ async def main() -> None:
     app.router.add_get("/health", health_check)  # Маршрут для пингера
     app.router.add_get("/api/state", api_state)
     app.router.add_post("/api/events", api_create_event)
+    app.router.add_put("/api/events/{id}", api_update_event)
+    app.router.add_delete("/api/events/{id}", api_delete_event)
     app.router.add_post("/api/events/{id}/respond", api_respond)
 
     runner = web.AppRunner(app)
