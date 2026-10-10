@@ -46,7 +46,7 @@ CATEGORY_TITLES = {
     "shop": "Магазин",
 }
 
-ALLOWED_SEX_TITLES = {"🔥 Страстная ночь", "🌹 Романтический вечер", "✨ Эксперименты и фантазии"}
+ALLOWED_SEX_LEVELS = {"🔥 Тепло", "🌶️ Горячо", "🌋 Жарааа!"}
 
 
 def _origin(url: str) -> str:
@@ -338,11 +338,12 @@ def parse_event_payload(body: dict) -> dict:
     if event_time and not TIME_RE.match(event_time):
         raise ApiError("Некорректное время")
 
+    # Если категория секс, сохраняем выбранный уровень в качестве названия
     if category == "sex":
-        sex_title = str(body.get("sex_title", "🔥 Страстная ночь")).strip()
-        if sex_title not in ALLOWED_SEX_TITLES:
-            sex_title = "🔥 Страстная ночь"
-        title = sex_title
+        sex_level = str(body.get("sex_level", "🔥 Тепло")).strip()
+        if sex_level not in ALLOWED_SEX_LEVELS:
+            sex_level = "🔥 Тепло"
+        title = sex_level
     else:
         title = CATEGORY_TITLES.get(category, "Событие")
 
