@@ -30,7 +30,6 @@ TODO_COLORS = [
     "#ef4444", "#f97316", "#eab308", "#22c55e",
     "#14b8a6", "#3b82f6", "#8b5cf6", "#ec4899",
 ]
-TODO_PRIORITIES = {"low", "medium", "high"}
 
 
 class DbError(Exception):
@@ -626,14 +625,14 @@ async def count_events_created(user_id: int) -> int:
 
 
 async def create_event(created_by, target_user, title, description, date, event_time, category,
-                       items=None, color: str = "", priority: str = "", remind_before: int = 0):
+                       items=None, color: str = "", remind_before: int = 0):
     initial_status = "accepted" if category in ("shop", "todo") else "pending"
     rs = await _exec(
         "INSERT INTO events "
-        "(created_by, target_user, title, description, date, time, category, status, color, priority, remind_before) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(created_by, target_user, title, description, date, time, category, status, color, remind_before) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (created_by, target_user, title, description, date, event_time, category, initial_status,
-         color, priority, remind_before),
+         color, remind_before),
     )
     event_id = rs.last_id
     if items and category == "shop":
@@ -670,13 +669,13 @@ async def set_status(event_id: int, status: str) -> None:
 
 
 async def update_event(event_id, title, description, date, event_time, category, reset_status: bool,
-                       color: str = "", priority: str = "", remind_before: int = 0):
+                       color: str = "", remind_before: int = 0):
     stmts = [
         (
             "UPDATE events SET title = ?, description = ?, date = ?, time = ?, category = ?, "
-            "color = ?, priority = ?, remind_before = ?, "
+            "color = ?, remind_before = ?, "
             "status = CASE WHEN ? THEN 'pending' ELSE status END WHERE id = ?",
-            (title, description, date, event_time, category, color, priority, remind_before,
+            (title, description, date, event_time, category, color, remind_before,
              int(reset_status), event_id),
         )
     ]
@@ -889,7 +888,7 @@ async def get_archived_ideas(limit: int = 2000) -> list[dict]:
 
 async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
     rs = await _exec(
-        "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz, e.category, e.priority, e.remind_before "
+        "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz, e.category, e.remind_before "
         "FROM events e JOIN users u ON u.telegram_id IN (e.created_by, e.target_user) "
         "WHERE e.status = 'accepted' AND e.date BETWEEN ? AND ? "
         "AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.event_id = e.id AND r.user_id = u.telegram_id)",
@@ -899,7 +898,7 @@ async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
         {
             "event_id": r[0], "title": r[1], "date": r[2], "time": r[3] or "",
             "user_id": r[4], "tz": r[5] or "", "category": r[6] or "",
-            "priority": r[7] or "", "remind_before": r[8] or 0,
+            "remind_before": r[7] or 0,
         }
         for r in rs.rows
     ]
