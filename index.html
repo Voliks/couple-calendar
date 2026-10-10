@@ -93,7 +93,9 @@
   input, select, textarea { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid transparent;
     background: var(--bg2); color: var(--text); font: inherit; }
   textarea { resize: none; min-height: 80px; }
-  .two { display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 0; }
+  .two > div { min-width: 0; }
+  input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
   .row { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; margin-top: 18px; }
   .btn { padding: 14px; border-radius: 12px; font-weight: 600; }
   .btn.primary { background: var(--accent); color: var(--accent-text); }
@@ -152,14 +154,12 @@
 
   .ideas-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .ideas-head h3 { margin: 0; font-size: 18px; flex: 1; min-width: 0; word-break: break-word; }
-  /* Кнопка «+ Добавить» в шапке */
   .ideas-head .ideas-add-toggle { padding: 8px 12px; border-radius: 10px; background: var(--bg2);
     font-weight: 600; font-size: 14px; color: var(--accent); flex-shrink: 0; }
   .ideas-head .ideas-add-toggle:active { background: rgba(36, 129, 204, .2); }
 
   .ideas-hint { font-size: 12px; color: var(--hint); margin-bottom: 8px; }
 
-  /* Форма добавления идеи — скрыта по умолчанию, показывается по кнопке «+ Добавить» */
   .idea-form { display: flex; gap: 8px; margin-bottom: 10px; }
   .idea-form input { flex: 1; }
   .idea-form button { padding: 0 16px; border-radius: 12px; background: var(--accent); color: var(--accent-text); font-weight: 600; white-space: nowrap; }
@@ -177,7 +177,6 @@
   .idea-item .idea-del { font-size: 16px; opacity: .5; padding: 0 4px; border-radius: 6px; line-height: 1; }
   .idea-item .idea-del:hover { opacity: 1; background: rgba(0,0,0,.06); }
 
-  /* Нижняя кнопка «Готово» на всю ширину — там, где раньше был «Добавить» */
   .ideas-done { width: 100%; margin-top: 12px; padding: 14px; border-radius: 12px;
     background: var(--accent); color: var(--accent-text); font-weight: 600; font-size: 16px; }
 </style>
@@ -222,7 +221,7 @@
         <input type="date" id="fDate">
       </div>
       <div>
-        <label for="fTime">Время (необязательно)</label>
+        <label for="fTime">Время</label>
         <input type="time" id="fTime">
       </div>
     </div>
@@ -285,7 +284,6 @@
     </div>
     <div class="ideas-hint">Отметьте одну или несколько идей — они появятся в блоке «Выбрано».</div>
 
-    <!-- Форма добавления, скрыта по умолчанию -->
     <div class="idea-form" id="ideaForm" hidden>
       <input type="text" id="newIdeaInput" placeholder="Текст новой идеи..." maxlength="300" aria-label="Новая идея">
       <button type="button" id="addIdeaBtn">ОК</button>
@@ -861,7 +859,6 @@ $("chosenChips").addEventListener("click", (e) => {
   tg.HapticFeedback?.selectionChanged();
 });
 
-/* Показать/скрыть форму добавления */
 $("addIdeaToggle").onclick = () => showIdeaForm();
 
 async function submitNewIdea() {
