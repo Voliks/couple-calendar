@@ -222,11 +222,9 @@ function toast(text) {
 }
 
 async function load() {
-  // Не перезагружаем список с сервера, если открыта форма или пользователь кликает по чекбоксу
   if (!$("overlay").hidden) return;
   try {
     const newState = await api("/state");
-    // Сравниваем базово, чтобы не перерисовывать DOM без изменений
     state = newState;
     render();
   } catch (e) {
@@ -264,12 +262,13 @@ function renderCalendar() {
 
 const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+// Стабильный парсер: присваивает ID только если его реально нет, сохраняя индекс текстов
 function parsePayload(desc, title) {
   try {
     const data = JSON.parse(desc);
     if (data && typeof data === "object" && Array.isArray(data.items)) {
-      data.items = data.items.map(item => ({
-        id: item.id || Math.random().toString(36).substr(2, 9),
+      data.items = data.items.map((item, index) => ({
+        id: item.id || `item_${index}_${item.text.slice(0, 5)}`,
         text: item.text || "",
         done: !!item.done
       }));
@@ -352,7 +351,7 @@ function shiftMonth(delta) {
 $("prev").onclick = () => shiftMonth(-1);
 $("next").onclick = () => shiftMonth(1);
 
-// Мгновенный отклик чекбокса без ожидания перерисовки списка
+// Обработка клика по чекбоксу
 $("list").addEventListener("change", async (ev) => {
   const checkbox = ev.target.closest("input[type='checkbox'][data-checklist-id]");
   if (!checkbox) return;
@@ -368,7 +367,6 @@ $("list").addEventListener("change", async (ev) => {
     if (item) {
       item.done = checkbox.checked;
       
-      // Мгновенно обновляем визуальный класс без перерисовки всего списка
       const label = checkbox.closest(".checklist-item-view");
       if (label) {
         if (checkbox.checked) label.classList.add("checked");
@@ -384,7 +382,7 @@ $("list").addEventListener("change", async (ev) => {
         });
       } catch (e) {
         toast(e.message);
-        load(); // в случае ошибки откатываемся назад
+        load();
       }
     }
   }
@@ -457,14 +455,14 @@ function toggleCategoryFields(category) {
 $("fTitle").addEventListener("change", (e) => {
   toggleCategoryFields(e.target.value);
   if (e.target.value === "Магазин" && $("checklistBuilder").children.length === 0) {
-    renderChecklistBuilder([{ id: Math.random().toString(36).substr(2, 9), text: "", done: false }]);
+    renderChecklistBuilder([{ id: "item_" + Date.now() + "_0", text: "", done: false }]);
   }
 });
 
 function renderChecklistBuilder(items) {
   const container = $("checklistBuilder");
-  container.innerHTML = items.map((item) => `
-    <div class="checklist-row" data-item-id="${item.id}">
+  container.innerHTML = items.map((item, idx) => `
+    <div class="checklist-row" data-item-id="${item.id || ('item_' + Date.now() + '_' + idx)}">
       <input type="text" class="checklist-input" value="${esc(item.text)}" placeholder="Название товара">
       <button type="button" class="remove-checklist-row">✕</button>
     </div>
@@ -475,7 +473,7 @@ $("addChecklistItem").onclick = () => {
   const container = $("checklistBuilder");
   const div = document.createElement("div");
   div.className = "checklist-row";
-  const newId = Math.random().toString(36).substr(2, 9);
+  const newId = "item_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5);
   div.setAttribute("data-item-id", newId);
   div.innerHTML = `
     <input type="text" class="checklist-input" value="" placeholder="Название товара">
@@ -498,7 +496,7 @@ function openForm() {
   $("fTitle").value = "Отдых";
   toggleCategoryFields("Отдых");
   $("fDesc").value = "";
-  renderChecklistBuilder([{ id: Math.random().toString(36).substr(2, 9), text: "", done: false }]);
+  renderChecklistBuilder([{ id: "item_" + Date.now() + "_0", text: "", done: false }]);
   $("fError").textContent = "";
   $("overlay").hidden = false;
 }
@@ -520,12 +518,12 @@ $("fSave").onclick = async () => {
   if (title === "Магазин") {
     const rows = document.querySelectorAll(".checklist-row");
     const items = [];
-    rows.forEach(r => {
+    rows.forEach((r, idx) => {
       const input = r.querySelector(".checklist-input");
       const text = input ? input.value.trim() : "";
       if (text) {
         items.push({
-          id: r.dataset.itemId || Math.random().toString(36).substr(2, 9),
+          id: r.dataset.itemId || ("item_" + Date.now() + "_" + idx),
           text,
           done: false
         });
