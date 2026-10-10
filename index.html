@@ -32,7 +32,6 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 
-  /* Шапка календаря: стрелки, месяц, кнопка «Сегодня» */
   .cal-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
   .cal-title { font-size: 20px; font-weight: 600; text-transform: capitalize; flex: 1; min-width: 0;
     text-align: center; cursor: pointer; user-select: none; }
@@ -83,7 +82,6 @@
   .answer button:disabled { opacity: .5; }
   .link-btn { display: block; margin: 24px auto 0; padding: 8px; color: var(--hint); font-size: 14px; text-decoration: underline; }
 
-  /* Статистика пары */
   .stats { margin: 18px 0 4px; padding: 12px 14px; border-radius: 14px; background: var(--bg2); }
   .stats-title { font-size: 13px; color: var(--hint); margin-bottom: 8px; }
   .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -163,7 +161,6 @@
   .toasts { position: fixed; left: 0; right: 0; top: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 30; pointer-events: none; }
   .toast { background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: 90%; }
 
-  /* ===== Модалка идей ===== */
   .ideas-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; z-index: 20; }
   .ideas-sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
     max-height: 85vh; display: flex; flex-direction: column;
@@ -276,9 +273,7 @@
       </div>
     </div>
 
-    <label for="fDesc">Описание (необязательно)</label>
-    <textarea id="fDesc" maxlength="2000"></textarea>
-
+    <!-- Список покупок (для магазина) — выше описания -->
     <div id="checklistSection" hidden>
       <label>Список покупок</label>
       <div class="checklist" id="fChecklist"></div>
@@ -287,6 +282,9 @@
         <button type="button" id="fClAdd" aria-label="Добавить пункт">+</button>
       </div>
     </div>
+
+    <label for="fDesc">Описание (необязательно)</label>
+    <textarea id="fDesc" maxlength="2000"></textarea>
 
     <div class="hint" id="fHint" hidden>Если изменить дату, время или категорию, партнёру придётся ответить заново.</div>
 
@@ -535,8 +533,8 @@ function cardHtml(e) {
       <div style="flex:1;min-width:0"><h3>${esc(e.title)}</h3><div class="tag">${tag}</div></div>
       ${actions}
     </div>
-    ${e.description ? `<p>${esc(e.description)}</p>` : ""}
-    ${isShop ? checklistHtml(e) : ""}
+    ${isShop ? checklistHtml(e) : (e.description ? `<p>${esc(e.description)}</p>` : "")}
+    ${isShop && e.description ? `<p>${esc(e.description)}</p>` : ""}
     <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span>${statusLabel}</div>
     ${answerHtml(e, sk === "expired")}
   </article>`;
@@ -624,7 +622,6 @@ function goToday() {
 }
 $("todayBtn").onclick = goToday;
 
-// Long-press на заголовке месяца -> вернуться к текущему месяцу
 (() => {
   const title = $("title");
   let timer = null;
@@ -790,8 +787,6 @@ function renderFormChecklist() {
     </div>`).join("");
 }
 
-/* ---- Модалка идей ---- */
-
 function openIdeasModal(title) {
   currentCategoryTitle = title;
   $("ideasModalTitle").textContent = title;
@@ -954,7 +949,6 @@ $("ideasOverlay").addEventListener("click", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  // Приоритет: сначала прячем форму добавления, потом закрываем модалку.
   if (!$("ideasOverlay").hidden && !$("ideaForm").hidden) { hideIdeaForm(); return; }
   if (!$("ideasOverlay").hidden) closeIdeasModal();
 });
