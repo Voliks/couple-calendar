@@ -218,7 +218,6 @@
   .archive-text { flex: 1; word-break: break-word; }
   .archive-date { font-size: 12px; color: var(--hint); margin-top: 2px; }
 
-  /* Реакции (только на принятые) */
   .reaction-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   .reaction-badge { font-size: 22px; padding: 4px 10px; border-radius: 999px;
     background: var(--bg); border: 2px solid transparent; cursor: pointer; line-height: 1; }
@@ -227,7 +226,6 @@
     background: var(--bg2); color: var(--hint); font-weight: 600; }
   .reaction-add:active { background: rgba(36,129,204,.2); color: var(--accent); }
 
-  /* Комментарии к отклонённому */
   .decline-comment { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px;
     background: rgba(var(--declined), .12); color: var(--text); font-size: 14px;
     white-space: pre-wrap; word-break: break-word; }
@@ -478,7 +476,6 @@ function confirmDialog(message, onYes) {
   if (confirm(message)) onYes();
 }
 
-/* ===== Диалог комментария ===== */
 function openCommentDialog(initial, onConfirm) {
   const overlay = document.createElement("div");
   overlay.className = "overlay";
@@ -635,21 +632,23 @@ function answerHtml(e, expired) {
   return `<div class="answer one"><button class="soft" data-status="accepted">Всё-таки принять</button></div>`;
 }
 
-/* Реакции — только на принятые события */
 function reactionHtml(e) {
   if (e.category === "shop" || e.category === "todo") return "";
-  if (e.status !== "accepted") return "";
-  const mine = e.reaction_mine && e.reaction;
-  const display = e.reaction
-    ? `<span class="reaction-badge${mine ? " mine" : ""}" data-reaction-toggle>${esc(e.reaction)}</span>`
-    : "";
-  return `<div class="reaction-row">
-    ${display}
-    <button type="button" class="reaction-add" data-reaction-open aria-label="Поставить реакцию">😊+</button>
-  </div>`;
+  if (e.status !== "accepted" && e.status !== "declined") return "";
+  const mine = e.reaction_mine || "";
+  const partner = e.reaction_partner || "";
+  const parts = [];
+  if (mine) {
+    parts.push(`<span class="reaction-badge mine" data-reaction-toggle title="Ваша реакция">${esc(mine)}</span>`);
+  }
+  if (partner) {
+    parts.push(`<span class="reaction-badge" title="Реакция партнёра">${esc(partner)}</span>`);
+  }
+  if (e.status !== "accepted") return parts.join("");
+  parts.push(`<button type="button" class="reaction-add" data-reaction-open aria-label="Поставить реакцию">😊+</button>`);
+  return `<div class="reaction-row">${parts.join("")}</div>`;
 }
 
-/* Комментарии — только к отклонённым, каждый пишет в свой слот */
 function declineCommentHtml(e) {
   if (e.category === "shop" || e.category === "todo") return "";
   if (e.status !== "declined") return "";
@@ -861,7 +860,6 @@ function addItem(eventId, input) {
   });
 }
 
-/* ===== Пикер реакций ===== */
 let reactionPickerEl = null;
 function openReactionPicker(event) {
   closeReactionPicker();
@@ -903,7 +901,6 @@ $("list").addEventListener("click", async (ev) => {
   const event = findEvent(eventId);
   if (!event) return;
 
-  // Реакция
   if (ev.target.closest("[data-reaction-open]") || ev.target.closest("[data-reaction-toggle]")) {
     if (event.category === "shop" || event.category === "todo") return;
     if (event.status !== "accepted") return;
@@ -911,7 +908,6 @@ $("list").addEventListener("click", async (ev) => {
     return;
   }
 
-  // Комментарий (оба партнёра, каждый — в свой слот)
   if (ev.target.closest("[data-comment-open]")) {
     if (event.category === "shop" || event.category === "todo") return;
     if (event.status !== "declined") return;
@@ -976,8 +972,6 @@ $("list").addEventListener("keydown", (ev) => {
     addItem(ev.target.closest(".card").dataset.id, ev.target);
   }
 });
-
-/* ====================== Идеи для секса ====================== */
 
 let formChecklist = [];
 let selectedIdeas = [];
@@ -1215,8 +1209,6 @@ document.addEventListener("keydown", (e) => {
   if (!$("ideasOverlay").hidden) closeIdeasModal();
 });
 
-/* ====================== Форма ====================== */
-
 function openForm(event = null) {
   editingEvent = event;
   $("sheetTitle").textContent = event ? "Редактировать событие" : "Новое событие";
@@ -1340,8 +1332,6 @@ $("fSave").onclick = async () => {
   }
 };
 
-/* ====================== Архив дел ====================== */
-
 $("archiveBtn").onclick = async () => {
   try {
     const r = await api("/todos/archive");
@@ -1370,8 +1360,6 @@ $("archiveClose").onclick = () => {
 $("archiveOverlay").addEventListener("click", (e) => {
   if (e.target === $("archiveOverlay")) $("archiveClose").click();
 });
-
-/* ====================== Прочее ====================== */
 
 $("share").onclick = () => {
   const url = "https://t.me/share/url?url=" + encodeURIComponent(state.invite_link) +
