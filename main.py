@@ -444,6 +444,10 @@ def parse_event_payload(body: dict) -> dict:
 
 def event_to_dict(e: dict, uid: int) -> dict:
     is_creator = e["created_by"] == uid
+    partner_id = e["target_user"] if is_creator else e["created_by"]
+    reactions = e.get("reactions", {}) or {}
+    my_reaction = reactions.get(uid, "")
+    partner_reaction = reactions.get(partner_id, "")
     return {
         "id": e["id"],
         "title": e["title"],
@@ -454,9 +458,8 @@ def event_to_dict(e: dict, uid: int) -> dict:
         "status": e["status"],
         "color": e.get("color", ""),
         "priority": e.get("priority", ""),
-        "reaction": e.get("reaction", ""),
-        "reaction_by": e.get("reaction_by"),
-        "reaction_mine": e.get("reaction_by") == uid,
+        "reaction_mine": my_reaction,
+        "reaction_partner": partner_reaction,
         "decline_comment_creator": e.get("decline_comment_creator", ""),
         "decline_comment_target": e.get("decline_comment_target", ""),
         "my_comment_slot": "creator" if is_creator else "target",
@@ -678,7 +681,7 @@ async def api_respond(request: web.Request) -> web.Response:
 
 
 async def api_set_reaction(request: web.Request) -> web.Response:
-    """Ставит/снимает эмодзи-реакцию. Только для принятых событий."""
+    """Ставит/снимает эмодзи-реакцию КОНКРЕТНОГО пользователя. Только для принятых."""
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     body = await read_json(request)
@@ -697,9 +700,8 @@ async def api_set_reaction(request: web.Request) -> web.Response:
 
 
 async def api_set_decline_comment(request: web.Request) -> web.Response:
-    """Оставить/изменить текстовый комментарий к отклонённому событию.
-    Автор и приглашённый пишут в разные слоты — друг друга не затирают.
-    Если комментарий оставил не автор события, автору уходит пуш."""
+    """Оставить/изменить комментарий к отклонённому событию.
+    Автор и приглашённый пишут в разные слоты. Автору уходит пуш."""
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     if event["category"] in ("shop", "todo"):
@@ -715,7 +717,6 @@ async def api_set_decline_comment(request: web.Request) -> web.Response:
 
     await db.set_decline_comment_slot(event["id"], slot, comment)
 
-    # Пуш автору события, если комментарий оставил/изменил НЕ он сам.
     if event["created_by"] != tg_user.id and comment != prev:
         at = f" в {event['time']}" if event.get("time") else ""
         if comment:
