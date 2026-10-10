@@ -495,4 +495,414 @@ function reconcile(container, items) {
         const hadFocus = oldInput && oldInput === document.activeElement;
         const sel = hadFocus ? [oldInput.selectionStart, oldInput.selectionEnd] : null;
         el.replaceWith(fresh);
-        const newInput = fresh.querySelector(".cl
+        const newInput = fresh.querySelector(".cl-input");
+        if (newInput && typed) newInput.value = typed;
+        if (newInput && hadFocus) {
+          newInput.focus({ preventScroll: true });
+          try { newInput.setSelectionRange(sel[0], sel[1]); } catch (e) {}
+        }
+      }
+      el = fresh;
+    }
+    existing.delete(it.id);
+    const expected = prev ? prev.nextElementSibling : container.firstElementChild;
+    if (el !== expected) container.insertBefore(el, expected);
+    prev = el;
+  }
+  existing.forEach((el) => el.remove());
+  return true;
+}
+
+function renderList() {
+  $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
+  const items = state.events.filter((e) => e.date === selected)
+    .map((e) => ({ id: String(e.id), html: cardHtml(e) }));
+  if (!reconcile($("list"), items)) {
+    $("list").innerHTML = `<div class="empty">На этот день ничего нет. Нажмите «+», чтобы добавить событие.</div>`;
+  }
+}
+
+$("grid").addEventListener("click", (ev) => {
+  const btn = ev.target.closest(".day");
+  if (!btn) return;
+  selected = btn.dataset.date;
+  tg.HapticFeedback?.selectionChanged();
+  renderCalendar();
+  renderList();
+  $("grid").querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+});
+
+function shiftMonth(delta) {
+  const d = new Date(view.y, view.m + delta, 1);
+  view = { y: d.getFullYear(), m: d.getMonth() };
+  const t = new Date();
+  const sameAsToday = view.y === t.getFullYear() && view.m === t.getMonth();
+  selected = sameAsToday ? todayStr() : fmt(view.y, view.m, 1);
+  state.events = monthCache[monthKey()] || [];
+  renderCalendar();
+  renderList();
+  load();
+}
+$("prev").onclick = () => shiftMonth(-1);
+$("next").onclick = () => shiftMonth(1);
+
+function replaceEvent(updated) {
+  const i = state.events.findIndex((e) => e.id === updated.id);
+  if (i >= 0) state.events[i] = updated; else state.events.push(updated);
+  monthCache[monthKey()] = state.events;
+  etag = null;
+  renderCalendar();
+  renderList();
+}
+
+let pendingOps = 0;
+let opChain = Promise.resolve();
+function queueOp(fn) {
+  pendingOps++;
+  const run = opChain.then(fn);
+  opChain = run.catch(() => {}).then(() => { pendingOps--; });
+  return run;
+}
+const lastOp = () => pendingOps <= 1;
+
+function findEvent(id) { return state.events.find((e) => String(e.id) === String(id)); }
+
+function toggleItem(eventId, itemId, checked) {
+  const ev = findEvent(eventId);
+  const it = ev?.checklist.find((x) => String(x.id) === String(itemId));
+  if (!it) return;
+  it.checked = checked;
+  renderList();
+  queueOp(async () => {
+    try {
+      const updated = await api(`/events/${eventId}/items/${itemId}`, { method: "PUT", body: { checked } });
+      tg.HapticFeedback?.selectionChanged();
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) { toast(e.message); await load(); }
+  });
+}
+
+function removeItem(eventId, itemId) {
+  const ev = findEvent(eventId);
+  if (!ev) return;
+  ev.checklist = ev.checklist.filter((x) => String(x.id) !== String(itemId));
+  renderList();
+  queueOp(async () => {
+    try {
+      const updated = await api(`/events/${eventId}/items/${itemId}`, { method: "DELETE" });
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) { toast(e.message); await load(); }
+  });
+}
+
+function addItem(eventId, input) {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  queueOp(async () => {
+    try {
+      const updated = await api(`/events/${eventId}/items`, { method: "POST", body: { text } });
+      tg.HapticFeedback?.selectionChanged();
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) {
+      toast(e.message);
+      const again = [...document.querySelectorAll(".cl-input")].find((i) => i.closest(".card")?.dataset.id === String(eventId));
+      if (again && !again.value) again.value = text;
+    }
+  });
+}
+
+$("list").addEventListener("click", async (ev) => {
+  const card = ev.target.closest(".card");
+  if (!card) return;
+  const eventId = card.dataset.id;
+  const event = findEvent(eventId);
+  if (!event) return;
+
+  const toggle = ev.target.closest("[data-cl-toggle]");
+  if (toggle) { toggleItem(eventId, toggle.closest("[data-item]").dataset.item, toggle.checked); return; }
+
+  const remove = ev.target.closest("[data-cl-remove]");
+  if (remove) { removeItem(eventId, remove.closest("[data-item]").dataset.item); return; }
+
+  if (ev.target.closest("[data-cl-add]")) { addItem(eventId, card.querySelector(".cl-input")); return; }
+
+  const statusBtn = ev.target.closest("[data-status]");
+  if (statusBtn) {
+    statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    try {
+      replaceEvent(await api(`/events/${eventId}/respond`, { method: "POST", body: { status: statusBtn.dataset.status } }));
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (e) { toast(e.message); await load(); }
+    return;
+  }
+
+  if (ev.target.closest(".edit-btn")) { openForm(event); return; }
+
+  if (ev.target.closest(".delete-btn")) {
+    confirmDialog("Удалить это событие?", async () => {
+      try {
+        await api(`/events/${eventId}`, { method: "DELETE" });
+        tg.HapticFeedback?.notificationOccurred("success");
+        toast("Событие удалено");
+        etag = null;
+        await load();
+      } catch (e) { toast(e.message); }
+    });
+  }
+});
+
+$("list").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && ev.target.classList?.contains("cl-input")) {
+    ev.preventDefault();
+    addItem(ev.target.closest(".card").dataset.id, ev.target);
+  }
+});
+
+let formChecklist = [];
+let selectedIdeas = [];         // массив выбранных текстов идей
+let currentCategoryTitle = "";  // текущая открытая категория идей
+
+function updateFormSections() {
+  const cat = $("fCategory").value;
+  const isShop = cat === "shop";
+  const isSex = cat === "sex";
+
+  $("checklistSection").hidden = !(isShop && !editingEvent);
+  $("sexIdeasSection").hidden = !isSex;
+  if (!isSex) {
+    selectedIdeas = [];
+    currentCategoryTitle = "";
+    if ($("ideasInline")) $("ideasInline").innerHTML = "";
+    document.querySelectorAll(".sex-idea-trigger").forEach(b => b.classList.remove("active"));
+    renderChosen();
+  }
+}
+
+function renderInlineIdeas() {
+  const box = $("ideasInline");
+  if (!box) return;
+  const filtered = (state.sex_ideas || []).filter(i => i.category_title === currentCategoryTitle);
+  if (!filtered.length) { box.innerHTML = ""; return; }
+  box.innerHTML = filtered.map(i => {
+    const on = selectedIdeas.includes(i.text);
+    const isJson = String(i.id).startsWith("json_");
+    return `<div class="idea-item${on ? " selected" : ""}" data-idea-text="${esc(i.text)}">
+      <span class="idea-check">✓</span>
+      <span class="idea-text">${esc(i.text)}</span>
+      ${isJson ? "" : '<button type="button" class="idea-del" data-idea-del aria-label="Удалить">×</button>'}
+    </div>`;
+  }).join("");
+}
+
+function renderChosen() {
+  const block = $("chosenBlock");
+  const chips = $("chosenChips");
+  const count = $("chosenCount");
+  if (!block || !chips || !count) return;
+  if (!selectedIdeas.length) { block.hidden = true; chips.innerHTML = ""; count.textContent = "0"; return; }
+  block.hidden = false;
+  count.textContent = String(selectedIdeas.length);
+  chips.innerHTML = selectedIdeas.map((t, idx) =>
+    `<span class="chip" data-idx="${idx}">
+       <span class="chip-text">${esc(t)}</span>
+       <button type="button" class="chip-x" data-chip-x aria-label="Убрать">×</button>
+     </span>`
+  ).join("");
+}
+
+function toggleIdea(text) {
+  const i = selectedIdeas.indexOf(text);
+  if (i >= 0) selectedIdeas.splice(i, 1);
+  else selectedIdeas.push(text);
+  renderInlineIdeas();
+  renderChosen();
+  tg.HapticFeedback?.selectionChanged();
+}
+
+/* Кнопка категории идей -> показать её идеи */
+document.querySelectorAll(".sex-idea-trigger").forEach((btn) => {
+  btn.onclick = () => {
+    currentCategoryTitle = btn.dataset.title;
+    document.querySelectorAll(".sex-idea-trigger").forEach(b => b.classList.toggle("active", b === btn));
+    renderInlineIdeas();
+    tg.HapticFeedback?.selectionChanged();
+  };
+});
+
+/* Клик по идее — выбор/снятие; крестик — удаление своей (локально) */
+$("ideasInline").addEventListener("click", (e) => {
+  const del = e.target.closest("[data-idea-del]");
+  if (del) {
+    const item = del.closest("[data-idea-text]");
+    const text = item.dataset.ideaText;
+    state.sex_ideas = state.sex_ideas.filter(i => i.text !== text || String(i.id).startsWith("json_"));
+    selectedIdeas = selectedIdeas.filter(t => t !== text);
+    renderInlineIdeas();
+    renderChosen();
+    return;
+  }
+  const item = e.target.closest("[data-idea-text]");
+  if (item) toggleIdea(item.dataset.ideaText);
+});
+
+/* Убрать идею из блока «Выбрано» */
+$("chosenChips").addEventListener("click", (e) => {
+  const x = e.target.closest("[data-chip-x]");
+  if (!x) return;
+  const idx = Number(x.closest(".chip").dataset.idx);
+  selectedIdeas.splice(idx, 1);
+  renderInlineIdeas();
+  renderChosen();
+  tg.HapticFeedback?.selectionChanged();
+});
+
+/* Добавить свою идею */
+$("addIdeaBtn").onclick = async () => {
+  const input = $("newIdeaInput");
+  const text = input.value.trim();
+  if (!text || !currentCategoryTitle) return;
+  try {
+    const res = await api("/sex-ideas", { method: "POST", body: { category_title: currentCategoryTitle, text } });
+    state.sex_ideas = res.ideas;
+    input.value = "";
+    if (!selectedIdeas.includes(text)) selectedIdeas.push(text);
+    renderInlineIdeas();
+    renderChosen();
+    tg.HapticFeedback?.selectionChanged();
+  } catch (e) { toast(e.message); }
+};
+$("newIdeaInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("addIdeaBtn").click(); }
+});
+
+function openForm(event = null) {
+  editingEvent = event;
+  $("sheetTitle").textContent = event ? "Редактировать событие" : "Новое событие";
+  $("fDate").value = event ? event.date : selected;
+  $("fTime").value = event ? event.time : "";
+  $("fCategory").value = event ? event.category : "rest";
+  $("fDesc").value = event ? event.description || "" : "";
+
+  selectedIdeas = [];
+  currentCategoryTitle = "";
+  if ($("newIdeaInput")) $("newIdeaInput").value = "";
+  if ($("ideasInline")) $("ideasInline").innerHTML = "";
+  document.querySelectorAll(".sex-idea-trigger").forEach(b => b.classList.remove("active"));
+  renderChosen();
+
+  $("fHint").hidden = !event;
+  $("fError").textContent = "";
+  formChecklist = [];
+  updateFormSections();
+  $("overlay").hidden = false;
+  tg.BackButton?.show();
+}
+
+function closeForm() {
+  $("overlay").hidden = true;
+  tg.BackButton?.hide();
+}
+
+$("add").onclick = () => openForm();
+$("fCancel").onclick = closeForm;
+$("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeForm(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("overlay").hidden) closeForm(); });
+try { tg.BackButton?.onClick(() => { if (!$("overlay").hidden) closeForm(); }); } catch (e) {}
+
+$("fCategory").addEventListener("change", () => {
+  if ($("fCategory").value !== "shop") formChecklist = [];
+  updateFormSections();
+});
+
+$("fClAdd").onclick = () => {
+  const input = $("fClInput");
+  const text = input.value.trim();
+  if (!text || formChecklist.length >= 50) return;
+  formChecklist.push({ text, checked: false });
+  input.value = "";
+  updateFormSections();
+  input.focus();
+};
+$("fClInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("fClAdd").click(); }
+});
+$("fChecklist").addEventListener("click", (ev) => {
+  const idxEl = ev.target.closest("[data-idx]");
+  if (idxEl && ev.target.closest("[data-form-cl-remove]")) {
+    formChecklist.splice(Number(idxEl.dataset.idx), 1);
+    updateFormSections();
+  }
+});
+
+$("fSave").onclick = async () => {
+  const category = $("fCategory").value;
+  const date = $("fDate").value;
+  if (!date) { $("fError").textContent = "Выберите дату"; return; }
+
+  const notes = $("fDesc").value.trim();
+  const ideasPart = category === "sex" && selectedIdeas.length
+    ? selectedIdeas.map(t => "• " + t).join("\n")
+    : "";
+  const description = [ideasPart, notes].filter(Boolean).join("\n\n");
+
+  const payload = {
+    category,
+    description,
+    date,
+    time: $("fTime").value,
+  };
+  if (!editingEvent && category === "shop") payload.checklist = formChecklist;
+
+  $("fSave").disabled = true;
+  try {
+    if (editingEvent) {
+      await api(`/events/${editingEvent.id}`, { method: "PUT", body: payload });
+      toast("Событие изменено");
+    } else {
+      await api("/events", { method: "POST", body: payload });
+    }
+    tg.HapticFeedback?.notificationOccurred("success");
+    selected = date;
+    const d = parse(date);
+    view = { y: d.getFullYear(), m: d.getMonth() };
+    closeForm();
+    etag = null;
+    await load();
+  } catch (e) {
+    $("fError").textContent = e.message;
+  } finally {
+    $("fSave").disabled = false;
+  }
+};
+
+$("share").onclick = () => {
+  const url = "https://t.me/share/url?url=" + encodeURIComponent(state.invite_link) +
+              "&text=" + encodeURIComponent("Давай вести общий календарь на двоих!");
+  tg.openTelegramLink(url);
+};
+$("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(state.invite_link); toast("Ссылка скопирована"); }
+  catch { toast(state.invite_link); }
+};
+$("unlink").onclick = () => {
+  confirmDialog("Отвязать партнёра? Все общие события будут удалены безвозвратно.", async () => {
+    try {
+      await api("/unlink", { method: "POST" });
+      toast("Партнёр отвязан");
+      for (const k of Object.keys(monthCache)) delete monthCache[k];
+      etag = null;
+      await load();
+    } catch (e) { toast(e.message); }
+  });
+};
+
+function startPolling() {
+  const canPoll = () => !document.hidden && $("overlay").hidden && pendingOps === 0;
+  setInterval(() => { if (canPoll()) load(true); }, 15000);
+  document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
+}
+bootstrap();
+</script>
+</body>
+</html>
