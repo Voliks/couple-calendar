@@ -626,21 +626,6 @@ async def api_delete_event(request: web.Request) -> web.Response:
         raise ApiError("Удалить событие может только его автор. Вы можете отказаться от него.", 403)
 
     await db.delete_event(event["id"])
-    if event["category"] == "shop":
-        notify(
-            event["target_user"],
-            f"🗑 Список покупок на {fmt_date(event['date'])} удалён автором.",
-        )
-    elif event["category"] == "todo":
-        notify(
-            event["target_user"],
-            f"🗑 Дело на {fmt_date(event['date'])} удалено.",
-        )
-    else:
-        notify(
-            event["target_user"],
-            f"🗑 Событие на {fmt_date(event['date'])}{title_part(event['title'])} удалено автором.",
-        )
     return web.json_response({"status": "deleted"})
 
 
@@ -760,7 +745,6 @@ async def api_archived_todos(request: web.Request) -> web.Response:
     except Exception:
         logging.exception("Не удалось прочитать архив дел")
         items = []
-    # отдаём как event_to_dict-подобную структуру
     out = [{
         "id": e["id"],
         "title": e["title"],
