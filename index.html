@@ -18,6 +18,7 @@
     --accepted: 34, 197, 94;
     --declined: 239, 68, 68;
     --expired: 138, 138, 142;
+    --todo: 139, 92, 246;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--text);
@@ -37,7 +38,7 @@
     text-align: center; cursor: pointer; user-select: none; }
   .nav { width: 40px; height: 40px; border-radius: 50%; font-size: 22px; color: var(--accent); flex-shrink: 0; }
   .nav:active { background: var(--bg2); }
-  .today-btn { padding: 6px 12px; border-radius: 10px; background: var(--bg2); color: var(--accent);
+  .today-btn { padding: 6px 10px; border-radius: 10px; background: var(--bg2); color: var(--accent);
     font-weight: 600; font-size: 13px; flex-shrink: 0; }
   .today-btn:active { background: rgba(36, 129, 204, .2); }
 
@@ -49,6 +50,12 @@
     border: 2px solid transparent; font-size: 16px; }
   .day.today .num { color: var(--accent); font-weight: 700; }
   .day.selected { border-color: var(--accent); background: var(--bg2); }
+
+  /* Полоска сверху: сегменты цветов дел */
+  .day .todo-bar { position: absolute; top: 2px; left: 6px; right: 6px; height: 4px;
+    display: flex; gap: 1px; border-radius: 2px; overflow: hidden; }
+  .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
+
   .dots { display: flex; gap: 3px; height: 7px; }
   .dot { width: 7px; height: 7px; border-radius: 50%; }
   .dot.pending  { border: 2px solid rgb(var(--pending)); }
@@ -64,6 +71,7 @@
   .card.accepted { --c: var(--accepted); }
   .card.declined { --c: var(--declined); }
   .card.expired  { --c: var(--expired); }
+  .card.todo     { --c: var(--todo); }
   .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
   .card h3 { margin: 0; font-size: 17px; word-break: break-word; flex: 1; }
   .card .tag { margin-top: 2px; font-size: 13px; color: var(--hint); }
@@ -136,6 +144,19 @@
     border-radius: 50%; flex-shrink: 0; }
   .chip .chip-x:hover { opacity: 1; background: rgba(0,0,0,.06); }
 
+  /* Палитра цветов для дел */
+  .todo-colors { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin-top: 6px; }
+  .todo-color { aspect-ratio: 1; border-radius: 50%; border: 3px solid transparent;
+    transition: transform .1s, border-color .15s; }
+  .todo-color:active { transform: scale(.9); }
+  .todo-color.selected { border-color: var(--text); }
+
+  /* Приоритеты */
+  .todo-priorities { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 6px; }
+  .prio-btn { padding: 10px 6px; border-radius: 10px; background: var(--bg2); font-size: 13px; font-weight: 600;
+    border: 2px solid transparent; }
+  .prio-btn.selected { border-color: var(--accent); background: rgba(36,129,204,.12); }
+
   .checklist { margin-top: 10px; }
   .checklist-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06); }
   .checklist-item:last-child { border-bottom: 0; }
@@ -193,6 +214,13 @@
 
   .ideas-done { width: 100%; margin-top: 12px; padding: 14px; border-radius: 12px;
     background: var(--accent); color: var(--accent-text); font-weight: 600; font-size: 16px; }
+
+  /* Архив дел */
+  .archive-item { padding: 10px 0; border-bottom: 1px solid rgba(0,0,0,.06); display: flex; gap: 10px; align-items: flex-start; }
+  .archive-item:last-child { border-bottom: 0; }
+  .archive-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
+  .archive-text { flex: 1; word-break: break-word; }
+  .archive-date { font-size: 12px; color: var(--hint); margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -215,6 +243,7 @@
     <div class="cal-title" id="title" role="button" tabindex="0" aria-label="Вернуться к текущему месяцу"></div>
     <button class="nav" id="next" aria-label="Следующий месяц">›</button>
     <button class="today-btn" id="todayBtn" aria-label="Сегодня">Сегодня</button>
+    <button class="today-btn" id="archiveBtn" aria-label="Архив дел">Архив</button>
   </div>
   <div class="weekdays" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
   <div class="grid" id="grid"></div>
@@ -231,6 +260,7 @@
   <button class="fab" id="add" aria-label="Добавить событие">+</button>
 </main>
 
+<!-- Форма создания / редактирования -->
 <div class="overlay" id="overlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <h2 id="sheetTitle">Новое событие</h2>
@@ -251,7 +281,20 @@
       <option value="rest">Отдых</option>
       <option value="sex">Секс</option>
       <option value="shop">Магазин</option>
+      <option value="todo">Дела</option>
     </select>
+
+    <!-- Дела: цвет + приоритет -->
+    <div id="todoSection" hidden>
+      <label>Цвет</label>
+      <div class="todo-colors" id="todoColors"></div>
+      <label>Приоритет</label>
+      <div class="todo-priorities" id="todoPriorities">
+        <button type="button" class="prio-btn" data-prio="low">🟢 Низкий</button>
+        <button type="button" class="prio-btn" data-prio="medium">🟡 Средний</button>
+        <button type="button" class="prio-btn" data-prio="high">🔴 Высокий</button>
+      </div>
+    </div>
 
     <div id="sexIdeasSection" hidden>
       <label>Идеи (откройте категорию — можно выбрать несколько)</label>
@@ -296,6 +339,7 @@
   </div>
 </div>
 
+<!-- Модалка идей -->
 <div class="ideas-overlay" id="ideasOverlay" hidden>
   <div class="ideas-sheet" role="dialog" aria-modal="true">
     <div class="ideas-head">
@@ -312,6 +356,17 @@
     <div class="ideas-list" id="ideasContainer"></div>
 
     <button type="button" class="ideas-done" id="ideasDone">Готово</button>
+  </div>
+</div>
+
+<!-- Архив дел -->
+<div class="overlay" id="archiveOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true">
+    <h2>Архив дел</h2>
+    <div id="archiveList"></div>
+    <div class="row">
+      <button class="btn ghost" id="archiveClose" style="grid-column: 1 / -1;">Закрыть</button>
+    </div>
   </div>
 </div>
 
@@ -333,6 +388,7 @@ const CATEGORIES = {
   rest: { label: "Отдых",   icon: "🌿" },
   sex:  { label: "Секс",    icon: "🔥" },
   shop: { label: "Магазин", icon: "🛒" },
+  todo: { label: "Дела",    icon: "📌" },
 };
 const STATUS_TEXT = {
   pending: "⏳ Ждёт ответа", accepted: "✓ Принято", declined: "✕ Отклонено", expired: "Просрочено",
@@ -346,8 +402,12 @@ const todayStr = () => { const t = new Date(); return fmt(t.getFullYear(), t.get
 const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
+  return m ? `${parseInt(m[1],16)}, ${parseInt(m[2],16)}, ${parseInt(m[3],16)}` : "139, 92, 246";
+}
 
-let state = { has_partner: false, invite_link: "", events: [], sex_ideas: [], stats: null };
+let state = { has_partner: false, invite_link: "", events: [], sex_ideas: [], stats: null, todo_colors: [] };
 let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
 let editingEvent = null;
@@ -478,12 +538,25 @@ function renderCalendar() {
   for (let d = 1; d <= days; d++) {
     const date = fmt(view.y, view.m, d);
     const list = byDay[date] || [];
-    const st = new Set(list.map(statusKey));
+
+    // Полоска сверху: сегменты цветов дел, по порядку created_at (id)
+    const todos = list.filter(x => x.category === "todo").slice().sort((a, b) => a.id - b.id);
+    const todoBar = todos.length
+      ? `<span class="todo-bar" aria-hidden="true">${todos.map(t =>
+          `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
+      : "";
+
+    // Точки — только для не-дел (у дел нет статуса pending/accepted в обычном смысле)
+    const nonTodos = list.filter(x => x.category !== "todo");
+    const st = new Set(nonTodos.map(statusKey));
     const dots = ["pending", "accepted", "declined", "expired"]
       .filter((s) => st.has(s)).map((s) => `<i class="dot ${s}"></i>`).join("");
+
     const cls = ["day", date === today && "today", date === selected && "selected"].filter(Boolean).join(" ");
-    const label = DAY_FORMAT.format(new Date(view.y, view.m, d)) + (list.length ? `, событий: ${list.length}` : "");
+    const label = DAY_FORMAT.format(new Date(view.y, view.m, d))
+      + (list.length ? `, событий: ${list.length}` : "");
     html += `<button class="${cls}" data-date="${date}" aria-pressed="${date === selected}" aria-label="${esc(label)}">
+               ${todoBar}
                <span class="num">${d}</span><span class="dots" aria-hidden="true">${dots}</span></button>`;
   }
   $("grid").innerHTML = html;
@@ -504,7 +577,7 @@ function checklistHtml(e) {
 }
 
 function answerHtml(e, expired) {
-  if (e.category === "shop") return "";
+  if (e.category === "shop" || e.category === "todo") return "";
   if (e.is_creator) return "";
   if (e.status === "pending") {
     return expired ? "" : `<div class="answer">
@@ -521,14 +594,22 @@ function cardHtml(e) {
   const cat = CATEGORIES[e.category] || CATEGORIES.rest;
   const sk = statusKey(e);
   const isShop = e.category === "shop";
+  const isTodo = e.category === "todo";
   const tag = `${cat.icon} ${cat.label}${e.time ? " · " + esc(e.time) : ""}`;
-  const actions = e.is_creator
+
+  // Дела: цвет левой полосы задаём через CSS-переменную
+  const cardCls = isTodo ? "todo" : (isShop ? "accepted" : sk);
+  const cardStyle = isTodo && e.color ? ` style="--c: ${hexToRgb(e.color)};"` : "";
+
+  const actions = (e.is_creator || isTodo)
     ? `<div class="card-actions">
          <button class="icon-btn edit-btn" aria-label="Редактировать" title="Редактировать">✏️</button>
          <button class="icon-btn delete-btn" aria-label="Удалить" title="Удалить">🗑️</button>
        </div>` : "";
-  const statusLabel = isShop ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
-  return `<article class="card ${isShop ? "accepted" : sk}" data-id="${e.id}">
+
+  const statusLabel = (isShop || isTodo) ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
+
+  return `<article class="card ${cardCls}" data-id="${e.id}"${cardStyle}>
     <div class="card-header">
       <div style="flex:1;min-width:0"><h3>${esc(e.title)}</h3><div class="tag">${tag}</div></div>
       ${actions}
@@ -734,7 +815,7 @@ $("list").addEventListener("click", async (ev) => {
       try {
         await api(`/events/${eventId}`, { method: "DELETE" });
         tg.HapticFeedback?.notificationOccurred("success");
-        toast("Событие удалено");
+        toast("Удалено");
         etag = null;
         await load();
       } catch (e) { toast(e.message); }
@@ -754,16 +835,26 @@ $("list").addEventListener("keydown", (ev) => {
 let formChecklist = [];
 let selectedIdeas = [];
 let currentCategoryTitle = "";
+let formColor = "";
+let formPriority = "medium";
+const todoColorsFallback = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
+
+function availableTodoColors() {
+  return (state.todo_colors && state.todo_colors.length) ? state.todo_colors : todoColorsFallback;
+}
 
 function updateFormSections() {
   const cat = $("fCategory").value;
   const isShop = cat === "shop";
   const isSex = cat === "sex";
+  const isTodo = cat === "todo";
 
   $("checklistSection").hidden = !(isShop && !editingEvent);
   $("sexIdeasSection").hidden = !isSex;
+  $("todoSection").hidden = !isTodo;
 
   if (isShop && !editingEvent) renderFormChecklist();
+  if (isTodo) renderTodoSection();
 
   if (!isSex) {
     selectedIdeas = [];
@@ -771,6 +862,30 @@ function updateFormSections() {
     renderChosen();
   }
 }
+
+function renderTodoSection() {
+  const box = $("todoColors");
+  if (!box) return;
+  const colors = availableTodoColors();
+  box.innerHTML = colors.map(c =>
+    `<button type="button" class="todo-color${c === formColor ? " selected" : ""}"
+             data-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
+  ).join("");
+  document.querySelectorAll("#todoPriorities .prio-btn").forEach(b => {
+    b.classList.toggle("selected", b.dataset.prio === formPriority);
+  });
+}
+
+$("todoColors").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-color]");
+  if (!b) return;
+  formColor = b.dataset.color;
+  renderTodoSection();
+  tg.HapticFeedback?.selectionChanged();
+});
+document.querySelectorAll("#todoPriorities .prio-btn").forEach(b => {
+  b.onclick = () => { formPriority = b.dataset.prio; renderTodoSection(); tg.HapticFeedback?.selectionChanged(); };
+});
 
 function renderFormChecklist() {
   const box = $("fChecklist");
@@ -967,7 +1082,15 @@ function openForm(event = null) {
   currentCategoryTitle = "";
   renderChosen();
 
-  $("fHint").hidden = !event || (event && event.category === "shop");
+  if (event && event.category === "todo") {
+    formColor = event.color || availableTodoColors()[6];
+    formPriority = event.priority || "medium";
+  } else {
+    formColor = availableTodoColors()[6];
+    formPriority = "medium";
+  }
+
+  $("fHint").hidden = !event || (event && (event.category === "shop" || event.category === "todo"));
   $("fError").textContent = "";
   formChecklist = [];
   updateFormSections();
@@ -1037,6 +1160,11 @@ $("fSave").onclick = async () => {
     date,
     time: $("fTime").value,
   };
+  if (category === "todo") {
+    if (!formColor) { $("fError").textContent = "Выберите цвет"; return; }
+    payload.color = formColor;
+    payload.priority = formPriority || "medium";
+  }
   if (!editingEvent && category === "shop") payload.checklist = formChecklist;
 
   const btn = $("fSave");
@@ -1065,6 +1193,39 @@ $("fSave").onclick = async () => {
   }
 };
 
+/* ====================== Архив дел ====================== */
+
+$("archiveBtn").onclick = async () => {
+  try {
+    const r = await api("/todos/archive");
+    const items = r.items || [];
+    if (!items.length) {
+      $("archiveList").innerHTML = `<div class="cl-empty">Архив пуст</div>`;
+    } else {
+      $("archiveList").innerHTML = items.map(e => `
+        <div class="archive-item">
+          <span class="archive-dot" style="background:${esc(e.color || "#8b5cf6")}"></span>
+          <div class="archive-text">
+            <div>${esc(e.title)}${e.description ? ` — ${esc(e.description)}` : ""}</div>
+            <div class="archive-date">${esc(e.date)}${e.time ? " · " + esc(e.time) : ""}</div>
+          </div>
+        </div>
+      `).join("");
+    }
+    $("archiveOverlay").hidden = false;
+    tg.BackButton?.show();
+  } catch (e) { toast(e.message); }
+};
+$("archiveClose").onclick = () => {
+  $("archiveOverlay").hidden = true;
+  if (!$("overlay").hidden) tg.BackButton?.show(); else tg.BackButton?.hide();
+};
+$("archiveOverlay").addEventListener("click", (e) => {
+  if (e.target === $("archiveOverlay")) $("archiveClose").click();
+});
+
+/* ====================== Прочее ====================== */
+
 $("share").onclick = () => {
   const url = "https://t.me/share/url?url=" + encodeURIComponent(state.invite_link) +
               "&text=" + encodeURIComponent("Давай вести общий календарь на двоих!");
@@ -1087,7 +1248,8 @@ $("unlink").onclick = () => {
 };
 
 function startPolling() {
-  const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden && pendingOps === 0;
+  const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
+    && $("archiveOverlay").hidden && pendingOps === 0;
   setInterval(() => { if (canPoll()) load(true); }, 15000);
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
