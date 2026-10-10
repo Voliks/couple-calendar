@@ -107,10 +107,21 @@
   .error { color: rgb(var(--declined)); font-size: 14px; margin-top: 10px; min-height: 1em; }
   .hint { font-size: 13px; color: var(--hint); margin-top: 12px; }
 
-  /* Кнопки идей для секса */
-  .sex-ideas { display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 6px; }
-  .sex-idea-btn { padding: 10px 12px; border-radius: 10px; background: var(--bg2); font-size: 14px; font-weight: 500; text-align: left; border: 2px solid transparent; transition: all .15s; }
-  .sex-idea-btn.active { border-color: var(--accent); background: rgba(36, 129, 204, 0.12); font-weight: 600; }
+  /* Кнопки идей со скриншота */
+  .sex-ideas-buttons { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 6px; }
+  .sex-idea-trigger { padding: 12px 14px; border-radius: 12px; background: var(--bg2); font-size: 15px; font-weight: 500; text-align: left; border: 2px solid transparent; transition: all .15s; }
+  .sex-idea-trigger:active { background: rgba(36, 129, 204, 0.2); }
+
+  /* Модальное окно списка идей */
+  .ideas-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; z-index: 20; }
+  .ideas-sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
+    max-height: 85vh; overflow-y: auto; padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px)); animation: up .18s ease-out; }
+  .ideas-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+  .idea-item { padding: 12px; border-radius: 12px; background: var(--bg2); font-size: 15px; text-align: left; border: 1px solid transparent; }
+  .idea-item:hover { border-color: var(--accent); }
+  .idea-add-row { display: flex; gap: 8px; margin-top: 12px; }
+  .idea-add-row input { flex: 1; }
+  .idea-add-row button { padding: 0 16px; border-radius: 12px; background: var(--accent); color: var(--accent-text); font-weight: 600; }
 
   /* Список покупок */
   .checklist { margin-top: 10px; }
@@ -193,18 +204,18 @@
       <option value="shop">Магазин</option>
     </select>
 
-    <label for="fDesc">Описание (необязательно)</label>
-    <textarea id="fDesc" maxlength="2000"></textarea>
-
-    <!-- Выбор готовых идей для категории Секс (после описания) -->
+    <!-- Кнопки идей со скриншота для категории Секс -->
     <div id="sexIdeasSection" hidden>
-      <label>Выберите идею</label>
-      <div class="sex-ideas">
-        <button type="button" class="sex-idea-btn active" data-title="🔥 Страстная ночь">🔥 Страстная ночь</button>
-        <button type="button" class="sex-idea-btn" data-title="🌹 Романтический вечер">🌹 Романтический вечер</button>
-        <button type="button" class="sex-idea-btn" data-title="✨ Эксперименты и фантазии">✨ Эксперименты и фантазии</button>
+      <label>Выберите идею (нажмите для открытия списка)</label>
+      <div class="sex-ideas-buttons">
+        <button type="button" class="sex-idea-trigger" data-title="🔥 Страстная ночь">🔥 Страстная ночь</button>
+        <button type="button" class="sex-idea-trigger" data-title="🌹 Романтический вечер">🌹 Романтический вечер</button>
+        <button type="button" class="sex-idea-trigger" data-title="✨ Эксперименты и фантазии">✨ Эксперименты и фантазии</button>
       </div>
     </div>
+
+    <label for="fDesc">Описание (необязательно)</label>
+    <textarea id="fDesc" maxlength="2000"></textarea>
 
     <div id="checklistSection" hidden>
       <label>Список покупок</label>
@@ -222,6 +233,19 @@
       <button class="btn ghost" id="fCancel">Отмена</button>
       <button class="btn primary" id="fSave">Сохранить</button>
     </div>
+  </div>
+</div>
+
+<!-- Модальное окно со списком идей -->
+<div class="ideas-overlay" id="ideasOverlay" hidden>
+  <div class="ideas-sheet" role="dialog" aria-modal="true">
+    <h3 id="ideasModalTitle" style="margin-top:0">Идеи</h3>
+    <div class="ideas-list" id="ideasContainer"></div>
+    <div class="idea-add-row">
+      <input type="text" id="newIdeaInput" placeholder="Добавить свою идею..." maxlength="300" aria-label="Новая идея">
+      <button type="button" id="addIdeaBtn">Добавить</button>
+    </div>
+    <button class="btn ghost" id="closeIdeasBtn" style="width:100%; margin-top:12px;">Закрыть</button>
   </div>
 </div>
 
@@ -257,12 +281,12 @@ const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Da
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
 
-let state = { has_partner: false, invite_link: "", events: [] };
+let state = { has_partner: false, invite_link: "", events: [], sex_ideas: [] };
 let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
 let editingEvent = null;
 let loaded = false;
-let selectedSexTitle = "🔥 Страстная ночь";
+let currentCategoryTitle = "";
 const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
 const monthCache = {};
 
@@ -633,16 +657,6 @@ function openForm(event = null) {
   $("fTime").value = event ? event.time : "";
   $("fCategory").value = event ? event.category : "rest";
   $("fDesc").value = event ? event.description || "" : "";
-  
-  if (event && event.category === "sex") {
-    selectedSexTitle = event.title || "🔥 Страстная ночь";
-  } else {
-    selectedSexTitle = "🔥 Страстная ночь";
-  }
-
-  document.querySelectorAll(".sex-idea-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.title === selectedSexTitle);
-  });
 
   $("fHint").hidden = !event;
   $("fError").textContent = "";
@@ -668,13 +682,65 @@ $("fCategory").addEventListener("change", () => {
   updateFormSections();
 });
 
-document.querySelectorAll(".sex-idea-btn").forEach((btn) => {
+// Открытие модального окна идей при клике на одну из кнопок
+document.querySelectorAll(".sex-idea-trigger").forEach((btn) => {
   btn.onclick = () => {
-    document.querySelectorAll(".sex-idea-btn").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    selectedSexTitle = btn.dataset.title;
+    currentCategoryTitle = btn.dataset.title;
+    openIdeasModal(currentCategoryTitle);
     tg.HapticFeedback?.selectionChanged();
   };
+});
+
+function openIdeasModal(title) {
+  $("ideasModalTitle").textContent = title;
+  renderIdeas(title);
+  $("ideasOverlay").hidden = false;
+}
+
+function renderIdeas(title) {
+  const listEl = $("ideasContainer");
+  const filtered = (state.sex_ideas || []).filter(i => i.category_title === title);
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="cl-empty">Пока нет идей. Добавьте первую!</div>`;
+    return;
+  }
+  listEl.innerHTML = filtered.map(i => `
+    <div class="idea-item" data-idea-text="${esc(i.text)}" style="cursor: pointer;">
+      ${esc(i.text)}
+    </div>
+  `).join("");
+}
+
+$("ideasContainer").addEventListener("click", (e) => {
+  const item = e.target.closest("[data-idea-text]");
+  if (!item) return;
+  const text = item.dataset.ideaText;
+  const descEl = $("fDesc");
+  descEl.value = descEl.value ? descEl.value + "\n" + text : text;
+  $("ideasOverlay").hidden = true;
+  tg.HapticFeedback?.notificationOccurred("success");
+});
+
+$("addIdeaBtn").onclick = async () => {
+  const input = $("newIdeaInput");
+  const text = input.value.trim();
+  if (!text) return;
+  try {
+    const res = await api("/sex-ideas", { method: "POST", body: { category_title: currentCategoryTitle, text } });
+    state.sex_ideas = res.ideas;
+    input.value = "";
+    renderIdeas(currentCategoryTitle);
+    tg.HapticFeedback?.selectionChanged();
+  } catch (e) {
+    toast(e.message);
+  }
+};
+
+$("closeIdeasBtn").onclick = () => {
+  $("ideasOverlay").hidden = true;
+};
+$("ideasOverlay").addEventListener("click", (e) => {
+  if (e.target === $("ideasOverlay")) $("ideasOverlay").hidden = true;
 });
 
 $("fClAdd").onclick = () => {
@@ -707,7 +773,6 @@ $("fSave").onclick = async () => {
     description: $("fDesc").value.trim(),
     date,
     time: $("fTime").value,
-    sex_title: category === "sex" ? selectedSexTitle : undefined,
   };
   if (!editingEvent && category === "shop") payload.checklist = formChecklist;
 
