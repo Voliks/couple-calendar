@@ -678,6 +678,7 @@ async def api_respond(request: web.Request) -> web.Response:
 
 
 async def api_set_reaction(request: web.Request) -> web.Response:
+    """Ставит/снимает эмодзи-реакцию. Только для принятых событий."""
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     body = await read_json(request)
@@ -697,7 +698,8 @@ async def api_set_reaction(request: web.Request) -> web.Response:
 
 async def api_set_decline_comment(request: web.Request) -> web.Response:
     """Оставить/изменить текстовый комментарий к отклонённому событию.
-    Автор и приглашённый пишут в разные слоты — друг друга не затирают."""
+    Автор и приглашённый пишут в разные слоты — друг друга не затирают.
+    Если комментарий оставил не автор события, автору уходит пуш."""
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     if event["category"] in ("shop", "todo"):
@@ -709,7 +711,25 @@ async def api_set_decline_comment(request: web.Request) -> web.Response:
     comment = str(body.get("comment") or "").strip()[:500]
 
     slot = "creator" if event["created_by"] == tg_user.id else "target"
+    prev = event.get(f"decline_comment_{slot}", "") or ""
+
     await db.set_decline_comment_slot(event["id"], slot, comment)
+
+    # Пуш автору события, если комментарий оставил/изменил НЕ он сам.
+    if event["created_by"] != tg_user.id and comment != prev:
+        at = f" в {event['time']}" if event.get("time") else ""
+        if comment:
+            body_text = (
+                f"💬 {tg_user.first_name} оставил(а) комментарий к событию "
+                f"на {fmt_date(event['date'])}{at}{title_part(event['title'])}:\n\n{comment}"
+            )
+        else:
+            body_text = (
+                f"💬 {tg_user.first_name} удалил(а) свой комментарий к событию "
+                f"на {fmt_date(event['date'])}{at}{title_part(event['title'])}."
+            )
+        notify(event["created_by"], body_text)
+
     updated = await db.get_event(event["id"])
     return web.json_response(event_to_dict(updated, tg_user.id))
 
