@@ -32,10 +32,16 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 
-  .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-  .cal-title { font-size: 20px; font-weight: 600; text-transform: capitalize; }
-  .nav { width: 40px; height: 40px; border-radius: 50%; font-size: 22px; color: var(--accent); }
+  /* Шапка календаря: стрелки, месяц, кнопка «Сегодня» */
+  .cal-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .cal-title { font-size: 20px; font-weight: 600; text-transform: capitalize; flex: 1; min-width: 0;
+    text-align: center; cursor: pointer; user-select: none; }
+  .nav { width: 40px; height: 40px; border-radius: 50%; font-size: 22px; color: var(--accent); flex-shrink: 0; }
   .nav:active { background: var(--bg2); }
+  .today-btn { padding: 6px 12px; border-radius: 10px; background: var(--bg2); color: var(--accent);
+    font-weight: 600; font-size: 13px; flex-shrink: 0; }
+  .today-btn:active { background: rgba(36, 129, 204, .2); }
+
   .weekdays, .grid { display: grid; grid-template-columns: repeat(7, 1fr); }
   .weekdays span { text-align: center; font-size: 12px; color: var(--hint); padding: 4px 0; }
   .grid { gap: 2px; }
@@ -76,6 +82,17 @@
   .answer .soft { background: rgba(0,0,0,.07); color: var(--text); font-size: 15px; padding: 10px 0; }
   .answer button:disabled { opacity: .5; }
   .link-btn { display: block; margin: 24px auto 0; padding: 8px; color: var(--hint); font-size: 14px; text-decoration: underline; }
+
+  /* Статистика пары */
+  .stats { margin: 18px 0 4px; padding: 12px 14px; border-radius: 14px; background: var(--bg2); }
+  .stats-title { font-size: 13px; color: var(--hint); margin-bottom: 8px; }
+  .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stat-cell { text-align: center; padding: 8px 4px; border-radius: 10px; background: var(--bg); }
+  .stat-cell .num { font-size: 18px; font-weight: 700; }
+  .stat-cell .lbl { font-size: 11px; color: var(--hint); margin-top: 2px; }
+  .stat-cell.accepted .num { color: rgb(var(--accepted)); }
+  .stat-cell.declined .num { color: rgb(var(--declined)); }
+  .stat-cell.pending  .num { color: rgb(var(--pending)); }
 
   .fab { position: fixed; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom, 0px));
     width: 58px; height: 58px; border-radius: 50%; background: var(--accent); color: var(--accent-text);
@@ -198,14 +215,20 @@
 <main id="app" hidden>
   <div class="cal-head">
     <button class="nav" id="prev" aria-label="Предыдущий месяц">‹</button>
-    <div class="cal-title" id="title" aria-live="polite"></div>
+    <div class="cal-title" id="title" role="button" tabindex="0" aria-label="Вернуться к текущему месяцу"></div>
     <button class="nav" id="next" aria-label="Следующий месяц">›</button>
+    <button class="today-btn" id="todayBtn" aria-label="Сегодня">Сегодня</button>
   </div>
   <div class="weekdays" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
   <div class="grid" id="grid"></div>
 
   <div class="list-title" id="listTitle"></div>
   <div id="list"></div>
+
+  <div id="statsBlock" class="stats" hidden>
+    <div class="stats-title">Статистика пары</div>
+    <div class="stats-grid" id="statsGrid"></div>
+  </div>
 
   <button class="link-btn" id="unlink">Отвязать партнёра</button>
   <button class="fab" id="add" aria-label="Добавить событие">+</button>
@@ -275,7 +298,6 @@
   </div>
 </div>
 
-<!-- Модалка идей: сверху «+ Добавить», снизу «Готово» на всю ширину -->
 <div class="ideas-overlay" id="ideasOverlay" hidden>
   <div class="ideas-sheet" role="dialog" aria-modal="true">
     <div class="ideas-head">
@@ -327,7 +349,7 @@ const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Da
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
 
-let state = { has_partner: false, invite_link: "", events: [], sex_ideas: [] };
+let state = { has_partner: false, invite_link: "", events: [], sex_ideas: [], stats: null };
 let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
 let editingEvent = null;
@@ -423,7 +445,23 @@ async function bootstrap() {
 function render() {
   $("welcome").hidden = state.has_partner;
   $("app").hidden = !state.has_partner;
-  if (state.has_partner) { renderCalendar(); renderList(); }
+  if (state.has_partner) { renderCalendar(); renderList(); renderStats(); }
+}
+
+function renderStats() {
+  const block = $("statsBlock");
+  const grid = $("statsGrid");
+  const s = state.stats;
+  if (!s || (!s.total && !s.pending && !s.accepted && !s.declined)) {
+    block.hidden = true;
+    return;
+  }
+  block.hidden = false;
+  grid.innerHTML = `
+    <div class="stat-cell pending"><div class="num">${s.pending}</div><div class="lbl">Ждут</div></div>
+    <div class="stat-cell accepted"><div class="num">${s.accepted}</div><div class="lbl">Принято</div></div>
+    <div class="stat-cell declined"><div class="num">${s.declined}</div><div class="lbl">Отклонено</div></div>
+  `;
 }
 
 function statusKey(e) { return e.status === "pending" && e.date < todayStr() ? "expired" : e.status; }
@@ -574,6 +612,31 @@ function shiftMonth(delta) {
 $("prev").onclick = () => shiftMonth(-1);
 $("next").onclick = () => shiftMonth(1);
 
+function goToday() {
+  const t = new Date();
+  view = { y: t.getFullYear(), m: t.getMonth() };
+  selected = todayStr();
+  state.events = monthCache[monthKey()] || [];
+  renderCalendar();
+  renderList();
+  load();
+  tg.HapticFeedback?.selectionChanged();
+}
+$("todayBtn").onclick = goToday;
+
+// Long-press на заголовке месяца -> вернуться к текущему месяцу
+(() => {
+  const title = $("title");
+  let timer = null;
+  const start = () => { timer = setTimeout(() => { timer = null; goToday(); }, 600); };
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  title.addEventListener("pointerdown", start);
+  title.addEventListener("pointerup", cancel);
+  title.addEventListener("pointercancel", cancel);
+  title.addEventListener("pointerleave", cancel);
+  title.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goToday(); } });
+})();
+
 function replaceEvent(updated) {
   const i = state.events.findIndex((e) => e.id === updated.id);
   if (i >= 0) state.events[i] = updated; else state.events.push(updated);
@@ -661,6 +724,8 @@ $("list").addEventListener("click", async (ev) => {
     try {
       replaceEvent(await api(`/events/${eventId}/respond`, { method: "POST", body: { status: statusBtn.dataset.status } }));
       tg.HapticFeedback?.notificationOccurred("success");
+      etag = null;
+      await load(true);
     } catch (e) { toast(e.message); await load(); }
     return;
   }
@@ -767,7 +832,7 @@ function renderIdeas() {
   }
   listEl.innerHTML = filtered.map(i => {
     const on = selectedIdeas.includes(i.text);
-    return `<div class="idea-item${on ? " selected" : ""}" data-idea-text="${esc(i.text)}">
+    return `<div class="idea-item${on ? " selected" : ""}" data-idea-text="${esc(i.text)}" data-idea-id="${esc(i.id)}">
       <span class="idea-check">✓</span>
       <span class="idea-text">${esc(i.text)}</span>
       <button type="button" class="idea-del" data-idea-del aria-label="Удалить">×</button>
@@ -833,16 +898,18 @@ $("ideasContainer").addEventListener("click", async (e) => {
     const text = item.dataset.ideaText;
     const idea = (state.sex_ideas || []).find(i => i.text === text);
     if (!idea) return;
-    try {
-      const res = await api(`/sex-ideas/${idea.id}`, { method: "DELETE" });
-      state.sex_ideas = res.ideas;
-      selectedIdeas = selectedIdeas.filter(t => t !== text);
-      renderIdeas();
-      renderChosen();
-      tg.HapticFeedback?.notificationOccurred("success");
-    } catch (err) {
-      toast(err.message);
-    }
+    confirmDialog("Удалить эту идею? Она пропадёт у вас обоих.", async () => {
+      try {
+        const res = await api(`/sex-ideas/${idea.id}`, { method: "DELETE" });
+        state.sex_ideas = res.ideas;
+        selectedIdeas = selectedIdeas.filter(t => t !== text);
+        renderIdeas();
+        renderChosen();
+        tg.HapticFeedback?.notificationOccurred("success");
+      } catch (err) {
+        toast(err.message);
+      }
+    });
     return;
   }
   const item = e.target.closest("[data-idea-text]");
@@ -886,7 +953,10 @@ $("ideasOverlay").addEventListener("click", (e) => {
   if (e.target === $("ideasOverlay")) closeIdeasModal();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("ideasOverlay").hidden) closeIdeasModal();
+  if (e.key !== "Escape") return;
+  // Приоритет: сначала прячем форму добавления, потом закрываем модалку.
+  if (!$("ideasOverlay").hidden && !$("ideaForm").hidden) { hideIdeaForm(); return; }
+  if (!$("ideasOverlay").hidden) closeIdeasModal();
 });
 
 /* ====================== Форма ====================== */
@@ -975,7 +1045,10 @@ $("fSave").onclick = async () => {
   };
   if (!editingEvent && category === "shop") payload.checklist = formChecklist;
 
-  $("fSave").disabled = true;
+  const btn = $("fSave");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Сохраняем…";
   try {
     if (editingEvent) {
       await api(`/events/${editingEvent.id}`, { method: "PUT", body: payload });
@@ -993,7 +1066,8 @@ $("fSave").onclick = async () => {
   } catch (e) {
     $("fError").textContent = e.message;
   } finally {
-    $("fSave").disabled = false;
+    btn.disabled = false;
+    btn.textContent = original;
   }
 };
 
