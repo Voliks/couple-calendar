@@ -218,17 +218,23 @@
   .archive-text { flex: 1; word-break: break-word; }
   .archive-date { font-size: 12px; color: var(--hint); margin-top: 2px; }
 
-  /* Реакции */
-  .reaction-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  /* Реакции (только на принятые события) */
+  .reaction-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   .reaction-badge { font-size: 22px; padding: 4px 10px; border-radius: 999px;
     background: var(--bg); border: 2px solid transparent; cursor: pointer; line-height: 1; }
   .reaction-badge.mine { border-color: var(--accent); background: rgba(36,129,204,.12); }
   .reaction-add { font-size: 13px; padding: 6px 10px; border-radius: 999px;
     background: var(--bg2); color: var(--hint); font-weight: 600; }
   .reaction-add:active { background: rgba(36,129,204,.2); color: var(--accent); }
+
+  /* Комментарий к отклонённому */
   .decline-comment { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px;
     background: rgba(var(--declined), .12); color: var(--text); font-size: 14px;
     white-space: pre-wrap; word-break: break-word; }
+  .decline-comment.empty { background: transparent; padding: 0; }
+  .comment-add { display: inline-block; margin-top: 8px; font-size: 13px; padding: 6px 10px;
+    border-radius: 999px; background: var(--bg2); color: var(--hint); font-weight: 600; }
+  .comment-add:active { background: rgba(36,129,204,.2); color: var(--accent); }
 
   .reaction-picker { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px));
     transform: translateX(-50%); z-index: 40; background: var(--bg); border-radius: 16px;
@@ -473,30 +479,33 @@ function confirmDialog(message, onYes) {
   if (confirm(message)) onYes();
 }
 
-function openDeclineDialog(eventId, onConfirm) {
+/* ===== Диалог комментария к отклонённому событию ===== */
+function openCommentDialog(initial, onConfirm) {
   const overlay = document.createElement("div");
   overlay.className = "overlay";
   overlay.innerHTML = `
     <div class="sheet" role="dialog" aria-modal="true">
-      <h2>Почему отклоняете?</h2>
-      <label for="declineComment">Комментарий (необязательно)</label>
-      <textarea id="declineComment" maxlength="500" placeholder="Например: не смогу в этот день..."></textarea>
+      <h2>Комментарий</h2>
+      <label for="commentText">Текст комментария</label>
+      <textarea id="commentText" maxlength="500" placeholder="Например: не смогу в этот день..."></textarea>
       <div class="row">
-        <button class="btn ghost" id="declineCancel">Отмена</button>
-        <button class="btn primary" id="declineOk">Отклонить</button>
+        <button class="btn ghost" id="commentCancel">Отмена</button>
+        <button class="btn primary" id="commentOk">Сохранить</button>
       </div>
     </div>
   `;
   document.body.appendChild(overlay);
+  const ta = overlay.querySelector("#commentText");
+  ta.value = initial || "";
   const close = () => overlay.remove();
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-  overlay.querySelector("#declineCancel").onclick = close;
-  overlay.querySelector("#declineOk").onclick = () => {
-    const comment = overlay.querySelector("#declineComment").value.trim().slice(0, 500);
+  overlay.querySelector("#commentCancel").onclick = close;
+  overlay.querySelector("#commentOk").onclick = () => {
+    const comment = ta.value.trim().slice(0, 500);
     close();
     onConfirm(comment);
   };
-  setTimeout(() => overlay.querySelector("#declineComment").focus(), 50);
+  setTimeout(() => ta.focus(), 50);
 }
 
 let etag = null, etagKey = "";
@@ -627,9 +636,10 @@ function answerHtml(e, expired) {
   return `<div class="answer one"><button class="soft" data-status="accepted">Всё-таки принять</button></div>`;
 }
 
+/* Реакции: только на принятые события */
 function reactionHtml(e) {
   if (e.category === "shop" || e.category === "todo") return "";
-  if (e.status !== "accepted" && e.status !== "declined") return "";
+  if (e.status !== "accepted") return "";
   const mine = e.reaction_mine && e.reaction;
   const display = e.reaction
     ? `<span class="reaction-badge${mine ? " mine" : ""}" data-reaction-toggle>${esc(e.reaction)}</span>`
@@ -638,6 +648,24 @@ function reactionHtml(e) {
     ${display}
     <button type="button" class="reaction-add" data-reaction-open aria-label="Поставить реакцию">😊+</button>
   </div>`;
+}
+
+/* Комментарий: только к отклонённым */
+function declineCommentHtml(e) {
+  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.status !== "declined") return "";
+  if (!e.is_creator) {
+    // Партнёр (тот, кого пригласили) может оставить/править комментарий
+    const text = e.decline_comment
+      ? `<p class="decline-comment">💬 ${esc(e.decline_comment)}</p>`
+      : "";
+    return `${text}<button type="button" class="comment-add" data-comment-open>${e.decline_comment ? "✏️ Изменить комментарий" : "💬 Оставить комментарий"}</button>`;
+  }
+  // Автор видит комментарий (если есть), но не редактирует
+  if (e.decline_comment) {
+    return `<p class="decline-comment">💬 ${esc(e.decline_comment)}</p>`;
+  }
+  return "";
 }
 
 function cardHtml(e) {
@@ -657,8 +685,6 @@ function cardHtml(e) {
        </div>` : "";
 
   const statusLabel = (isShop || isTodo) ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
-  const declineComment = (e.status === "declined" && e.decline_comment)
-    ? `<p class="decline-comment">💬 ${esc(e.decline_comment)}</p>` : "";
 
   return `<article class="card ${cardCls}" data-id="${e.id}"${cardStyle}>
     <div class="card-header">
@@ -667,8 +693,8 @@ function cardHtml(e) {
     </div>
     ${isShop ? checklistHtml(e) : (e.description ? `<p>${esc(e.description)}</p>` : "")}
     ${isShop && e.description ? `<p>${esc(e.description)}</p>` : ""}
-    ${declineComment}
     ${reactionHtml(e)}
+    ${declineCommentHtml(e)}
     <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span>${statusLabel}</div>
     ${answerHtml(e, sk === "expired")}
   </article>`;
@@ -834,9 +860,9 @@ function addItem(eventId, input) {
   });
 }
 
-/* Реакции */
+/* ===== Пикер реакций ===== */
 let reactionPickerEl = null;
-function openReactionPicker(event, anchor) {
+function openReactionPicker(event) {
   closeReactionPicker();
   const list = (state.allowed_reactions && state.allowed_reactions.length)
     ? state.allowed_reactions : ["❤️","🔥","😍","😂","👍","🎉","😮","🥰"];
@@ -847,15 +873,15 @@ function openReactionPicker(event, anchor) {
   document.body.appendChild(el);
   reactionPickerEl = el;
   el.addEventListener("click", async (e) => {
+    e.stopPropagation();
     const b = e.target.closest("[data-r]");
     if (!b) return;
     const emoji = b.dataset.r;
     closeReactionPicker();
     try {
-      replaceEvent(await api(`/events/${event.id}/reaction`, { method: "POST", body: { emoji } }));
+      const updated = await api(`/events/${event.id}/reaction`, { method: "POST", body: { emoji } });
+      replaceEvent(updated);
       tg.HapticFeedback?.notificationOccurred("success");
-      etag = null;
-      await load(true);
     } catch (err) { toast(err.message); }
   });
   setTimeout(() => {
@@ -876,8 +902,25 @@ $("list").addEventListener("click", async (ev) => {
   const event = findEvent(eventId);
   if (!event) return;
 
+  // Реакция (только для accepted)
   if (ev.target.closest("[data-reaction-open]") || ev.target.closest("[data-reaction-toggle]")) {
-    openReactionPicker(event, card);
+    if (event.category === "shop" || event.category === "todo") return;
+    if (event.status !== "accepted") return;
+    openReactionPicker(event);
+    return;
+  }
+
+  // Комментарий (только для declined, не автор)
+  if (ev.target.closest("[data-comment-open]")) {
+    if (event.category === "shop" || event.category === "todo") return;
+    if (event.status !== "declined") return;
+    openCommentDialog(event.decline_comment || "", async (comment) => {
+      try {
+        const updated = await api(`/events/${eventId}/comment`, { method: "POST", body: { comment } });
+        replaceEvent(updated);
+        tg.HapticFeedback?.notificationOccurred("success");
+      } catch (err) { toast(err.message); }
+    });
     return;
   }
 
@@ -893,22 +936,21 @@ $("list").addEventListener("click", async (ev) => {
   if (statusBtn) {
     const newStatus = statusBtn.dataset.status;
     if (newStatus === "declined") {
-      openDeclineDialog(eventId, async (comment) => {
+      // Сразу открываем диалог комментария
+      openCommentDialog(event.decline_comment || "", async (comment) => {
         try {
-          await api(`/events/${eventId}/respond`, { method: "POST", body: { status: "declined", comment } });
+          const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: "declined", comment } });
+          replaceEvent(updated);
           tg.HapticFeedback?.notificationOccurred("success");
-          etag = null;
-          await load(true);
         } catch (e) { toast(e.message); await load(); }
       });
       return;
     }
     statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
     try {
-      replaceEvent(await api(`/events/${eventId}/respond`, { method: "POST", body: { status: newStatus } }));
+      const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: newStatus } });
+      replaceEvent(updated);
       tg.HapticFeedback?.notificationOccurred("success");
-      etag = null;
-      await load(true);
     } catch (e) { toast(e.message); await load(); }
     return;
   }
