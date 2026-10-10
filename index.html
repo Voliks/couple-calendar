@@ -60,7 +60,7 @@
   .card p { margin: 4px 0 0; color: var(--text); opacity: .8; white-space: pre-wrap; word-break: break-word; }
   
   /* Чек-лист в карточке */
-  .checklist-view { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .checklist-view { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
   .checklist-item-view { display: flex; align-items: center; gap: 8px; font-size: 15px; cursor: pointer; }
   .checklist-item-view input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
   .checklist-item-view.checked span { text-decoration: line-through; opacity: 0.5; }
@@ -154,13 +154,15 @@
       <option value="Магазин">Магазин</option>
     </select>
 
-    <!-- Описание всегда доступно -->
-    <label for="fDesc">Описание (необязательно)</label>
-    <textarea id="fDesc" maxlength="2000" placeholder="Дополнительная информация..."></textarea>
+    <!-- Описание для Отдых / Секс -->
+    <div id="descContainer">
+      <label for="fDesc">Описание (необязательно)</label>
+      <textarea id="fDesc" maxlength="2000"></textarea>
+    </div>
 
-    <!-- Чек-лист для Магазина (появляется только если выбрана категория Магазин) -->
+    <!-- Чек-лист для Магазина -->
     <div id="checklistContainer" hidden>
-      <label style="margin-top: 12px;">Список покупок</label>
+      <label>Список покупок</label>
       <div class="checklist-builder" id="checklistBuilder"></div>
       <button class="btn ghost" id="addChecklistItem" style="margin-top: 8px; width: 100%;">+ Добавить пункт</button>
     </div>
@@ -262,12 +264,10 @@ function renderCalendar() {
 
 const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function parsePayload(desc) {
+function parseChecklist(desc) {
   try {
     const data = JSON.parse(desc);
-    if (data && typeof data === "object" && Array.isArray(data.items)) {
-      return data;
-    }
+    if (Array.isArray(data)) return data;
   } catch (e) {}
   return null;
 }
@@ -287,20 +287,14 @@ function renderList() {
          </div>` : "";
 
     let contentHtml = "";
-    const payload = parsePayload(e.description);
-    
-    if (e.title === "Магазин" && payload) {
-      if (payload.text) {
-        contentHtml += `<p>${esc(payload.text)}</p>`;
-      }
-      if (payload.items && payload.items.length > 0) {
-        contentHtml += `<div class="checklist-view">` + payload.items.map((item, idx) => `
-          <label class="checklist-item-view ${item.done ? 'checked' : ''}">
-            <input type="checkbox" data-checklist-idx="${idx}" data-event-id="${e.id}" ${item.done ? 'checked' : ''}>
-            <span>${esc(item.text)}</span>
-          </label>
-        `).join("") + `</div>`;
-      }
+    const checklist = parseChecklist(e.description);
+    if (e.title === "Магазин" && checklist) {
+      contentHtml = `<div class="checklist-view">` + checklist.map((item, idx) => `
+        <label class="checklist-item-view ${item.done ? 'checked' : ''}">
+          <input type="checkbox" data-checklist-idx="${idx}" data-event-id="${e.id}" ${item.done ? 'checked' : ''}>
+          <span>${esc(item.text)}</span>
+        </label>
+      `).join("") + `</div>`;
     } else if (e.description) {
       contentHtml = `<p>${esc(e.description)}</p>`;
     }
@@ -349,13 +343,13 @@ $("list").addEventListener("click", async (ev) => {
     const event = state.events.find(e => String(e.id) === String(eventId));
     if (!event) return;
 
-    const payload = parsePayload(event.description);
-    if (payload && payload.items && payload.items[idx]) {
-      payload.items[idx].done = checkbox.checked;
+    const checklist = parseChecklist(event.description);
+    if (checklist && checklist[idx]) {
+      checklist[idx].done = checkbox.checked;
       try {
         await api(`/events/${eventId}`, {
           method: "PUT",
-          body: JSON.stringify({ title: event.title, description: JSON.stringify(payload), date: event.date })
+          body: JSON.stringify({ title: event.title, description: JSON.stringify(checklist), date: event.date })
         });
         tg.HapticFeedback?.selectionChanged();
         await load();
@@ -376,7 +370,7 @@ $("list").addEventListener("click", async (ev) => {
   if (statusBtn) {
     statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
     try {
-      await api(`/events/${eventId}`, {
+      await api(`/events/${eventId}/respond`, {
         method: "POST", body: JSON.stringify({ status: statusBtn.dataset.status })
       });
       tg.HapticFeedback?.notificationOccurred("success");
@@ -395,10 +389,10 @@ $("list").addEventListener("click", async (ev) => {
     $("fTitle").value = event.title;
     toggleCategoryFields(event.title);
 
-    const payload = parsePayload(event.description);
-    if (event.title === "Магазин" && payload) {
-      $("fDesc").value = payload.text || "";
-      renderChecklistBuilder(payload.items || []);
+    if (event.title === "Магазин") {
+      const checklist = parseChecklist(event.description) || [];
+      renderChecklistBuilder(checklist);
+      $("fDesc").value = "";
     } else {
       $("fDesc").value = event.description || "";
       renderChecklistBuilder([]);
@@ -424,8 +418,10 @@ $("list").addEventListener("click", async (ev) => {
 
 function toggleCategoryFields(category) {
   if (category === "Магазин") {
+    $("descContainer").hidden = true;
     $("checklistContainer").hidden = false;
   } else {
+    $("descContainer").hidden = false;
     $("checklistContainer").hidden = true;
   }
 }
@@ -489,8 +485,6 @@ $("fSave").onclick = async () => {
   if (!date) { $("fError").textContent = "Выберите дату"; return; }
 
   let description = "";
-  const plainDesc = $("fDesc").value.trim();
-
   if (title === "Магазин") {
     const rows = document.querySelectorAll(".checklist-input");
     const items = [];
@@ -500,9 +494,13 @@ $("fSave").onclick = async () => {
         items.push({ text, done: false });
       }
     });
-    description = JSON.stringify({ text: plainDesc, items });
+    if (items.length === 0) {
+      $("fError").textContent = "Добавьте хотя бы один товар в список";
+      return;
+    }
+    description = JSON.stringify(items);
   } else {
-    description = plainDesc;
+    description = $("fDesc").value.trim();
   }
 
   $("fSave").disabled = true;
