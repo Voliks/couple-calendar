@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import db  # noqa: E402  (после load_dotenv, чтобы подхватить переменные окружения)
+import db
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-blue.vercel.app").rstrip("/")
@@ -46,8 +46,6 @@ CATEGORY_TITLES = {
     "shop": "Магазин",
 }
 
-ALLOWED_SEX_TITLES = {"🔥 Страстная ночь", "🌹 Романтический вечер", "✨ Эксперименты и фантазии"}
-
 
 def _origin(url: str) -> str:
     p = urlsplit(url)
@@ -62,7 +60,7 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
 CATEGORIES = {"rest", "sex", "shop"}
-INIT_DATA_MAX_AGE = 24 * 3600  # секунд
+INIT_DATA_MAX_AGE = 24 * 3600
 
 RATE_LIMIT = 40
 RATE_WINDOW = 60
@@ -338,13 +336,7 @@ def parse_event_payload(body: dict) -> dict:
     if event_time and not TIME_RE.match(event_time):
         raise ApiError("Некорректное время")
 
-    if category == "sex":
-        sex_title = str(body.get("sex_title", "🔥 Страстная ночь")).strip()
-        if sex_title not in ALLOWED_SEX_TITLES:
-            sex_title = "🔥 Страстная ночь"
-        title = sex_title
-    else:
-        title = CATEGORY_TITLES.get(category, "Событие")
+    title = CATEGORY_TITLES.get(category, "Событие")
 
     return {
         "title": title,
@@ -414,12 +406,15 @@ async def api_state(request: web.Request) -> web.Response:
         events = []
         link = invite_link(user["invite_code"])
 
+    sex_ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
+
     body = json.dumps(
         {
             "has_partner": has_partner,
             "invite_link": link,
             "month": start[:7],
             "events": [event_to_dict(e, tg_user.id) for e in events],
+            "sex_ideas": sex_ideas,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -554,6 +549,19 @@ async def api_delete_item(request: web.Request) -> web.Response:
     return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id))
 
 
+async def api_add_sex_idea(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    user = await db.get_or_create_user(tg_user.id)
+    body = await read_json(request)
+    category_title = str(body.get("category_title", "")).strip()
+    text = str(body.get("text", "")).strip()[:300]
+    if not category_title or not text:
+        raise ApiError("Укажите категорию и текст идеи")
+    await db.add_sex_idea(tg_user.id, category_title, text)
+    ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
+    return web.json_response({"status": "ok", "ideas": ideas})
+
+
 async def api_unlink(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     partner = await db.unlink_partners(tg_user.id)
@@ -621,6 +629,7 @@ async def main() -> None:
     app.router.add_post("/api/events/{id}/items", api_add_item)
     app.router.add_put("/api/events/{id}/items/{item_id}", api_set_item)
     app.router.add_delete("/api/events/{id}/items/{item_id}", api_delete_item)
+    app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
 
     runner = web.AppRunner(app)
