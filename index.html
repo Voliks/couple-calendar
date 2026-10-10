@@ -92,12 +92,12 @@
 
   /* Чеклист */
   .checklist { margin-top: 10px; }
-  .checklist-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06); }
+  .checklist-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06); cursor: pointer; }
   .checklist-item:last-child { border-bottom: 0; }
-  .checklist-item input[type="checkbox"] { width: 20px; height: 20px; accent-color: rgb(var(--accepted)); flex-shrink: 0; cursor: pointer; }
+  .checklist-item input[type="checkbox"] { width: 20px; height: 20px; accent-color: rgb(var(--accepted)); flex-shrink: 0; cursor: pointer; pointer-events: none; }
   .checklist-item .cl-text { flex: 1; word-break: break-word; }
   .checklist-item.checked .cl-text { text-decoration: line-through; opacity: .55; }
-  .checklist-item .cl-remove { font-size: 18px; opacity: .5; padding: 2px 6px; border-radius: 6px; }
+  .checklist-item .cl-remove { font-size: 18px; opacity: .5; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
   .checklist-item .cl-remove:hover { opacity: 1; background: rgba(0,0,0,.05); }
   .cl-add-row { display: flex; gap: 8px; margin-top: 10px; }
   .cl-add-row input { flex: 1; }
@@ -353,24 +353,23 @@ $("list").addEventListener("click", async (ev) => {
   const eventId = card.dataset.id;
   const event = state.events.find(e => String(e.id) === String(eventId));
 
-  // Переключение пункта чеклиста
-  const clToggle = ev.target.closest("[data-cl-toggle]");
-  if (clToggle && event) {
-    const itemEl = clToggle.closest(".checklist-item");
-    const idx = Number(itemEl.dataset.idx);
+  // Переключение пункта чеклиста — клик по всей строке
+  const clItem = ev.target.closest(".checklist-item");
+  if (clItem && event && clItem.closest(".card .checklist")) {
+    const idx = Number(clItem.dataset.idx);
+    const checkbox = clItem.querySelector('input[type="checkbox"]');
     const newChecklist = (event.checklist || []).map((it, i) =>
       i === idx ? { ...it, checked: !it.checked } : it
     );
     // Оптимистичное обновление UI
-    itemEl.classList.toggle("checked", newChecklist[idx].checked);
-    clToggle.checked = newChecklist[idx].checked;
+    clItem.classList.toggle("checked", newChecklist[idx].checked);
+    if (checkbox) checkbox.checked = newChecklist[idx].checked;
     try {
       await api(`/events/${eventId}/checklist`, {
         method: "PUT",
         body: JSON.stringify({ checklist: newChecklist })
       });
       tg.HapticFeedback?.selectionChanged();
-      // Обновляем локальный стейт, чтобы не ждать полного load
       event.checklist = newChecklist;
     } catch (e) {
       toast(e.message);
@@ -483,7 +482,7 @@ $("fClInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); $("fClAdd").click(); }
 });
 
-// Переключение / удаление в форме
+// Переключение / удаление в форме — клик по всей строке
 $("fChecklist").addEventListener("click", (ev) => {
   const idxEl = ev.target.closest("[data-idx]");
   if (!idxEl) return;
@@ -493,10 +492,9 @@ $("fChecklist").addEventListener("click", (ev) => {
     updateChecklistSection();
     return;
   }
-  if (ev.target.closest("[data-form-cl-toggle]")) {
-    formChecklist[idx].checked = !formChecklist[idx].checked;
-    updateChecklistSection();
-  }
+  // Клик по любой части строки (кроме кнопки удаления) переключает галочку
+  formChecklist[idx].checked = !formChecklist[idx].checked;
+  updateChecklistSection();
 });
 
 $("fSave").onclick = async () => {
