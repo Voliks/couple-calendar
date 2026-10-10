@@ -316,7 +316,18 @@ async def _m3_sex_ideas() -> None:
     )
 
 
-MIGRATIONS = [(1, _m1_base), (2, _m2_features), (3, _m3_sex_ideas)]
+async def _m4_ideas_source() -> None:
+    # Разделяем идеи по источнику: 'sex' (форма секса) и 'shop' (список покупок).
+    await _add_column("sex_ideas", "source", "TEXT NOT NULL DEFAULT 'sex'")
+    # Чистим уже сохранённые «идеи», которые на самом деле пункты списка покупок:
+    # у них category_title — не из фиксированного набора категорий секса.
+    await _exec(
+        "DELETE FROM sex_ideas WHERE category_title NOT IN "
+        "('🔥 Страстная ночь', '🌹 Романтический вечер', '✨ Эксперименты и фантазии')"
+    )
+
+
+MIGRATIONS = [(1, _m1_base), (2, _m2_features), (3, _m3_sex_ideas), (4, _m4_ideas_source)]
 
 
 async def _migrate() -> None:
@@ -552,7 +563,7 @@ async def delete_item(event_id: int, item_id: int) -> bool:
 
 async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
     ideas = []
-    
+
     # 1. Всегда читаем актуальные идеи прямо из sex_ideas.json на лету
     json_path = Path(__file__).parent / "sex_ideas.json"
     if json_path.exists():
@@ -566,15 +577,17 @@ async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
         except Exception:
             log.exception("Не удалось прочитать sex_ideas.json")
 
-    # 2. Также подтягиваем кастомные идеи, которые пользователи добавили сами через интерфейс
+    # 2. Кастомные идеи, которые пользователи добавили сами — только из формы «Секс»
     if partner_id:
         rs = await _exec(
-            "SELECT id, category_title, text FROM sex_ideas WHERE user_id IN (?, ?) ORDER BY id DESC",
+            "SELECT id, category_title, text FROM sex_ideas "
+            "WHERE source = 'sex' AND user_id IN (?, ?) ORDER BY id DESC",
             (user_id, partner_id)
         )
     else:
         rs = await _exec(
-            "SELECT id, category_title, text FROM sex_ideas WHERE user_id = ? ORDER BY id DESC",
+            "SELECT id, category_title, text FROM sex_ideas "
+            "WHERE source = 'sex' AND user_id = ? ORDER BY id DESC",
             (user_id,)
         )
     for r in rs.rows:
@@ -585,7 +598,7 @@ async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
 
 async def add_sex_idea(user_id: int, category_title: str, text: str) -> int | None:
     rs = await _exec(
-        "INSERT INTO sex_ideas (user_id, category_title, text) VALUES (?, ?, ?)",
+        "INSERT INTO sex_ideas (user_id, category_title, text, source) VALUES (?, ?, ?, 'sex')",
         (user_id, category_title, text)
     )
     return rs.last_id
