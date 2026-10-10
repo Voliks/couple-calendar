@@ -23,10 +23,10 @@ INVITE_TTL = 7 * 24 * 3600
 MAX_ITEMS_PER_EVENT = 50
 MAX_EVENTS_PER_USER = 10000
 
-# --- Архив удалённых идей (только для ручного просмотра файла) ---
+# Служебный раздел в sex_ideas.json — не отдаётся в UI (на случай, если остался
+# от прежней версии). Больше туда ничего не пишем.
 ARCHIVE_KEY = "_архив"
 CUSTOM_ARCHIVE_TITLE = "Свои идеи"
-JSON_PATH = Path(__file__).parent / "sex_ideas.json"
 
 
 class DbError(Exception):
@@ -369,6 +369,26 @@ async def _m6_hidden_ideas() -> None:
     )
 
 
+async def _m7_archived_ideas() -> None:
+    """Архив удалённых идей — долговременный, живёт в БД."""
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS archived_ideas (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            category_title TEXT NOT NULL,
+            text           TEXT NOT NULL,
+            source         TEXT NOT NULL,     -- 'custom' | 'builtin'
+            archived_by    INTEGER,           -- telegram_id того, кто удалил
+            archived_at    INTEGER NOT NULL   -- unix seconds
+        )
+        """
+    )
+    await _exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_archived_ideas "
+        "ON archived_ideas (category_title, text, source)"
+    )
+
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -376,6 +396,7 @@ MIGRATIONS = [
     (4, _m4_ideas_source),
     (5, _m5_fix_checklist),
     (6, _m6_hidden_ideas),
+    (7, _m7_archived_ideas),
 ]
 
 
@@ -389,52 +410,22 @@ async def _migrate() -> None:
             await _exec("INSERT INTO schema_version (version) VALUES (?)", (version,))
 
 
-# ==================== sex_ideas.json: чтение/архив ====================
+# ==================== sex_ideas.json ====================
 
 def _load_json_ideas_sync() -> dict:
-    if not JSON_PATH.exists():
+    path = Path(__file__).parent / "sex_ideas.json"
+    if not path.exists():
         return {}
     try:
-        data = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except Exception:
         log.exception("Не удалось прочитать sex_ideas.json")
         return {}
 
 
-def _save_json_ideas_sync(data: dict) -> None:
-    """Атомарно перезаписывает sex_ideas.json через временный файл."""
-    tmp = JSON_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, JSON_PATH)
-
-
-def _archive_idea_sync(category_title: str, text: str) -> None:
-    """Дописывает идею в раздел _архив (без дублей). Синхронно."""
-    data = _load_json_ideas_sync()
-    archive = data.setdefault(ARCHIVE_KEY, {})
-    if not isinstance(archive, dict):
-        archive = {}
-        data[ARCHIVE_KEY] = archive
-    bucket = archive.setdefault(category_title, [])
-    if not isinstance(bucket, list):
-        bucket = []
-        archive[category_title] = bucket
-    if text not in bucket:
-        bucket.append(text)
-    _save_json_ideas_sync(data)
-
-
-async def archive_idea(category_title: str, text: str) -> None:
-    """Публичная асинхронная обёртка — из обработчиков API."""
-    await asyncio.to_thread(_archive_idea_sync, category_title, text)
-
-
-def read_json_archive_sync() -> dict:
-    """Возвращает только _архив из sex_ideas.json (для /api/archive.json)."""
-    data = _load_json_ideas_sync()
-    archive = data.get(ARCHIVE_KEY, {})
-    return archive if isinstance(archive, dict) else {}
+async def _load_json_ideas() -> dict:
+    return await asyncio.to_thread(_load_json_ideas_sync)
 
 
 # ==================== users ====================
@@ -682,8 +673,8 @@ async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
     ideas = []
     hidden = await _hidden_idea_keys(user_id, partner_id)
 
-    # 1. sex_ideas.json, кроме служебного раздела _архив
-    data = await asyncio.to_thread(_load_json_ideas_sync)
+    # 1. sex_ideas.json (кроме служебного _архив, если он там остался)
+    data = await _load_json_ideas()
     idx = 1
     for category_title, texts in data.items():
         if category_title == ARCHIVE_KEY:
@@ -697,7 +688,7 @@ async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
                 continue
             ideas.append({"id": key, "category_title": category_title, "text": txt})
 
-    # 2. Кастомные идеи (и свои, и партнёра)
+    # 2. Кастомные идеи
     if partner_id:
         rs = await _exec(
             "SELECT id, category_title, text FROM sex_ideas "
@@ -724,8 +715,18 @@ async def add_sex_idea(user_id: int, category_title: str, text: str) -> int | No
     return rs.last_id
 
 
-async def delete_sex_idea(idea_id: int) -> bool:
-    """Удаляет кастомную идею из БД и архивирует её текст в sex_ideas.json."""
+async def archive_idea(category_title: str, text: str, source: str, archived_by: int | None) -> None:
+    """Пишет идею в архив в БД. Дубликаты игнорируются."""
+    await _exec(
+        "INSERT OR IGNORE INTO archived_ideas "
+        "(category_title, text, source, archived_by, archived_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (category_title, text, source, archived_by, int(time.time())),
+    )
+
+
+async def delete_sex_idea(idea_id: int, archived_by: int | None = None) -> bool:
+    """Удаляет кастомную идею из БД, архивирует её текст."""
     rs = await _exec(
         "SELECT category_title, text FROM sex_ideas WHERE id = ? AND source = 'sex'",
         (idea_id,),
@@ -734,18 +735,19 @@ async def delete_sex_idea(idea_id: int) -> bool:
         return False
     _category_title, text = rs.rows[0]
     try:
-        await archive_idea(CUSTOM_ARCHIVE_TITLE, text)
+        await archive_idea(CUSTOM_ARCHIVE_TITLE, text, "custom", archived_by)
     except Exception:
         log.exception("Не удалось записать идею в архив (не критично)")
     rs2 = await _exec("DELETE FROM sex_ideas WHERE id = ? AND source = 'sex'", (idea_id,))
     return rs2.affected == 1
 
 
-async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key: str) -> None:
-    """Прячет JSON-идею у обоих партнёров и архивирует её в sex_ideas.json."""
-    # Находим исходный текст по ключу json_N, чтобы положить его в _архив
+async def hide_json_idea_for_pair(
+    user_id: int, partner_id: int | None, idea_key: str
+) -> None:
+    """Прячет JSON-идею у обоих партнёров и архивирует её в БД."""
     try:
-        data = _load_json_ideas_sync()
+        data = await _load_json_ideas()
         idx = 1
         found_title = None
         found_text = None
@@ -761,7 +763,7 @@ async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key
             if found_text is not None:
                 break
         if found_text is not None:
-            await archive_idea(found_title, found_text)
+            await archive_idea(found_title, found_text, "builtin", user_id)
     except Exception:
         log.exception("Не удалось архивировать JSON-идею (не критично)")
 
@@ -771,6 +773,25 @@ async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key
     await _batch(
         [("INSERT OR IGNORE INTO hidden_ideas (user_id, idea_key) VALUES (?, ?)", r) for r in rows]
     )
+
+
+async def get_archived_ideas(limit: int = 2000) -> list[dict]:
+    rs = await _exec(
+        "SELECT id, category_title, text, source, archived_by, archived_at "
+        "FROM archived_ideas ORDER BY archived_at DESC, id DESC LIMIT ?",
+        (limit,),
+    )
+    return [
+        {
+            "id": r[0],
+            "category_title": r[1],
+            "text": r[2],
+            "source": r[3],
+            "archived_by": r[4],
+            "archived_at": r[5],
+        }
+        for r in rs.rows
+    ]
 
 
 # ==================== напоминания ====================
