@@ -40,12 +40,13 @@ INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
 REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
 SHOW_TITLES = os.getenv("NOTIFY_SHOW_TITLES", "0") == "1"
 
-# Названия категорий по умолчанию
 CATEGORY_TITLES = {
     "rest": "Отдых",
     "sex": "Секс",
     "shop": "Магазин",
 }
+
+ALLOWED_SEX_LEVELS = {"🔥 Тепло", "🌶️ Горячо", "🌋 Жарааа!"}
 
 
 def _origin(url: str) -> str:
@@ -337,8 +338,14 @@ def parse_event_payload(body: dict) -> dict:
     if event_time and not TIME_RE.match(event_time):
         raise ApiError("Некорректное время")
 
-    # Автоматически устанавливаем название на основе категории
-    title = CATEGORY_TITLES.get(category, "Событие")
+    # Если категория секс, сохраняем выбранный уровень в качестве названия
+    if category == "sex":
+        sex_level = str(body.get("sex_level", "🔥 Тепло")).strip()
+        if sex_level not in ALLOWED_SEX_LEVELS:
+            sex_level = "🔥 Тепло"
+        title = sex_level
+    else:
+        title = CATEGORY_TITLES.get(category, "Событие")
 
     return {
         "title": title,
