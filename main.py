@@ -105,7 +105,6 @@ def open_app_keyboard() -> InlineKeyboardMarkup:
 
 
 def event_reply_keyboard(event_id: int) -> InlineKeyboardMarkup:
-    """Inline-кнопки «Принять / Отклонить» прямо в уведомлении бота."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -167,7 +166,6 @@ def rate_limit(uid: int) -> None:
     if len(q) >= RATE_LIMIT:
         raise ApiError("Слишком много запросов, подождите минуту", 429)
     q.append(now)
-    # Если очередь опустела (после очистки) — удаляем ключ, чтобы не копить пустые deque.
     if not q:
         _rate_hits.pop(uid, None)
 
@@ -257,7 +255,6 @@ async def unlink_confirm(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("ev:"))
 async def event_inline_action(call: CallbackQuery):
-    """Принять/отклонить событие прямо из уведомления бота."""
     try:
         _, action, raw_id = call.data.split(":", 2)
         event_id = int(raw_id)
@@ -298,7 +295,6 @@ async def event_inline_action(call: CallbackQuery):
         f"{icon} {who} ответил(а) на событие {fmt_date(event['date'])}{title_part(event['title'])}.",
     )
 
-    # Скрываем кнопки у сообщения, чтобы не нажимали повторно
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -685,7 +681,7 @@ async def api_add_sex_idea(request: web.Request) -> web.Response:
 
 
 async def api_delete_sex_idea(request: web.Request) -> web.Response:
-    """Удаляет идею: кастомную — из БД у обоих; JSON — прячет у обоих, файл не трогает."""
+    """Удаляет идею: кастомную — из БД + архив; JSON — прячет у обоих + архив."""
     tg_user = authenticate(request, write=True)
     user = await db.get_or_create_user(tg_user.id)
     raw_id = request.match_info.get("id", "")
@@ -702,6 +698,17 @@ async def api_delete_sex_idea(request: web.Request) -> web.Response:
 
     ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
     return web.json_response({"status": "deleted", "ideas": ideas})
+
+
+async def api_archive(request: web.Request) -> web.Response:
+    """Только для ручного просмотра: отдаёт _архив из sex_ideas.json.
+    Авторизация не нужна, но и данные не секретные — просто тексты идей."""
+    try:
+        archive = await asyncio.to_thread(db.read_json_archive_sync)
+    except Exception:
+        logging.exception("Не удалось прочитать архив идей")
+        archive = {}
+    return web.json_response(archive, dumps=lambda o: json.dumps(o, ensure_ascii=False, indent=2))
 
 
 async def api_unlink(request: web.Request) -> web.Response:
@@ -782,6 +789,7 @@ async def main() -> None:
     app.router.add_get("/", index)
     app.router.add_get("/health", health_check)
     app.router.add_get("/api/state", api_state)
+    app.router.add_get("/api/archive.json", api_archive)
     app.router.add_post("/api/events", api_create_event)
     app.router.add_put("/api/events/{id}", api_update_event)
     app.router.add_delete("/api/events/{id}", api_delete_event)
