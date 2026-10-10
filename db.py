@@ -146,16 +146,18 @@ async def link_partners(a: int, b: int) -> None:
         logging.error("Ошибка в link_partners: %s", e)
 
 
-async def create_event(created_by: int, target_user: int, title: str, description: str, date: str, checklist=None):
+async def create_event(created_by: int, target_user: int, title: str, description: str, date: str, checklist=None, status="pending"):
     if checklist is None:
         checklist = []
+    if status not in ("pending", "accepted", "declined"):
+        status = "pending"
     checklist_json = json.dumps(checklist, ensure_ascii=False)
     try:
         async with get_client() as client:
             rs = await client.execute(
-                "INSERT INTO events (created_by, target_user, title, description, date, checklist) "
-                "VALUES (?, ?, ?, ?, ?, ?) RETURNING id, created_by, target_user, title, description, date, status, checklist",
-                (created_by, target_user, title, description, date, checklist_json),
+                "INSERT INTO events (created_by, target_user, title, description, date, status, checklist) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, created_by, target_user, title, description, date, status, checklist",
+                (created_by, target_user, title, description, date, status, checklist_json),
             )
             if rs.rows:
                 return _event_to_dict(rs.rows[0])
@@ -208,18 +210,20 @@ async def set_status(event_id: int, status: str) -> None:
 
 
 async def update_event(event_id: int, title: str, description: str, date: str, checklist=None):
+    """При обновлении: для «Магазин» статус остаётся accepted, для остальных — сбрасывается в pending."""
+    new_status = "accepted" if title == "Магазин" else "pending"
     try:
         async with get_client() as client:
             if checklist is not None:
                 checklist_json = json.dumps(checklist, ensure_ascii=False)
                 await client.execute(
-                    "UPDATE events SET title = ?, description = ?, date = ?, checklist = ?, status = 'pending' WHERE id = ?",
-                    (title, description, date, checklist_json, event_id),
+                    "UPDATE events SET title = ?, description = ?, date = ?, checklist = ?, status = ? WHERE id = ?",
+                    (title, description, date, checklist_json, new_status, event_id),
                 )
             else:
                 await client.execute(
-                    "UPDATE events SET title = ?, description = ?, date = ?, status = 'pending' WHERE id = ?",
-                    (title, description, date, event_id),
+                    "UPDATE events SET title = ?, description = ?, date = ?, status = ? WHERE id = ?",
+                    (title, description, date, new_status, event_id),
                 )
             return await get_event(event_id)
     except Exception as e:

@@ -298,7 +298,8 @@ function renderList() {
     return;
   }
   $("list").innerHTML = items.map((e) => {
-    const answer = !e.is_creator && e.status === "pending"
+    // Магазин не требует подтверждения — кнопки «Да/Нет» не показываем
+    const answer = (e.title !== "Магазин" && !e.is_creator && e.status === "pending")
       ? `<div class="answer">
            <button class="yes" data-id="${e.id}" data-status="accepted">Да</button>
            <button class="no" data-id="${e.id}" data-status="declined">Нет</button>
@@ -306,6 +307,7 @@ function renderList() {
     const clHtml = (e.title === "Магазин" && e.checklist && e.checklist.length)
       ? renderChecklistHtml(e.checklist, true)
       : "";
+    const statusLabel = e.title === "Магазин" ? "Список" : STATUS_TEXT[e.status];
     return `<article class="card ${e.status}" data-id="${e.id}">
       <div class="card-header">
         <h3>${esc(e.title)}</h3>
@@ -316,7 +318,7 @@ function renderList() {
       </div>
       ${e.description ? `<p>${esc(e.description)}</p>` : ""}
       ${clHtml}
-      <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span><b>${STATUS_TEXT[e.status]}</b></div>
+      <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span><b>${statusLabel}</b></div>
       ${answer}
     </article>`;
   }).join("");

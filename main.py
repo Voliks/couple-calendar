@@ -192,14 +192,24 @@ async def api_create_event(request: web.Request) -> web.Response:
     # Нормализуем чеклист (только для «Магазин»)
     if title == "Магазин" and isinstance(checklist, list):
         checklist = _normalize_checklist(checklist)
+        initial_status = "accepted"  # Магазин не требует подтверждения
     else:
         checklist = []
+        initial_status = "pending"
 
-    event = await db.create_event(tg_user.id, user["partner_id"], title, description, date, checklist)
-    await safe_send(
-        user["partner_id"],
-        f"➕ Новое событие на {date}: {title}! Откройте календарь для ответа.",
+    event = await db.create_event(
+        tg_user.id, user["partner_id"], title, description, date, checklist, status=initial_status
     )
+    if title == "Магазин":
+        await safe_send(
+            user["partner_id"],
+            f"🛒 Новый список покупок на {date}. Можно сразу отмечать пункты.",
+        )
+    else:
+        await safe_send(
+            user["partner_id"],
+            f"➕ Новое событие на {date}: {title}! Откройте календарь для ответа.",
+        )
     return web.json_response(event_to_dict(event, tg_user.id), status=201)
 
 
