@@ -1,4 +1,4 @@
-"""Слой работы с БД с поддержкой общих идей для категории Секс из JSON-файла."""
+"""Слой работы с БД: готовые идеи для секса читаются напрямую из sex_ideas.json."""
 from __future__ import annotations
 
 import asyncio
@@ -314,20 +314,6 @@ async def _m3_sex_ideas() -> None:
         )
         """
     )
-    count = (await _exec("SELECT COUNT(*) FROM sex_ideas")).rows[0][0]
-    if count == 0:
-        json_path = Path(__file__).parent / "sex_ideas.json"
-        if json_path.exists():
-            try:
-                data = json.loads(json_path.read_text(encoding="utf-8"))
-                for category_title, texts in data.items():
-                    for txt in texts:
-                        await _exec(
-                            "INSERT INTO sex_ideas (user_id, category_title, text) VALUES (?, ?, ?)",
-                            (0, category_title, txt)
-                        )
-            except Exception:
-                log.exception("Не удалось прочитать sex_ideas.json")
 
 
 MIGRATIONS = [(1, _m1_base), (2, _m2_features), (3, _m3_sex_ideas)]
@@ -521,7 +507,7 @@ async def update_event(event_id, title, description, date, event_time, category,
         (
             "UPDATE events SET title = ?, description = ?, date = ?, time = ?, category = ?, "
             "status = CASE WHEN ? THEN 'pending' ELSE status END WHERE id = ?",
-            (title, description, date, event_time, category, int(reset_user := reset_status), event_id),
+            (title, description, date, event_time, category, int(reset_status), event_id),
         )
     ]
     if reset_status:
@@ -565,17 +551,36 @@ async def delete_item(event_id: int, item_id: int) -> bool:
 
 
 async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
+    ideas = []
+    
+    # 1. Всегда читаем актуальные идеи прямо из sex_ideas.json на лету
+    json_path = Path(__file__).parent / "sex_ideas.json"
+    if json_path.exists():
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            idx = 1
+            for category_title, texts in data.items():
+                for txt in texts:
+                    ideas.append({"id": f"json_{idx}", "category_title": category_title, "text": txt})
+                    idx += 1
+        except Exception:
+            log.exception("Не удалось прочитать sex_ideas.json")
+
+    # 2. Также подтягиваем кастомные идеи, которые пользователи добавили сами через интерфейс
     if partner_id:
         rs = await _exec(
-            "SELECT id, category_title, text FROM sex_ideas WHERE user_id IN (0, ?, ?) ORDER BY id DESC",
+            "SELECT id, category_title, text FROM sex_ideas WHERE user_id IN (?, ?) ORDER BY id DESC",
             (user_id, partner_id)
         )
     else:
         rs = await _exec(
-            "SELECT id, category_title, text FROM sex_ideas WHERE user_id IN (0, ?) ORDER BY id DESC",
+            "SELECT id, category_title, text FROM sex_ideas WHERE user_id = ? ORDER BY id DESC",
             (user_id,)
         )
-    return [{"id": r[0], "category_title": r[1], "text": r[2]} for r in rs.rows]
+    for r in rs.rows:
+        ideas.append({"id": r[0], "category_title": r[1], "text": r[2]})
+
+    return ideas
 
 
 async def add_sex_idea(user_id: int, category_title: str, text: str) -> int | None:
