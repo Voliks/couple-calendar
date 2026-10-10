@@ -1,4 +1,4 @@
-"""Слой работы с БД с поддержкой общих идей для категории Секс."""
+"""Слой работы с БД с поддержкой общих идей для категории Секс из JSON-файла."""
 from __future__ import annotations
 
 import asyncio
@@ -10,6 +10,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Sequence
 
 log = logging.getLogger(__name__)
@@ -315,16 +316,18 @@ async def _m3_sex_ideas() -> None:
     )
     count = (await _exec("SELECT COUNT(*) FROM sex_ideas")).rows[0][0]
     if count == 0:
-        defaults = [
-            (0, "🔥 Страстная ночь", "Свечи, приглушенный свет и массаж"),
-            (0, "🔥 Страстная ночь", "Интимная обстановка без спешки"),
-            (0, "🌹 Романтический вечер", "Ужин при свечах и долгие разговоры"),
-            (0, "🌹 Романтический вечер", "Прогулка под луной и романтика"),
-            (0, "✨ Эксперименты и фантазии", "Воплощение заветных желаний"),
-            (0, "✨ Эксперименты и фантазии", "Новые ролевые игры и сюрпризы")
-        ]
-        for uid, c_title, txt in defaults:
-            await _exec("INSERT INTO sex_ideas (user_id, category_title, text) VALUES (?, ?, ?)", (uid, c_title, txt))
+        json_path = Path(__file__).parent / "sex_ideas.json"
+        if json_path.exists():
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+                for category_title, texts in data.items():
+                    for txt in texts:
+                        await _exec(
+                            "INSERT INTO sex_ideas (user_id, category_title, text) VALUES (?, ?, ?)",
+                            (0, category_title, txt)
+                        )
+            except Exception:
+                log.exception("Не удалось прочитать sex_ideas.json")
 
 
 MIGRATIONS = [(1, _m1_base), (2, _m2_features), (3, _m3_sex_ideas)]
@@ -518,7 +521,7 @@ async def update_event(event_id, title, description, date, event_time, category,
         (
             "UPDATE events SET title = ?, description = ?, date = ?, time = ?, category = ?, "
             "status = CASE WHEN ? THEN 'pending' ELSE status END WHERE id = ?",
-            (title, description, date, event_time, category, int(reset_status), event_id),
+            (title, description, date, event_time, category, int(reset_user := reset_status), event_id),
         )
     ]
     if reset_status:
