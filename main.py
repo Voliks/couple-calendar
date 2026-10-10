@@ -480,7 +480,6 @@ async def api_update_event(request: web.Request) -> web.Response:
     if not changed:
         return web.json_response(event_to_dict(event, tg_user.id))
 
-    # Для «Магазина» ответ не нужен — не сбрасываем статус и не просим ответить.
     reset = identity_changed and data["category"] != "shop"
     updated = await db.update_event(
         event["id"], data["title"], data["description"], data["date"],
@@ -599,6 +598,26 @@ async def api_add_sex_idea(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "ideas": ideas})
 
 
+async def api_delete_sex_idea(request: web.Request) -> web.Response:
+    """Удаляет идею: кастомную — из БД у обоих; JSON — прячет у обоих, файл не трогает."""
+    tg_user = authenticate(request, write=True)
+    user = await db.get_or_create_user(tg_user.id)
+    raw_id = request.match_info.get("id", "")
+
+    if raw_id.startswith("json_"):
+        await db.hide_json_idea_for_pair(tg_user.id, user["partner_id"], raw_id)
+    else:
+        try:
+            idea_id = int(raw_id)
+        except ValueError:
+            raise ApiError("Некорректный id идеи")
+        if not await db.delete_sex_idea(idea_id):
+            raise ApiError("Идея не найдена", 404)
+
+    ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
+    return web.json_response({"status": "deleted", "ideas": ideas})
+
+
 async def api_unlink(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     partner = await db.unlink_partners(tg_user.id)
@@ -630,10 +649,28 @@ async def send_due_reminders() -> None:
         )
 
 
+async def cleanup_old_reminders() -> None:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    try:
+        n = await db.purge_old_reminders(cutoff)
+        if n:
+            logging.info("Очищено старых напоминаний: %s", n)
+    except Exception:
+        logging.exception("Не удалось очистить старые напоминания")
+
+
+_last_cleanup_day: str = ""
+
+
 async def reminder_loop() -> None:
+    global _last_cleanup_day
     while True:
         try:
             await send_due_reminders()
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if today != _last_cleanup_day:
+                _last_cleanup_day = today
+                await cleanup_old_reminders()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -667,6 +704,7 @@ async def main() -> None:
     app.router.add_put("/api/events/{id}/items/{item_id}", api_set_item)
     app.router.add_delete("/api/events/{id}/items/{item_id}", api_delete_item)
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
+    app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
 
     runner = web.AppRunner(app)
