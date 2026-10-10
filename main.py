@@ -443,6 +443,7 @@ def parse_event_payload(body: dict) -> dict:
 
 
 def event_to_dict(e: dict, uid: int) -> dict:
+    is_creator = e["created_by"] == uid
     return {
         "id": e["id"],
         "title": e["title"],
@@ -456,8 +457,14 @@ def event_to_dict(e: dict, uid: int) -> dict:
         "reaction": e.get("reaction", ""),
         "reaction_by": e.get("reaction_by"),
         "reaction_mine": e.get("reaction_by") == uid,
-        "decline_comment": e.get("decline_comment", ""),
-        "is_creator": e["created_by"] == uid,
+        "decline_comment_creator": e.get("decline_comment_creator", ""),
+        "decline_comment_target": e.get("decline_comment_target", ""),
+        "my_comment_slot": "creator" if is_creator else "target",
+        "my_decline_comment": (
+            e.get("decline_comment_creator", "") if is_creator
+            else e.get("decline_comment_target", "")
+        ),
+        "is_creator": is_creator,
         "checklist": e["checklist"],
     }
 
@@ -649,13 +656,14 @@ async def api_respond(request: web.Request) -> web.Response:
         raise ApiError("Отвечать на событие может только приглашённый", 403)
 
     comment = str(body.get("comment") or "").strip()[:500]
+    slot = "creator" if event["created_by"] == tg_user.id else "target"
 
-    if event["status"] != status or comment != event.get("decline_comment", ""):
+    if event["status"] != status or comment != event.get(f"decline_comment_{slot}", ""):
         await db.set_status(event["id"], status)
         if status == "declined":
-            await db.set_decline_comment(event["id"], comment)
+            await db.set_decline_comment_slot(event["id"], slot, comment)
         else:
-            await db.set_decline_comment(event["id"], "")
+            await db.set_decline_comment_slot(event["id"], slot, "")
 
         what = "принял(а)" if status == "accepted" else "отклонил(а)"
         icon = "✅" if status == "accepted" else "❌"
@@ -670,7 +678,6 @@ async def api_respond(request: web.Request) -> web.Response:
 
 
 async def api_set_reaction(request: web.Request) -> web.Response:
-    """Ставит/снимает эмодзи-реакцию. Только для принятых событий."""
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     body = await read_json(request)
@@ -689,7 +696,8 @@ async def api_set_reaction(request: web.Request) -> web.Response:
 
 
 async def api_set_decline_comment(request: web.Request) -> web.Response:
-    """Оставить/изменить текстовый комментарий к отклонённому событию."""
+    """Оставить/изменить текстовый комментарий к отклонённому событию.
+    Автор и приглашённый пишут в разные слоты — друг друга не затирают."""
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     if event["category"] in ("shop", "todo"):
@@ -700,7 +708,8 @@ async def api_set_decline_comment(request: web.Request) -> web.Response:
     body = await read_json(request)
     comment = str(body.get("comment") or "").strip()[:500]
 
-    await db.set_decline_comment(event["id"], comment)
+    slot = "creator" if event["created_by"] == tg_user.id else "target"
+    await db.set_decline_comment_slot(event["id"], slot, comment)
     updated = await db.get_event(event["id"])
     return web.json_response(event_to_dict(updated, tg_user.id))
 
