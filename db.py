@@ -408,6 +408,20 @@ async def _m10_two_comments() -> None:
     await _add_column("events", "decline_comment_target", "TEXT NOT NULL DEFAULT ''")
 
 
+async def _m11_reactions_table() -> None:
+    """Отдельная реакция у каждого пользователя — таблица reactions."""
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS reactions (
+            event_id INTEGER NOT NULL,
+            user_id  INTEGER NOT NULL,
+            emoji    TEXT NOT NULL,
+            PRIMARY KEY (event_id, user_id)
+        )
+        """
+    )
+
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -419,6 +433,7 @@ MIGRATIONS = [
     (8, _m8_todo),
     (9, _m9_reactions),
     (10, _m10_two_comments),
+    (11, _m11_reactions_table),
 ]
 
 
@@ -431,8 +446,6 @@ async def _migrate() -> None:
             await fn()
             await _exec("INSERT INTO schema_version (version) VALUES (?)", (version,))
 
-
-# ==================== sex_ideas.json ====================
 
 def _load_json_ideas_sync() -> dict:
     path = Path(__file__).parent / "sex_ideas.json"
@@ -449,8 +462,6 @@ def _load_json_ideas_sync() -> dict:
 async def _load_json_ideas() -> dict:
     return await asyncio.to_thread(_load_json_ideas_sync)
 
-
-# ==================== users ====================
 
 USER_COLS = "telegram_id, partner_id, invite_code, invite_expires, tz"
 
@@ -536,6 +547,7 @@ async def unlink_partners(user_id: int) -> int | None:
         [
             (f"DELETE FROM checklist_items WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM reminders WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
+            (f"DELETE FROM reactions WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM events WHERE {pair}", pargs),
             ("UPDATE users SET partner_id = NULL, invite_expires = 0 WHERE telegram_id IN (?, ?)",
              (user_id, p)),
@@ -543,8 +555,6 @@ async def unlink_partners(user_id: int) -> int | None:
     )
     return p
 
-
-# ==================== events ====================
 
 EVENT_COLS = (
     "id, created_by, target_user, title, description, date, time, category, status, "
@@ -573,23 +583,35 @@ def _event(r) -> dict | None:
         "decline_comment": r[13] or "",
         "decline_comment_creator": r[14] or "",
         "decline_comment_target": r[15] or "",
+        "reactions": {},
         "checklist": [],
     }
 
 
 async def _attach_items(events: list[dict]) -> list[dict]:
     shop = [e for e in events if e["category"] == "shop"]
-    if not shop:
-        return events
-    by_id = {e["id"]: e for e in shop}
-    marks = ",".join("?" * len(by_id))
-    rs = await _exec(
-        f"SELECT id, event_id, text, checked FROM checklist_items "
-        f"WHERE event_id IN ({marks}) ORDER BY id",
-        tuple(by_id),
-    )
-    for item_id, event_id, text, checked in rs.rows:
-        by_id[event_id]["checklist"].append({"id": item_id, "text": text, "checked": bool(checked)})
+    if shop:
+        by_id = {e["id"]: e for e in shop}
+        marks = ",".join("?" * len(by_id))
+        rs = await _exec(
+            f"SELECT id, event_id, text, checked FROM checklist_items "
+            f"WHERE event_id IN ({marks}) ORDER BY id",
+            tuple(by_id),
+        )
+        for item_id, event_id, text, checked in rs.rows:
+            by_id[event_id]["checklist"].append({"id": item_id, "text": text, "checked": bool(checked)})
+
+    if events:
+        ids = [e["id"] for e in events]
+        marks = ",".join("?" * len(ids))
+        rs = await _exec(
+            f"SELECT event_id, user_id, emoji FROM reactions WHERE event_id IN ({marks})",
+            tuple(ids),
+        )
+        by_id = {e["id"]: e for e in events}
+        for event_id, user_id, emoji in rs.rows:
+            by_id[event_id]["reactions"][user_id] = emoji
+
     return events
 
 
@@ -664,6 +686,7 @@ async def delete_event(event_id: int) -> None:
         [
             ("DELETE FROM checklist_items WHERE event_id = ?", (event_id,)),
             ("DELETE FROM reminders WHERE event_id = ?", (event_id,)),
+            ("DELETE FROM reactions WHERE event_id = ?", (event_id,)),
             ("DELETE FROM events WHERE id = ?", (event_id,)),
         ]
     )
@@ -692,14 +715,28 @@ async def delete_item(event_id: int, item_id: int) -> bool:
 
 
 async def set_reaction(event_id: int, emoji: str, by_user_id: int) -> None:
+    """Ставит/снимает реакцию КОНКРЕТНОГО пользователя. Пустая строка — снять."""
+    if not emoji:
+        await _exec(
+            "DELETE FROM reactions WHERE event_id = ? AND user_id = ?",
+            (event_id, by_user_id),
+        )
+        return
     await _exec(
-        "UPDATE events SET reaction = ?, reaction_by = ? WHERE id = ?",
-        (emoji, by_user_id, event_id),
+        "INSERT INTO reactions (event_id, user_id, emoji) VALUES (?, ?, ?) "
+        "ON CONFLICT(event_id, user_id) DO UPDATE SET emoji = excluded.emoji",
+        (event_id, by_user_id, emoji),
     )
 
 
+async def get_event_reactions(event_id: int) -> dict[int, str]:
+    rs = await _exec(
+        "SELECT user_id, emoji FROM reactions WHERE event_id = ?", (event_id,)
+    )
+    return {r[0]: r[1] for r in rs.rows}
+
+
 async def set_decline_comment(event_id: int, comment: str) -> None:
-    """Старое поле — оставлено для совместимости. Используйте set_decline_comment_slot."""
     await _exec(
         "UPDATE events SET decline_comment = ? WHERE id = ?",
         (comment, event_id),
@@ -713,8 +750,6 @@ async def set_decline_comment_slot(event_id: int, slot: str, comment: str) -> No
     col = "decline_comment_creator" if slot == "creator" else "decline_comment_target"
     await _exec(f"UPDATE events SET {col} = ? WHERE id = ?", (comment, event_id))
 
-
-# ==================== sex_ideas ====================
 
 async def _hidden_idea_keys(user_id: int, partner_id: int | None) -> set[str]:
     if partner_id:
@@ -847,8 +882,6 @@ async def get_archived_ideas(limit: int = 2000) -> list[dict]:
     ]
 
 
-# ==================== напоминания ====================
-
 async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
     rs = await _exec(
         "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz, e.category, e.priority "
@@ -889,10 +922,12 @@ async def purge_old_todos(date_before: str) -> int:
              "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
             ("DELETE FROM reminders WHERE event_id IN "
              "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
+            ("DELETE FROM reactions WHERE event_id IN "
+             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
             ("DELETE FROM events WHERE category = 'todo' AND date < ?", (date_before,)),
         ]
     )
-    return rs[2].affected
+    return rs[3].affected
 
 
 async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
@@ -906,8 +941,6 @@ async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
     )
     return [_event(r) for r in rs.rows]
 
-
-# ==================== статистика ====================
 
 async def pair_stats(user_id: int, partner_id: int) -> dict:
     pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
