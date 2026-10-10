@@ -61,6 +61,7 @@ SEX_IDEA_CATEGORIES = {
 }
 
 ALLOWED_REACTIONS = ["❤️", "🔥", "😍", "😂", "👍", "🎉", "😮", "🥰"]
+ALLOWED_REMIND_BEFORE = {0, 5, 15, 30, 60, 120, 180, 360, 720, 1440, 2880}
 
 
 def _origin(url: str) -> str:
@@ -147,6 +148,16 @@ def fmt_date(s: str) -> str:
 
 def title_part(title: str) -> str:
     return f" «{title}»" if SHOW_TITLES else ""
+
+
+def _humanize_minutes(m: int) -> str:
+    if m < 60:
+        return f"{m} мин"
+    if m < 1440:
+        h = m // 60
+        return f"{h} ч"
+    d = m // 1440
+    return f"{d} дн"
 
 
 @lru_cache(maxsize=256)
@@ -404,6 +415,11 @@ def parse_event_payload(body: dict) -> dict:
     color = str(body.get("color", "")).strip()
     priority = str(body.get("priority", "")).strip()
 
+    try:
+        remind_before = int(body.get("remind_before", 0))
+    except (TypeError, ValueError):
+        remind_before = 0
+
     if category not in CATEGORIES:
         raise ApiError("Неизвестная категория")
     if len(description) > 2000:
@@ -424,9 +440,14 @@ def parse_event_payload(body: dict) -> dict:
             raise ApiError("Выберите цвет для дела")
         if priority not in db.TODO_PRIORITIES:
             raise ApiError("Выберите приоритет")
+        if remind_before not in ALLOWED_REMIND_BEFORE:
+            raise ApiError("Недопустимое время напоминания")
+        if remind_before and not event_time:
+            raise ApiError("Напоминание возможно только если указано время")
     else:
         color = ""
         priority = ""
+        remind_before = 0
 
     title = CATEGORY_TITLES.get(category, "Событие")
 
@@ -438,6 +459,7 @@ def parse_event_payload(body: dict) -> dict:
         "category": category,
         "color": color,
         "priority": priority,
+        "remind_before": remind_before,
         "items": normalize_items(body.get("checklist")) if category == "shop" else [],
     }
 
@@ -458,6 +480,7 @@ def event_to_dict(e: dict, uid: int) -> dict:
         "status": e["status"],
         "color": e.get("color", ""),
         "priority": e.get("priority", ""),
+        "remind_before": e.get("remind_before", 0),
         "reaction_mine": my_reaction,
         "reaction_partner": partner_reaction,
         "decline_comment_creator": e.get("decline_comment_creator", ""),
@@ -540,6 +563,7 @@ async def api_state(request: web.Request) -> web.Response:
             "todo_colors": db.TODO_COLORS,
             "todo_priorities": sorted(db.TODO_PRIORITIES),
             "allowed_reactions": ALLOWED_REACTIONS,
+            "allowed_remind_before": sorted(ALLOWED_REMIND_BEFORE),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -564,7 +588,7 @@ async def api_create_event(request: web.Request) -> web.Response:
     event = await db.create_event(
         tg_user.id, user["partner_id"], data["title"], data["description"],
         data["date"], data["time"], data["category"], data["items"],
-        color=data["color"], priority=data["priority"],
+        color=data["color"], priority=data["priority"], remind_before=data["remind_before"],
     )
 
     if data["category"] == "shop":
@@ -576,9 +600,12 @@ async def api_create_event(request: web.Request) -> web.Response:
     elif data["category"] == "todo":
         icon = CATEGORY_ICONS.get("todo", "📌")
         at = f" в {data['time']}" if data["time"] else ""
+        extra = ""
+        if data["time"] and data["remind_before"]:
+            extra = f" (напомню за {_humanize_minutes(data['remind_before'])})"
         notify(
             user["partner_id"],
-            f"{icon} Новое дело на {fmt_date(data['date'])}{at}. "
+            f"{icon} Новое дело на {fmt_date(data['date'])}{at}.{extra} "
             "Откройте календарь, чтобы посмотреть.",
         )
     else:
@@ -605,7 +632,8 @@ async def api_update_event(request: web.Request) -> web.Response:
     ) != (event["title"], event["category"], event["date"], event["time"])
     changed = identity_changed or data["description"] != event["description"] \
               or data["color"] != event.get("color", "") \
-              or data["priority"] != event.get("priority", "")
+              or data["priority"] != event.get("priority", "") \
+              or data["remind_before"] != (event.get("remind_before") or 0)
     if not changed:
         return web.json_response(event_to_dict(event, tg_user.id))
 
@@ -613,7 +641,7 @@ async def api_update_event(request: web.Request) -> web.Response:
     updated = await db.update_event(
         event["id"], data["title"], data["description"], data["date"],
         data["time"], data["category"], reset_status=reset,
-        color=data["color"], priority=data["priority"],
+        color=data["color"], priority=data["priority"], remind_before=data["remind_before"],
     )
     if data["category"] == "shop":
         notify(
@@ -681,7 +709,6 @@ async def api_respond(request: web.Request) -> web.Response:
 
 
 async def api_set_reaction(request: web.Request) -> web.Response:
-    """Ставит/снимает эмодзи-реакцию КОНКРЕТНОГО пользователя. Только для принятых."""
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     body = await read_json(request)
@@ -700,8 +727,6 @@ async def api_set_reaction(request: web.Request) -> web.Response:
 
 
 async def api_set_decline_comment(request: web.Request) -> web.Response:
-    """Оставить/изменить комментарий к отклонённому событию.
-    Автор и приглашённый пишут в разные слоты. Автору уходит пуш."""
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     if event["category"] in ("shop", "todo"):
@@ -854,16 +879,43 @@ async def index(_: web.Request) -> web.FileResponse:
 
 async def send_due_reminders() -> None:
     now_utc = datetime.now(timezone.utc)
-    lo = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
-    hi = (now_utc + timedelta(days=1)).strftime("%Y-%m-%d")
+    lo = (now_utc - timedelta(days=3)).strftime("%Y-%m-%d")
+    hi = (now_utc + timedelta(days=3)).strftime("%Y-%m-%d")
+
     for c in await db.reminder_candidates(lo, hi):
-        local = now_utc.astimezone(get_zone(c["tz"]) or timezone.utc)
-        if local.strftime("%Y-%m-%d") != c["date"] or local.hour < REMINDER_HOUR:
+        tz = get_zone(c["tz"]) or timezone.utc
+        local_now = now_utc.astimezone(tz)
+
+        # Дела с временем и remind_before — точная отправка за N минут
+        if c["category"] == "todo" and c["time"] and c.get("remind_before"):
+            try:
+                hh, mm = c["time"].split(":")
+                event_dt_local = datetime.fromisoformat(
+                    f"{c['date']}T{hh}:{mm}:00"
+                ).replace(tzinfo=tz)
+            except Exception:
+                continue
+            remind_at = event_dt_local - timedelta(minutes=c["remind_before"])
+            if not (remind_at <= local_now < remind_at + timedelta(minutes=2)):
+                continue
+            if not await db.mark_reminded(c["event_id"], c["user_id"]):
+                continue
+            prio = c.get("priority") or "medium"
+            icon = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(prio, "📌")
+            await safe_send(
+                c["user_id"],
+                f"{icon} Напоминание: {c['title']} в {c['time']} "
+                f"(через {_humanize_minutes(c['remind_before'])}).",
+            )
+            continue
+
+        # Остальные и дела без remind_before — как раньше: в день события после REMINDER_HOUR
+        if local_now.strftime("%Y-%m-%d") != c["date"] or local_now.hour < REMINDER_HOUR:
             continue
         if not await db.mark_reminded(c["event_id"], c["user_id"]):
             continue
         at = f" в {c['time']}" if c["time"] else ""
-        if c.get("category") == "todo":
+        if c["category"] == "todo":
             prio = c.get("priority") or "medium"
             icon = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(prio, "📌")
             await safe_send(
