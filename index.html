@@ -455,6 +455,8 @@ function checklistHtml(e) {
 }
 
 function answerHtml(e, expired) {
+  // Магазин — не приглашение, ответ не нужен.
+  if (e.category === "shop") return "";
   if (e.is_creator) return "";
   if (e.status === "pending") {
     return expired ? "" : `<div class="answer">
@@ -470,20 +472,22 @@ function answerHtml(e, expired) {
 function cardHtml(e) {
   const cat = CATEGORIES[e.category] || CATEGORIES.rest;
   const sk = statusKey(e);
+  const isShop = e.category === "shop";
   const tag = `${cat.icon} ${cat.label}${e.time ? " · " + esc(e.time) : ""}`;
   const actions = e.is_creator
     ? `<div class="card-actions">
          <button class="icon-btn edit-btn" aria-label="Редактировать" title="Редактировать">✏️</button>
          <button class="icon-btn delete-btn" aria-label="Удалить" title="Удалить">🗑️</button>
        </div>` : "";
-  return `<article class="card ${sk}" data-id="${e.id}">
+  const statusLabel = isShop ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
+  return `<article class="card ${isShop ? "accepted" : sk}" data-id="${e.id}">
     <div class="card-header">
       <div style="flex:1;min-width:0"><h3>${esc(e.title)}</h3><div class="tag">${tag}</div></div>
       ${actions}
     </div>
     ${e.description ? `<p>${esc(e.description)}</p>` : ""}
-    ${e.category === "shop" ? checklistHtml(e) : ""}
-    <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span><b>${STATUS_TEXT[sk]}</b></div>
+    ${isShop ? checklistHtml(e) : ""}
+    <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span>${statusLabel}</div>
     ${answerHtml(e, sk === "expired")}
   </article>`;
 }
@@ -734,11 +738,10 @@ function renderIdeas() {
   }
   listEl.innerHTML = filtered.map(i => {
     const on = selectedIdeas.includes(i.text);
-    const isJson = String(i.id).startsWith("json_");
     return `<div class="idea-item${on ? " selected" : ""}" data-idea-text="${esc(i.text)}">
       <span class="idea-check">✓</span>
       <span class="idea-text">${esc(i.text)}</span>
-      ${isJson ? "" : '<button type="button" class="idea-del" data-idea-del aria-label="Удалить">×</button>'}
+      <button type="button" class="idea-del" data-idea-del aria-label="Удалить">×</button>
     </div>`;
   }).join("");
 }
@@ -794,15 +797,23 @@ document.querySelectorAll(".sex-idea-trigger").forEach((btn) => {
   };
 });
 
-$("ideasContainer").addEventListener("click", (e) => {
+$("ideasContainer").addEventListener("click", async (e) => {
   const del = e.target.closest("[data-idea-del]");
   if (del) {
     const item = del.closest("[data-idea-text]");
     const text = item.dataset.ideaText;
-    state.sex_ideas = state.sex_ideas.filter(i => i.text !== text || String(i.id).startsWith("json_"));
-    selectedIdeas = selectedIdeas.filter(t => t !== text);
-    renderIdeas();
-    renderChosen();
+    const idea = (state.sex_ideas || []).find(i => i.text === text);
+    if (!idea) return;
+    try {
+      const res = await api(`/sex-ideas/${idea.id}`, { method: "DELETE" });
+      state.sex_ideas = res.ideas;
+      selectedIdeas = selectedIdeas.filter(t => t !== text);
+      renderIdeas();
+      renderChosen();
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (err) {
+      toast(err.message);
+    }
     return;
   }
   const item = e.target.closest("[data-idea-text]");
@@ -859,7 +870,7 @@ function openForm(event = null) {
   currentCategoryTitle = "";
   renderChosen();
 
-  $("fHint").hidden = !event;
+  $("fHint").hidden = !event || (event && event.category === "shop");
   $("fError").textContent = "";
   formChecklist = [];
   updateFormSections();
