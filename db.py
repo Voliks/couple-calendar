@@ -409,7 +409,6 @@ async def _m10_two_comments() -> None:
 
 
 async def _m11_reactions_table() -> None:
-    """Отдельная реакция у каждого пользователя — таблица reactions."""
     await _exec(
         """
         CREATE TABLE IF NOT EXISTS reactions (
@@ -420,6 +419,10 @@ async def _m11_reactions_table() -> None:
         )
         """
     )
+
+
+async def _m12_todo_remind_before() -> None:
+    await _add_column("events", "remind_before", "INTEGER NOT NULL DEFAULT 0")
 
 
 MIGRATIONS = [
@@ -434,6 +437,7 @@ MIGRATIONS = [
     (9, _m9_reactions),
     (10, _m10_two_comments),
     (11, _m11_reactions_table),
+    (12, _m12_todo_remind_before),
 ]
 
 
@@ -559,7 +563,7 @@ async def unlink_partners(user_id: int) -> int | None:
 EVENT_COLS = (
     "id, created_by, target_user, title, description, date, time, category, status, "
     "color, priority, reaction, reaction_by, decline_comment, "
-    "decline_comment_creator, decline_comment_target"
+    "decline_comment_creator, decline_comment_target, remind_before"
 )
 
 
@@ -583,6 +587,7 @@ def _event(r) -> dict | None:
         "decline_comment": r[13] or "",
         "decline_comment_creator": r[14] or "",
         "decline_comment_target": r[15] or "",
+        "remind_before": r[16] or 0,
         "reactions": {},
         "checklist": [],
     }
@@ -621,12 +626,14 @@ async def count_events_created(user_id: int) -> int:
 
 
 async def create_event(created_by, target_user, title, description, date, event_time, category,
-                       items=None, color: str = "", priority: str = ""):
+                       items=None, color: str = "", priority: str = "", remind_before: int = 0):
     initial_status = "accepted" if category in ("shop", "todo") else "pending"
     rs = await _exec(
-        "INSERT INTO events (created_by, target_user, title, description, date, time, category, status, color, priority) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (created_by, target_user, title, description, date, event_time, category, initial_status, color, priority),
+        "INSERT INTO events "
+        "(created_by, target_user, title, description, date, time, category, status, color, priority, remind_before) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (created_by, target_user, title, description, date, event_time, category, initial_status,
+         color, priority, remind_before),
     )
     event_id = rs.last_id
     if items and category == "shop":
@@ -663,13 +670,13 @@ async def set_status(event_id: int, status: str) -> None:
 
 
 async def update_event(event_id, title, description, date, event_time, category, reset_status: bool,
-                       color: str = "", priority: str = ""):
+                       color: str = "", priority: str = "", remind_before: int = 0):
     stmts = [
         (
             "UPDATE events SET title = ?, description = ?, date = ?, time = ?, category = ?, "
-            "color = ?, priority = ?, "
+            "color = ?, priority = ?, remind_before = ?, "
             "status = CASE WHEN ? THEN 'pending' ELSE status END WHERE id = ?",
-            (title, description, date, event_time, category, color, priority,
+            (title, description, date, event_time, category, color, priority, remind_before,
              int(reset_status), event_id),
         )
     ]
@@ -715,7 +722,6 @@ async def delete_item(event_id: int, item_id: int) -> bool:
 
 
 async def set_reaction(event_id: int, emoji: str, by_user_id: int) -> None:
-    """Ставит/снимает реакцию КОНКРЕТНОГО пользователя. Пустая строка — снять."""
     if not emoji:
         await _exec(
             "DELETE FROM reactions WHERE event_id = ? AND user_id = ?",
@@ -744,7 +750,6 @@ async def set_decline_comment(event_id: int, comment: str) -> None:
 
 
 async def set_decline_comment_slot(event_id: int, slot: str, comment: str) -> None:
-    """slot = 'creator' (автор события) | 'target' (приглашённый)."""
     if slot not in ("creator", "target"):
         raise ValueError("bad slot")
     col = "decline_comment_creator" if slot == "creator" else "decline_comment_target"
@@ -884,7 +889,7 @@ async def get_archived_ideas(limit: int = 2000) -> list[dict]:
 
 async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
     rs = await _exec(
-        "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz, e.category, e.priority "
+        "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz, e.category, e.priority, e.remind_before "
         "FROM events e JOIN users u ON u.telegram_id IN (e.created_by, e.target_user) "
         "WHERE e.status = 'accepted' AND e.date BETWEEN ? AND ? "
         "AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.event_id = e.id AND r.user_id = u.telegram_id)",
@@ -893,7 +898,8 @@ async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
     return [
         {
             "event_id": r[0], "title": r[1], "date": r[2], "time": r[3] or "",
-            "user_id": r[4], "tz": r[5] or "", "category": r[6] or "", "priority": r[7] or "",
+            "user_id": r[4], "tz": r[5] or "", "category": r[6] or "",
+            "priority": r[7] or "", "remind_before": r[8] or 0,
         }
         for r in rs.rows
     ]
