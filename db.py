@@ -23,10 +23,21 @@ INVITE_TTL = 7 * 24 * 3600
 MAX_ITEMS_PER_EVENT = 50
 MAX_EVENTS_PER_USER = 10000
 
-# Служебный раздел в sex_ideas.json — не отдаётся в UI (на случай, если остался
-# от прежней версии). Больше туда ничего не пишем.
 ARCHIVE_KEY = "_архив"
 CUSTOM_ARCHIVE_TITLE = "Свои идеи"
+
+# Палитра цветов для «Дел» (индексы 0..7). Хранится в events.color.
+TODO_COLORS = [
+    "#ef4444",  # красный
+    "#f97316",  # оранжевый
+    "#eab308",  # жёлтый
+    "#22c55e",  # зелёный
+    "#14b8a6",  # бирюзовый
+    "#3b82f6",  # синий
+    "#8b5cf6",  # фиолетовый
+    "#ec4899",  # розовый
+]
+TODO_PRIORITIES = {"low", "medium", "high"}
 
 
 class DbError(Exception):
@@ -370,16 +381,15 @@ async def _m6_hidden_ideas() -> None:
 
 
 async def _m7_archived_ideas() -> None:
-    """Архив удалённых идей — долговременный, живёт в БД."""
     await _exec(
         """
         CREATE TABLE IF NOT EXISTS archived_ideas (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
             category_title TEXT NOT NULL,
             text           TEXT NOT NULL,
-            source         TEXT NOT NULL,     -- 'custom' | 'builtin'
-            archived_by    INTEGER,           -- telegram_id того, кто удалил
-            archived_at    INTEGER NOT NULL   -- unix seconds
+            source         TEXT NOT NULL,
+            archived_by    INTEGER,
+            archived_at    INTEGER NOT NULL
         )
         """
     )
@@ -387,6 +397,12 @@ async def _m7_archived_ideas() -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_archived_ideas "
         "ON archived_ideas (category_title, text, source)"
     )
+
+
+async def _m8_todo() -> None:
+    """Поля для категории «Дела»: color, priority."""
+    await _add_column("events", "color", "TEXT NOT NULL DEFAULT ''")
+    await _add_column("events", "priority", "TEXT NOT NULL DEFAULT ''")
 
 
 MIGRATIONS = [
@@ -397,6 +413,7 @@ MIGRATIONS = [
     (5, _m5_fix_checklist),
     (6, _m6_hidden_ideas),
     (7, _m7_archived_ideas),
+    (8, _m8_todo),
 ]
 
 
@@ -524,7 +541,7 @@ async def unlink_partners(user_id: int) -> int | None:
 
 # ==================== events ====================
 
-EVENT_COLS = "id, created_by, target_user, title, description, date, time, category, status"
+EVENT_COLS = "id, created_by, target_user, title, description, date, time, category, status, color, priority"
 
 
 def _event(r) -> dict | None:
@@ -540,6 +557,8 @@ def _event(r) -> dict | None:
         "time": r[6] or "",
         "category": r[7],
         "status": r[8],
+        "color": r[9] or "",
+        "priority": r[10] or "",
         "checklist": [],
     }
 
@@ -565,12 +584,14 @@ async def count_events_created(user_id: int) -> int:
     return rs.rows[0][0]
 
 
-async def create_event(created_by, target_user, title, description, date, event_time, category, items=None):
-    initial_status = "accepted" if category == "shop" else "pending"
+async def create_event(created_by, target_user, title, description, date, event_time, category,
+                       items=None, color: str = "", priority: str = ""):
+    # «Магазин» и «Дела» — без подтверждения.
+    initial_status = "accepted" if category in ("shop", "todo") else "pending"
     rs = await _exec(
-        "INSERT INTO events (created_by, target_user, title, description, date, time, category, status) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (created_by, target_user, title, description, date, event_time, category, initial_status),
+        "INSERT INTO events (created_by, target_user, title, description, date, time, category, status, color, priority) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (created_by, target_user, title, description, date, event_time, category, initial_status, color, priority),
     )
     event_id = rs.last_id
     if items and category == "shop":
@@ -606,12 +627,15 @@ async def set_status(event_id: int, status: str) -> None:
     await _exec("UPDATE events SET status = ? WHERE id = ?", (status, event_id))
 
 
-async def update_event(event_id, title, description, date, event_time, category, reset_status: bool):
+async def update_event(event_id, title, description, date, event_time, category, reset_status: bool,
+                       color: str = "", priority: str = ""):
     stmts = [
         (
             "UPDATE events SET title = ?, description = ?, date = ?, time = ?, category = ?, "
+            "color = ?, priority = ?, "
             "status = CASE WHEN ? THEN 'pending' ELSE status END WHERE id = ?",
-            (title, description, date, event_time, category, int(reset_status), event_id),
+            (title, description, date, event_time, category, color, priority,
+             int(reset_status), event_id),
         )
     ]
     if reset_status:
@@ -673,7 +697,6 @@ async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
     ideas = []
     hidden = await _hidden_idea_keys(user_id, partner_id)
 
-    # 1. sex_ideas.json (кроме служебного _архив, если он там остался)
     data = await _load_json_ideas()
     idx = 1
     for category_title, texts in data.items():
@@ -688,7 +711,6 @@ async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
                 continue
             ideas.append({"id": key, "category_title": category_title, "text": txt})
 
-    # 2. Кастомные идеи
     if partner_id:
         rs = await _exec(
             "SELECT id, category_title, text FROM sex_ideas "
@@ -716,7 +738,6 @@ async def add_sex_idea(user_id: int, category_title: str, text: str) -> int | No
 
 
 async def archive_idea(category_title: str, text: str, source: str, archived_by: int | None) -> None:
-    """Пишет идею в архив в БД. Дубликаты игнорируются."""
     await _exec(
         "INSERT OR IGNORE INTO archived_ideas "
         "(category_title, text, source, archived_by, archived_at) "
@@ -726,7 +747,6 @@ async def archive_idea(category_title: str, text: str, source: str, archived_by:
 
 
 async def delete_sex_idea(idea_id: int, archived_by: int | None = None) -> bool:
-    """Удаляет кастомную идею из БД, архивирует её текст."""
     rs = await _exec(
         "SELECT category_title, text FROM sex_ideas WHERE id = ? AND source = 'sex'",
         (idea_id,),
@@ -742,10 +762,7 @@ async def delete_sex_idea(idea_id: int, archived_by: int | None = None) -> bool:
     return rs2.affected == 1
 
 
-async def hide_json_idea_for_pair(
-    user_id: int, partner_id: int | None, idea_key: str
-) -> None:
-    """Прячет JSON-идею у обоих партнёров и архивирует её в БД."""
+async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key: str) -> None:
     try:
         data = await _load_json_ideas()
         idx = 1
@@ -798,14 +815,17 @@ async def get_archived_ideas(limit: int = 2000) -> list[dict]:
 
 async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
     rs = await _exec(
-        "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz "
+        "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz, e.category, e.priority "
         "FROM events e JOIN users u ON u.telegram_id IN (e.created_by, e.target_user) "
         "WHERE e.status = 'accepted' AND e.date BETWEEN ? AND ? "
         "AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.event_id = e.id AND r.user_id = u.telegram_id)",
         (date_from, date_to),
     )
     return [
-        {"event_id": r[0], "title": r[1], "date": r[2], "time": r[3] or "", "user_id": r[4], "tz": r[5] or ""}
+        {
+            "event_id": r[0], "title": r[1], "date": r[2], "time": r[3] or "",
+            "user_id": r[4], "tz": r[5] or "", "category": r[6] or "", "priority": r[7] or "",
+        }
         for r in rs.rows
     ]
 
@@ -824,6 +844,34 @@ async def purge_old_reminders(date_before: str) -> int:
         (date_before,),
     )
     return rs.affected
+
+
+async def purge_old_todos(date_before: str) -> int:
+    """Полное удаление дел старше N месяцев (по полю date)."""
+    rs = await _batch(
+        [
+            ("DELETE FROM checklist_items WHERE event_id IN "
+             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
+            ("DELETE FROM reminders WHERE event_id IN "
+             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
+            ("DELETE FROM events WHERE category = 'todo' AND date < ?", (date_before,)),
+        ]
+    )
+    return rs[2].affected
+
+
+async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
+    """Дела старше 1 месяца — для экрана «Архив»."""
+    from datetime import date as _d, timedelta as _td
+    cutoff = (_d.today() - _td(days=31)).isoformat()
+    rs = await _exec(
+        "SELECT id, created_by, target_user, title, description, date, time, category, status, color, priority "
+        "FROM events "
+        "WHERE category = 'todo' AND date < ? AND (created_by = ? OR target_user = ?) "
+        "ORDER BY date DESC, id DESC LIMIT ?",
+        (cutoff, user_id, user_id, limit),
+    )
+    return [_event(r) for r in rs.rows]
 
 
 # ==================== статистика ====================
