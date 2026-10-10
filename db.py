@@ -327,7 +327,41 @@ async def _m4_ideas_source() -> None:
     )
 
 
-MIGRATIONS = [(1, _m1_base), (2, _m2_features), (3, _m3_sex_ideas), (4, _m4_ideas_source)]
+async def _m5_fix_checklist() -> None:
+    # Чиним старую схему checklist_items, где не было колонки checked.
+    await _add_column("checklist_items", "checked", "INTEGER NOT NULL DEFAULT 0")
+    # На всякий случай — если таблицы вообще не было.
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS checklist_items (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            text     TEXT NOT NULL,
+            checked  INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    # И подстрахуемся по events/reminders — если прыгали с самой первой схемы.
+    await _add_column("events", "time", "TEXT NOT NULL DEFAULT ''")
+    await _add_column("events", "category", "TEXT NOT NULL DEFAULT 'rest'")
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS reminders (
+            event_id INTEGER NOT NULL,
+            user_id  INTEGER NOT NULL,
+            PRIMARY KEY (event_id, user_id)
+        )
+        """
+    )
+
+
+MIGRATIONS = [
+    (1, _m1_base),
+    (2, _m2_features),
+    (3, _m3_sex_ideas),
+    (4, _m4_ideas_source),
+    (5, _m5_fix_checklist),
+]
 
 
 async def _migrate() -> None:
