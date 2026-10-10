@@ -218,7 +218,7 @@
   .archive-text { flex: 1; word-break: break-word; }
   .archive-date { font-size: 12px; color: var(--hint); margin-top: 2px; }
 
-  /* Реакции (только на принятые события) */
+  /* Реакции (только на принятые) */
   .reaction-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   .reaction-badge { font-size: 22px; padding: 4px 10px; border-radius: 999px;
     background: var(--bg); border: 2px solid transparent; cursor: pointer; line-height: 1; }
@@ -227,11 +227,10 @@
     background: var(--bg2); color: var(--hint); font-weight: 600; }
   .reaction-add:active { background: rgba(36,129,204,.2); color: var(--accent); }
 
-  /* Комментарий к отклонённому */
+  /* Комментарии к отклонённому */
   .decline-comment { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px;
     background: rgba(var(--declined), .12); color: var(--text); font-size: 14px;
     white-space: pre-wrap; word-break: break-word; }
-  .decline-comment.empty { background: transparent; padding: 0; }
   .comment-add { display: inline-block; margin-top: 8px; font-size: 13px; padding: 6px 10px;
     border-radius: 999px; background: var(--bg2); color: var(--hint); font-weight: 600; }
   .comment-add:active { background: rgba(36,129,204,.2); color: var(--accent); }
@@ -479,7 +478,7 @@ function confirmDialog(message, onYes) {
   if (confirm(message)) onYes();
 }
 
-/* ===== Диалог комментария к отклонённому событию ===== */
+/* ===== Диалог комментария ===== */
 function openCommentDialog(initial, onConfirm) {
   const overlay = document.createElement("div");
   overlay.className = "overlay";
@@ -636,7 +635,7 @@ function answerHtml(e, expired) {
   return `<div class="answer one"><button class="soft" data-status="accepted">Всё-таки принять</button></div>`;
 }
 
-/* Реакции: только на принятые события */
+/* Реакции — только на принятые события */
 function reactionHtml(e) {
   if (e.category === "shop" || e.category === "todo") return "";
   if (e.status !== "accepted") return "";
@@ -650,22 +649,24 @@ function reactionHtml(e) {
   </div>`;
 }
 
-/* Комментарий: только к отклонённым */
+/* Комментарии — только к отклонённым, каждый пишет в свой слот */
 function declineCommentHtml(e) {
   if (e.category === "shop" || e.category === "todo") return "";
   if (e.status !== "declined") return "";
-  if (!e.is_creator) {
-    // Партнёр (тот, кого пригласили) может оставить/править комментарий
-    const text = e.decline_comment
-      ? `<p class="decline-comment">💬 ${esc(e.decline_comment)}</p>`
-      : "";
-    return `${text}<button type="button" class="comment-add" data-comment-open>${e.decline_comment ? "✏️ Изменить комментарий" : "💬 Оставить комментарий"}</button>`;
-  }
-  // Автор видит комментарий (если есть), но не редактирует
-  if (e.decline_comment) {
-    return `<p class="decline-comment">💬 ${esc(e.decline_comment)}</p>`;
-  }
-  return "";
+
+  const cCreator = e.decline_comment_creator || "";
+  const cTarget  = e.decline_comment_target || "";
+  const mine = e.my_decline_comment || "";
+
+  const lines = [];
+  if (cCreator) lines.push(`<p class="decline-comment">💬 Автор: ${esc(cCreator)}</p>`);
+  if (cTarget)  lines.push(`<p class="decline-comment">💬 Партнёр: ${esc(cTarget)}</p>`);
+
+  const button = `<button type="button" class="comment-add" data-comment-open>${
+    mine ? "✏️ Изменить свой комментарий" : "💬 Оставить комментарий"
+  }</button>`;
+
+  return `${lines.join("")}${button}`;
 }
 
 function cardHtml(e) {
@@ -902,7 +903,7 @@ $("list").addEventListener("click", async (ev) => {
   const event = findEvent(eventId);
   if (!event) return;
 
-  // Реакция (только для accepted)
+  // Реакция
   if (ev.target.closest("[data-reaction-open]") || ev.target.closest("[data-reaction-toggle]")) {
     if (event.category === "shop" || event.category === "todo") return;
     if (event.status !== "accepted") return;
@@ -910,11 +911,11 @@ $("list").addEventListener("click", async (ev) => {
     return;
   }
 
-  // Комментарий (только для declined, не автор)
+  // Комментарий (оба партнёра, каждый — в свой слот)
   if (ev.target.closest("[data-comment-open]")) {
     if (event.category === "shop" || event.category === "todo") return;
     if (event.status !== "declined") return;
-    openCommentDialog(event.decline_comment || "", async (comment) => {
+    openCommentDialog(event.my_decline_comment || "", async (comment) => {
       try {
         const updated = await api(`/events/${eventId}/comment`, { method: "POST", body: { comment } });
         replaceEvent(updated);
@@ -936,8 +937,7 @@ $("list").addEventListener("click", async (ev) => {
   if (statusBtn) {
     const newStatus = statusBtn.dataset.status;
     if (newStatus === "declined") {
-      // Сразу открываем диалог комментария
-      openCommentDialog(event.decline_comment || "", async (comment) => {
+      openCommentDialog(event.my_decline_comment || "", async (comment) => {
         try {
           const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: "declined", comment } });
           replaceEvent(updated);
