@@ -330,7 +330,6 @@ async def _m4_ideas_source() -> None:
 async def _m5_fix_checklist() -> None:
     # Чиним старую схему checklist_items, где не было колонки checked.
     await _add_column("checklist_items", "checked", "INTEGER NOT NULL DEFAULT 0")
-    # На всякий случай — если таблицы вообще не было.
     await _exec(
         """
         CREATE TABLE IF NOT EXISTS checklist_items (
@@ -341,7 +340,6 @@ async def _m5_fix_checklist() -> None:
         )
         """
     )
-    # И подстрахуемся по events/reminders — если прыгали с самой первой схемы.
     await _add_column("events", "time", "TEXT NOT NULL DEFAULT ''")
     await _add_column("events", "category", "TEXT NOT NULL DEFAULT 'rest'")
     await _exec(
@@ -508,10 +506,12 @@ async def count_events_created(user_id: int) -> int:
 
 
 async def create_event(created_by, target_user, title, description, date, event_time, category, items=None):
+    # «Магазин» — это заметка для двоих, ответ партнёра не нужен: сразу accepted.
+    initial_status = "accepted" if category == "shop" else "pending"
     rs = await _exec(
-        "INSERT INTO events (created_by, target_user, title, description, date, time, category) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (created_by, target_user, title, description, date, event_time, category),
+        "INSERT INTO events (created_by, target_user, title, description, date, time, category, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (created_by, target_user, title, description, date, event_time, category, initial_status),
     )
     event_id = rs.last_id
     if items and category == "shop":
