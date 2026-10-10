@@ -150,11 +150,6 @@
   .todo-color:active { transform: scale(.9); }
   .todo-color.selected { border-color: var(--text); }
 
-  .todo-priorities { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 6px; }
-  .prio-btn { padding: 10px 6px; border-radius: 10px; background: var(--bg2); font-size: 13px; font-weight: 600;
-    border: 2px solid transparent; }
-  .prio-btn.selected { border-color: var(--accent); background: rgba(36,129,204,.12); }
-
   .checklist { margin-top: 10px; }
   .checklist-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06); }
   .checklist-item:last-child { border-bottom: 0; }
@@ -305,12 +300,6 @@
     <div id="todoSection" hidden>
       <label>Цвет</label>
       <div class="todo-colors" id="todoColors"></div>
-      <label>Приоритет</label>
-      <div class="todo-priorities" id="todoPriorities">
-        <button type="button" class="prio-btn" data-prio="low">🟢 Низкий</button>
-        <button type="button" class="prio-btn" data-prio="medium">🟡 Средний</button>
-        <button type="button" class="prio-btn" data-prio="high">🔴 Высокий</button>
-      </div>
       <label for="fRemindBefore">Напомнить за</label>
       <select id="fRemindBefore">
         <option value="0">Не напоминать</option>
@@ -1001,7 +990,6 @@ let formChecklist = [];
 let selectedIdeas = [];
 let currentCategoryTitle = "";
 let formColor = "";
-let formPriority = "medium";
 const todoColorsFallback = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
 
 function availableTodoColors() {
@@ -1049,9 +1037,6 @@ function renderTodoSection() {
     `<button type="button" class="todo-color${c === formColor ? " selected" : ""}"
              data-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
   ).join("");
-  document.querySelectorAll("#todoPriorities .prio-btn").forEach(b => {
-    b.classList.toggle("selected", b.dataset.prio === formPriority);
-  });
 }
 
 $("todoColors").addEventListener("click", (e) => {
@@ -1060,9 +1045,6 @@ $("todoColors").addEventListener("click", (e) => {
   formColor = b.dataset.color;
   renderTodoSection();
   tg.HapticFeedback?.selectionChanged();
-});
-document.querySelectorAll("#todoPriorities .prio-btn").forEach(b => {
-  b.onclick = () => { formPriority = b.dataset.prio; renderTodoSection(); tg.HapticFeedback?.selectionChanged(); };
 });
 
 function renderFormChecklist() {
@@ -1260,11 +1242,9 @@ function openForm(event = null) {
 
   if (event && event.category === "todo") {
     formColor = event.color || availableTodoColors()[6];
-    formPriority = event.priority || "medium";
     $("fRemindBefore").value = String(event.remind_before || 0);
   } else {
     formColor = availableTodoColors()[6];
-    formPriority = "medium";
     $("fRemindBefore").value = "0";
   }
 
@@ -1343,7 +1323,6 @@ $("fSave").onclick = async () => {
   if (category === "todo") {
     if (!formColor) { $("fError").textContent = "Выберите цвет"; return; }
     payload.color = formColor;
-    payload.priority = formPriority || "medium";
     const rb = parseInt($("fRemindBefore").value, 10) || 0;
     payload.remind_before = ($("fTime").value ? rb : 0);
   }
