@@ -44,12 +44,14 @@ CATEGORY_TITLES = {
     "rest": "Отдых",
     "sex": "Секс",
     "shop": "Магазин",
+    "todo": "Дела",
 }
 
 CATEGORY_ICONS = {
     "rest": "🌿",
     "sex": "🔥",
     "shop": "🛒",
+    "todo": "📌",
 }
 
 SEX_IDEA_CATEGORIES = {
@@ -71,7 +73,7 @@ ALLOWED_ORIGINS = {_origin(WEBAPP_URL)} | {
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
-CATEGORIES = {"rest", "sex", "shop"}
+CATEGORIES = {"rest", "sex", "shop", "todo"}
 INIT_DATA_MAX_AGE = 24 * 3600
 
 RATE_LIMIT = 40
@@ -271,8 +273,8 @@ async def event_inline_action(call: CallbackQuery):
         await call.answer("Отвечать может только приглашённый", show_alert=True)
         return
 
-    if event["category"] == "shop":
-        await call.answer("Это список покупок — отвечать не нужно", show_alert=True)
+    if event["category"] in ("shop", "todo"):
+        await call.answer("Это не требует ответа", show_alert=True)
         return
 
     if action == "accept":
@@ -397,6 +399,8 @@ def parse_event_payload(body: dict) -> dict:
     date = str(body.get("date", ""))
     event_time = str(body.get("time") or "").strip()
     category = str(body.get("category", "rest"))
+    color = str(body.get("color", "")).strip()
+    priority = str(body.get("priority", "")).strip()
 
     if category not in CATEGORIES:
         raise ApiError("Неизвестная категория")
@@ -413,6 +417,15 @@ def parse_event_payload(body: dict) -> dict:
     if event_time and not TIME_RE.match(event_time):
         raise ApiError("Некорректное время")
 
+    if category == "todo":
+        if color not in db.TODO_COLORS:
+            raise ApiError("Выберите цвет для дела")
+        if priority not in db.TODO_PRIORITIES:
+            raise ApiError("Выберите приоритет")
+    else:
+        color = ""
+        priority = ""
+
     title = CATEGORY_TITLES.get(category, "Событие")
 
     return {
@@ -421,6 +434,8 @@ def parse_event_payload(body: dict) -> dict:
         "date": date,
         "time": event_time,
         "category": category,
+        "color": color,
+        "priority": priority,
         "items": normalize_items(body.get("checklist")) if category == "shop" else [],
     }
 
@@ -434,6 +449,8 @@ def event_to_dict(e: dict, uid: int) -> dict:
         "time": e["time"],
         "category": e["category"],
         "status": e["status"],
+        "color": e.get("color", ""),
+        "priority": e.get("priority", ""),
         "is_creator": e["created_by"] == uid,
         "checklist": e["checklist"],
     }
@@ -504,6 +521,8 @@ async def api_state(request: web.Request) -> web.Response:
             "events": [event_to_dict(e, tg_user.id) for e in events],
             "sex_ideas": sex_ideas,
             "stats": stats,
+            "todo_colors": db.TODO_COLORS,
+            "todo_priorities": sorted(db.TODO_PRIORITIES),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -528,12 +547,21 @@ async def api_create_event(request: web.Request) -> web.Response:
     event = await db.create_event(
         tg_user.id, user["partner_id"], data["title"], data["description"],
         data["date"], data["time"], data["category"], data["items"],
+        color=data["color"], priority=data["priority"],
     )
 
     if data["category"] == "shop":
         notify(
             user["partner_id"],
             f"🛒 Партнёр добавил список покупок на {fmt_date(data['date'])}. "
+            "Откройте календарь, чтобы посмотреть.",
+        )
+    elif data["category"] == "todo":
+        icon = CATEGORY_ICONS.get("todo", "📌")
+        at = f" в {data['time']}" if data["time"] else ""
+        notify(
+            user["partner_id"],
+            f"{icon} Новое дело на {fmt_date(data['date'])}{at}. "
             "Откройте календарь, чтобы посмотреть.",
         )
     else:
@@ -551,26 +579,35 @@ async def api_create_event(request: web.Request) -> web.Response:
 async def api_update_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
-    if event["created_by"] != tg_user.id:
+    # Для «Дел» редактировать может любой из пары; для остальных — только автор.
+    if event["category"] != "todo" and event["created_by"] != tg_user.id:
         raise ApiError("Редактировать событие может только его автор", 403)
 
     data = parse_event_payload(await read_json(request))
     identity_changed = (
         data["title"], data["category"], data["date"], data["time"]
     ) != (event["title"], event["category"], event["date"], event["time"])
-    changed = identity_changed or data["description"] != event["description"]
+    changed = identity_changed or data["description"] != event["description"] \
+              or data["color"] != event.get("color", "") \
+              or data["priority"] != event.get("priority", "")
     if not changed:
         return web.json_response(event_to_dict(event, tg_user.id))
 
-    reset = identity_changed and data["category"] != "shop"
+    reset = identity_changed and data["category"] not in ("shop", "todo")
     updated = await db.update_event(
         event["id"], data["title"], data["description"], data["date"],
         data["time"], data["category"], reset_status=reset,
+        color=data["color"], priority=data["priority"],
     )
     if data["category"] == "shop":
         notify(
             event["target_user"],
             f"✏️ Список покупок на {fmt_date(data['date'])} изменён.",
+        )
+    elif data["category"] == "todo":
+        notify(
+            event["target_user"],
+            f"📌 Дело на {fmt_date(data['date'])} изменено.",
         )
     else:
         suffix = " Оно снова ждёт вашего ответа." if identity_changed else ""
@@ -584,7 +621,8 @@ async def api_update_event(request: web.Request) -> web.Response:
 async def api_delete_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
-    if event["created_by"] != tg_user.id:
+    # «Дела» может удалять любой из пары.
+    if event["category"] != "todo" and event["created_by"] != tg_user.id:
         raise ApiError("Удалить событие может только его автор. Вы можете отказаться от него.", 403)
 
     await db.delete_event(event["id"])
@@ -592,6 +630,11 @@ async def api_delete_event(request: web.Request) -> web.Response:
         notify(
             event["target_user"],
             f"🗑 Список покупок на {fmt_date(event['date'])} удалён автором.",
+        )
+    elif event["category"] == "todo":
+        notify(
+            event["target_user"],
+            f"🗑 Дело на {fmt_date(event['date'])} удалено.",
         )
     else:
         notify(
@@ -606,8 +649,8 @@ async def api_respond(request: web.Request) -> web.Response:
     event = await member_event(request, tg_user.id)
     body = await read_json(request)
 
-    if event["category"] == "shop":
-        raise ApiError("На список покупок не нужно отвечать")
+    if event["category"] in ("shop", "todo"):
+        raise ApiError("Это не требует ответа")
 
     status = body.get("status")
     if status not in ("accepted", "declined"):
@@ -681,7 +724,6 @@ async def api_add_sex_idea(request: web.Request) -> web.Response:
 
 
 async def api_delete_sex_idea(request: web.Request) -> web.Response:
-    """Удаляет идею: кастомную — из БД + архив; JSON — прячет у обоих + архив."""
     tg_user = authenticate(request, write=True)
     user = await db.get_or_create_user(tg_user.id)
     raw_id = request.match_info.get("id", "")
@@ -701,8 +743,6 @@ async def api_delete_sex_idea(request: web.Request) -> web.Response:
 
 
 async def api_archive(request: web.Request) -> web.Response:
-    """Только для ручного просмотра: отдаёт архив удалённых идей из БД.
-    Авторизация не нужна — данные не секретные (тексты идей, id того, кто удалил)."""
     try:
         items = await db.get_archived_ideas()
     except Exception:
@@ -710,6 +750,31 @@ async def api_archive(request: web.Request) -> web.Response:
         items = []
     body = json.dumps(items, ensure_ascii=False, indent=2)
     return web.Response(text=body, content_type="application/json; charset=utf-8")
+
+
+async def api_archived_todos(request: web.Request) -> web.Response:
+    """Экран «Архив дел» — дела старше 1 месяца."""
+    tg_user = authenticate(request)
+    try:
+        items = await db.list_archived_todos(tg_user.id)
+    except Exception:
+        logging.exception("Не удалось прочитать архив дел")
+        items = []
+    # отдаём как event_to_dict-подобную структуру
+    out = [{
+        "id": e["id"],
+        "title": e["title"],
+        "description": e["description"],
+        "date": e["date"],
+        "time": e["time"],
+        "category": e["category"],
+        "status": e["status"],
+        "color": e.get("color", ""),
+        "priority": e.get("priority", ""),
+        "is_creator": e["created_by"] == tg_user.id,
+        "checklist": [],
+    } for e in items]
+    return web.json_response({"items": out})
 
 
 async def api_unlink(request: web.Request) -> web.Response:
@@ -736,21 +801,38 @@ async def send_due_reminders() -> None:
         if not await db.mark_reminded(c["event_id"], c["user_id"]):
             continue
         at = f" в {c['time']}" if c["time"] else ""
-        await safe_send(
-            c["user_id"],
-            f"⏰ Сегодня у вас запланировано событие{at}{title_part(c['title'])}. "
-            "Откройте календарь, чтобы посмотреть детали.",
-        )
+        if c.get("category") == "todo":
+            prio = c.get("priority") or "medium"
+            icon = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(prio, "📌")
+            await safe_send(
+                c["user_id"],
+                f"{icon} Сегодня дело{at}{title_part(c['title'])}. "
+                "Откройте календарь, чтобы посмотреть.",
+            )
+        else:
+            await safe_send(
+                c["user_id"],
+                f"⏰ Сегодня у вас запланировано событие{at}{title_part(c['title'])}. "
+                "Откройте календарь, чтобы посмотреть детали.",
+            )
 
 
 async def cleanup_old_reminders() -> None:
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    now = datetime.now(timezone.utc)
+    cutoff_reminders = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+    cutoff_todos = (now - timedelta(days=182)).strftime("%Y-%m-%d")  # ~6 месяцев
     try:
-        n = await db.purge_old_reminders(cutoff)
+        n = await db.purge_old_reminders(cutoff_reminders)
         if n:
             logging.info("Очищено старых напоминаний: %s", n)
     except Exception:
         logging.exception("Не удалось очистить старые напоминания")
+    try:
+        n2 = await db.purge_old_todos(cutoff_todos)
+        if n2:
+            logging.info("Удалено старых дел (6+ мес): %s", n2)
+    except Exception:
+        logging.exception("Не удалось очистить старые дела")
 
 
 _last_cleanup_day: str = ""
@@ -791,6 +873,7 @@ async def main() -> None:
     app.router.add_get("/health", health_check)
     app.router.add_get("/api/state", api_state)
     app.router.add_get("/api/archive.json", api_archive)
+    app.router.add_get("/api/todos/archive", api_archived_todos)
     app.router.add_post("/api/events", api_create_event)
     app.router.add_put("/api/events/{id}", api_update_event)
     app.router.add_delete("/api/events/{id}", api_delete_event)
