@@ -23,6 +23,11 @@ INVITE_TTL = 7 * 24 * 3600
 MAX_ITEMS_PER_EVENT = 50
 MAX_EVENTS_PER_USER = 10000
 
+# --- Архив удалённых идей (только для ручного просмотра файла) ---
+ARCHIVE_KEY = "_архив"
+CUSTOM_ARCHIVE_TITLE = "Свои идеи"
+JSON_PATH = Path(__file__).parent / "sex_ideas.json"
+
 
 class DbError(Exception):
     pass
@@ -353,7 +358,6 @@ async def _m5_fix_checklist() -> None:
 
 
 async def _m6_hidden_ideas() -> None:
-    # Скрытые идеи из sex_ideas.json: файл общий для всех, а прячем их для пары.
     await _exec(
         """
         CREATE TABLE IF NOT EXISTS hidden_ideas (
@@ -384,6 +388,56 @@ async def _migrate() -> None:
             await fn()
             await _exec("INSERT INTO schema_version (version) VALUES (?)", (version,))
 
+
+# ==================== sex_ideas.json: чтение/архив ====================
+
+def _load_json_ideas_sync() -> dict:
+    if not JSON_PATH.exists():
+        return {}
+    try:
+        data = json.loads(JSON_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        log.exception("Не удалось прочитать sex_ideas.json")
+        return {}
+
+
+def _save_json_ideas_sync(data: dict) -> None:
+    """Атомарно перезаписывает sex_ideas.json через временный файл."""
+    tmp = JSON_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, JSON_PATH)
+
+
+def _archive_idea_sync(category_title: str, text: str) -> None:
+    """Дописывает идею в раздел _архив (без дублей). Синхронно."""
+    data = _load_json_ideas_sync()
+    archive = data.setdefault(ARCHIVE_KEY, {})
+    if not isinstance(archive, dict):
+        archive = {}
+        data[ARCHIVE_KEY] = archive
+    bucket = archive.setdefault(category_title, [])
+    if not isinstance(bucket, list):
+        bucket = []
+        archive[category_title] = bucket
+    if text not in bucket:
+        bucket.append(text)
+    _save_json_ideas_sync(data)
+
+
+async def archive_idea(category_title: str, text: str) -> None:
+    """Публичная асинхронная обёртка — из обработчиков API."""
+    await asyncio.to_thread(_archive_idea_sync, category_title, text)
+
+
+def read_json_archive_sync() -> dict:
+    """Возвращает только _архив из sex_ideas.json (для /api/archive.json)."""
+    data = _load_json_ideas_sync()
+    archive = data.get(ARCHIVE_KEY, {})
+    return archive if isinstance(archive, dict) else {}
+
+
+# ==================== users ====================
 
 USER_COLS = "telegram_id, partner_id, invite_code, invite_expires, tz"
 
@@ -477,6 +531,8 @@ async def unlink_partners(user_id: int) -> int | None:
     return p
 
 
+# ==================== events ====================
+
 EVENT_COLS = "id, created_by, target_user, title, description, date, time, category, status"
 
 
@@ -519,7 +575,6 @@ async def count_events_created(user_id: int) -> int:
 
 
 async def create_event(created_by, target_user, title, description, date, event_time, category, items=None):
-    # «Магазин» — это заметка для двоих, ответ партнёра не нужен: сразу accepted.
     initial_status = "accepted" if category == "shop" else "pending"
     rs = await _exec(
         "INSERT INTO events (created_by, target_user, title, description, date, time, category, status) "
@@ -608,8 +663,9 @@ async def delete_item(event_id: int, item_id: int) -> bool:
     return rs.affected == 1
 
 
+# ==================== sex_ideas ====================
+
 async def _hidden_idea_keys(user_id: int, partner_id: int | None) -> set[str]:
-    """Ключи JSON-идей, скрытых хотя бы одним из пары."""
     if partner_id:
         rs = await _exec(
             "SELECT DISTINCT idea_key FROM hidden_ideas WHERE user_id IN (?, ?)",
@@ -626,23 +682,22 @@ async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
     ideas = []
     hidden = await _hidden_idea_keys(user_id, partner_id)
 
-    # 1. Актуальные идеи из sex_ideas.json (минус скрытые для пары)
-    json_path = Path(__file__).parent / "sex_ideas.json"
-    if json_path.exists():
-        try:
-            data = json.loads(json_path.read_text(encoding="utf-8"))
-            idx = 1
-            for category_title, texts in data.items():
-                for txt in texts:
-                    key = f"json_{idx}"
-                    idx += 1
-                    if key in hidden:
-                        continue
-                    ideas.append({"id": key, "category_title": category_title, "text": txt})
-        except Exception:
-            log.exception("Не удалось прочитать sex_ideas.json")
+    # 1. sex_ideas.json, кроме служебного раздела _архив
+    data = await asyncio.to_thread(_load_json_ideas_sync)
+    idx = 1
+    for category_title, texts in data.items():
+        if category_title == ARCHIVE_KEY:
+            continue
+        if not isinstance(texts, list):
+            continue
+        for txt in texts:
+            key = f"json_{idx}"
+            idx += 1
+            if key in hidden:
+                continue
+            ideas.append({"id": key, "category_title": category_title, "text": txt})
 
-    # 2. Кастомные идеи (и свои, и партнёра) — только source='sex'
+    # 2. Кастомные идеи (и свои, и партнёра)
     if partner_id:
         rs = await _exec(
             "SELECT id, category_title, text FROM sex_ideas "
@@ -670,13 +725,46 @@ async def add_sex_idea(user_id: int, category_title: str, text: str) -> int | No
 
 
 async def delete_sex_idea(idea_id: int) -> bool:
-    """Удаляет кастомную идею из БД (у обоих партнёров). Чужую тоже можно."""
-    rs = await _exec("DELETE FROM sex_ideas WHERE id = ? AND source = 'sex'", (idea_id,))
-    return rs.affected == 1
+    """Удаляет кастомную идею из БД и архивирует её текст в sex_ideas.json."""
+    rs = await _exec(
+        "SELECT category_title, text FROM sex_ideas WHERE id = ? AND source = 'sex'",
+        (idea_id,),
+    )
+    if not rs.rows:
+        return False
+    _category_title, text = rs.rows[0]
+    try:
+        await archive_idea(CUSTOM_ARCHIVE_TITLE, text)
+    except Exception:
+        log.exception("Не удалось записать идею в архив (не критично)")
+    rs2 = await _exec("DELETE FROM sex_ideas WHERE id = ? AND source = 'sex'", (idea_id,))
+    return rs2.affected == 1
 
 
 async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key: str) -> None:
-    """Прячет JSON-идею у обоих партнёров. В файле она остаётся."""
+    """Прячет JSON-идею у обоих партнёров и архивирует её в sex_ideas.json."""
+    # Находим исходный текст по ключу json_N, чтобы положить его в _архив
+    try:
+        data = _load_json_ideas_sync()
+        idx = 1
+        found_title = None
+        found_text = None
+        for category_title, texts in data.items():
+            if category_title == ARCHIVE_KEY or not isinstance(texts, list):
+                continue
+            for txt in texts:
+                key = f"json_{idx}"
+                idx += 1
+                if key == idea_key:
+                    found_title, found_text = category_title, txt
+                    break
+            if found_text is not None:
+                break
+        if found_text is not None:
+            await archive_idea(found_title, found_text)
+    except Exception:
+        log.exception("Не удалось архивировать JSON-идею (не критично)")
+
     rows = [(user_id, idea_key)]
     if partner_id and partner_id != user_id:
         rows.append((partner_id, idea_key))
@@ -684,6 +772,8 @@ async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key
         [("INSERT OR IGNORE INTO hidden_ideas (user_id, idea_key) VALUES (?, ?)", r) for r in rows]
     )
 
+
+# ==================== напоминания ====================
 
 async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
     rs = await _exec(
@@ -707,7 +797,6 @@ async def mark_reminded(event_id: int, user_id: int) -> bool:
 
 
 async def purge_old_reminders(date_before: str) -> int:
-    """Удаляет напоминания по событиям старше указанной даты (YYYY-MM-DD)."""
     rs = await _exec(
         "DELETE FROM reminders WHERE event_id IN "
         "(SELECT id FROM events WHERE date < ?)",
@@ -716,8 +805,9 @@ async def purge_old_reminders(date_before: str) -> int:
     return rs.affected
 
 
+# ==================== статистика ====================
+
 async def pair_stats(user_id: int, partner_id: int) -> dict:
-    """Простая статистика по паре: счётчики по статусам и категориям."""
     pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
     pargs = (user_id, partner_id, partner_id, user_id)
 
