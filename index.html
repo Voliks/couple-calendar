@@ -51,7 +51,6 @@
   .day.today .num { color: var(--accent); font-weight: 700; }
   .day.selected { border-color: var(--accent); background: var(--bg2); }
 
-  /* Полоска сверху: сегменты цветов дел */
   .day .todo-bar { position: absolute; top: 2px; left: 6px; right: 6px; height: 4px;
     display: flex; gap: 1px; border-radius: 2px; overflow: hidden; }
   .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
@@ -144,14 +143,12 @@
     border-radius: 50%; flex-shrink: 0; }
   .chip .chip-x:hover { opacity: 1; background: rgba(0,0,0,.06); }
 
-  /* Палитра цветов для дел */
   .todo-colors { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin-top: 6px; }
   .todo-color { aspect-ratio: 1; border-radius: 50%; border: 3px solid transparent;
     transition: transform .1s, border-color .15s; }
   .todo-color:active { transform: scale(.9); }
   .todo-color.selected { border-color: var(--text); }
 
-  /* Приоритеты */
   .todo-priorities { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 6px; }
   .prio-btn { padding: 10px 6px; border-radius: 10px; background: var(--bg2); font-size: 13px; font-weight: 600;
     border: 2px solid transparent; }
@@ -215,12 +212,30 @@
   .ideas-done { width: 100%; margin-top: 12px; padding: 14px; border-radius: 12px;
     background: var(--accent); color: var(--accent-text); font-weight: 600; font-size: 16px; }
 
-  /* Архив дел */
   .archive-item { padding: 10px 0; border-bottom: 1px solid rgba(0,0,0,.06); display: flex; gap: 10px; align-items: flex-start; }
   .archive-item:last-child { border-bottom: 0; }
   .archive-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
   .archive-text { flex: 1; word-break: break-word; }
   .archive-date { font-size: 12px; color: var(--hint); margin-top: 2px; }
+
+  /* Реакции */
+  .reaction-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .reaction-badge { font-size: 22px; padding: 4px 10px; border-radius: 999px;
+    background: var(--bg); border: 2px solid transparent; cursor: pointer; line-height: 1; }
+  .reaction-badge.mine { border-color: var(--accent); background: rgba(36,129,204,.12); }
+  .reaction-add { font-size: 13px; padding: 6px 10px; border-radius: 999px;
+    background: var(--bg2); color: var(--hint); font-weight: 600; }
+  .reaction-add:active { background: rgba(36,129,204,.2); color: var(--accent); }
+  .decline-comment { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px;
+    background: rgba(var(--declined), .12); color: var(--text); font-size: 14px;
+    white-space: pre-wrap; word-break: break-word; }
+
+  .reaction-picker { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%); z-index: 40; background: var(--bg); border-radius: 16px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.25); padding: 10px 12px; display: flex; gap: 4px;
+    flex-wrap: wrap; justify-content: center; max-width: 92vw; animation: up .15s ease-out; }
+  .reaction-picker button { font-size: 26px; padding: 4px 6px; border-radius: 10px; line-height: 1; }
+  .reaction-picker button:active { background: var(--bg2); }
 </style>
 </head>
 <body>
@@ -260,7 +275,6 @@
   <button class="fab" id="add" aria-label="Добавить событие">+</button>
 </main>
 
-<!-- Форма создания / редактирования -->
 <div class="overlay" id="overlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <h2 id="sheetTitle">Новое событие</h2>
@@ -284,7 +298,6 @@
       <option value="todo">Дела</option>
     </select>
 
-    <!-- Дела: цвет + приоритет -->
     <div id="todoSection" hidden>
       <label>Цвет</label>
       <div class="todo-colors" id="todoColors"></div>
@@ -316,7 +329,6 @@
       </div>
     </div>
 
-    <!-- Список покупок (для магазина) — выше описания -->
     <div id="checklistSection" hidden>
       <label>Список покупок</label>
       <div class="checklist" id="fChecklist"></div>
@@ -339,7 +351,6 @@
   </div>
 </div>
 
-<!-- Модалка идей -->
 <div class="ideas-overlay" id="ideasOverlay" hidden>
   <div class="ideas-sheet" role="dialog" aria-modal="true">
     <div class="ideas-head">
@@ -359,7 +370,6 @@
   </div>
 </div>
 
-<!-- Архив дел -->
 <div class="overlay" id="archiveOverlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true">
     <h2>Архив дел</h2>
@@ -407,7 +417,10 @@ function hexToRgb(hex) {
   return m ? `${parseInt(m[1],16)}, ${parseInt(m[2],16)}, ${parseInt(m[3],16)}` : "139, 92, 246";
 }
 
-let state = { has_partner: false, invite_link: "", events: [], sex_ideas: [], stats: null, todo_colors: [] };
+let state = {
+  has_partner: false, invite_link: "", events: [], sex_ideas: [],
+  stats: null, todo_colors: [], allowed_reactions: [],
+};
 let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
 let editingEvent = null;
@@ -458,6 +471,32 @@ function confirmDialog(message, onYes) {
     if (tg.showConfirm) { tg.showConfirm(message, (ok) => { if (ok) onYes(); }); return; }
   } catch (e) {}
   if (confirm(message)) onYes();
+}
+
+function openDeclineDialog(eventId, onConfirm) {
+  const overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.innerHTML = `
+    <div class="sheet" role="dialog" aria-modal="true">
+      <h2>Почему отклоняете?</h2>
+      <label for="declineComment">Комментарий (необязательно)</label>
+      <textarea id="declineComment" maxlength="500" placeholder="Например: не смогу в этот день..."></textarea>
+      <div class="row">
+        <button class="btn ghost" id="declineCancel">Отмена</button>
+        <button class="btn primary" id="declineOk">Отклонить</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector("#declineCancel").onclick = close;
+  overlay.querySelector("#declineOk").onclick = () => {
+    const comment = overlay.querySelector("#declineComment").value.trim().slice(0, 500);
+    close();
+    onConfirm(comment);
+  };
+  setTimeout(() => overlay.querySelector("#declineComment").focus(), 50);
 }
 
 let etag = null, etagKey = "";
@@ -539,14 +578,12 @@ function renderCalendar() {
     const date = fmt(view.y, view.m, d);
     const list = byDay[date] || [];
 
-    // Полоска сверху: сегменты цветов дел, по порядку created_at (id)
     const todos = list.filter(x => x.category === "todo").slice().sort((a, b) => a.id - b.id);
     const todoBar = todos.length
       ? `<span class="todo-bar" aria-hidden="true">${todos.map(t =>
           `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
       : "";
 
-    // Точки — только для не-дел (у дел нет статуса pending/accepted в обычном смысле)
     const nonTodos = list.filter(x => x.category !== "todo");
     const st = new Set(nonTodos.map(statusKey));
     const dots = ["pending", "accepted", "declined", "expired"]
@@ -590,6 +627,19 @@ function answerHtml(e, expired) {
   return `<div class="answer one"><button class="soft" data-status="accepted">Всё-таки принять</button></div>`;
 }
 
+function reactionHtml(e) {
+  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.status !== "accepted" && e.status !== "declined") return "";
+  const mine = e.reaction_mine && e.reaction;
+  const display = e.reaction
+    ? `<span class="reaction-badge${mine ? " mine" : ""}" data-reaction-toggle>${esc(e.reaction)}</span>`
+    : "";
+  return `<div class="reaction-row">
+    ${display}
+    <button type="button" class="reaction-add" data-reaction-open aria-label="Поставить реакцию">😊+</button>
+  </div>`;
+}
+
 function cardHtml(e) {
   const cat = CATEGORIES[e.category] || CATEGORIES.rest;
   const sk = statusKey(e);
@@ -597,7 +647,6 @@ function cardHtml(e) {
   const isTodo = e.category === "todo";
   const tag = `${cat.icon} ${cat.label}${e.time ? " · " + esc(e.time) : ""}`;
 
-  // Дела: цвет левой полосы задаём через CSS-переменную
   const cardCls = isTodo ? "todo" : (isShop ? "accepted" : sk);
   const cardStyle = isTodo && e.color ? ` style="--c: ${hexToRgb(e.color)};"` : "";
 
@@ -608,6 +657,8 @@ function cardHtml(e) {
        </div>` : "";
 
   const statusLabel = (isShop || isTodo) ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
+  const declineComment = (e.status === "declined" && e.decline_comment)
+    ? `<p class="decline-comment">💬 ${esc(e.decline_comment)}</p>` : "";
 
   return `<article class="card ${cardCls}" data-id="${e.id}"${cardStyle}>
     <div class="card-header">
@@ -616,6 +667,8 @@ function cardHtml(e) {
     </div>
     ${isShop ? checklistHtml(e) : (e.description ? `<p>${esc(e.description)}</p>` : "")}
     ${isShop && e.description ? `<p>${esc(e.description)}</p>` : ""}
+    ${declineComment}
+    ${reactionHtml(e)}
     <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span>${statusLabel}</div>
     ${answerHtml(e, sk === "expired")}
   </article>`;
@@ -781,12 +834,52 @@ function addItem(eventId, input) {
   });
 }
 
+/* Реакции */
+let reactionPickerEl = null;
+function openReactionPicker(event, anchor) {
+  closeReactionPicker();
+  const list = (state.allowed_reactions && state.allowed_reactions.length)
+    ? state.allowed_reactions : ["❤️","🔥","😍","😂","👍","🎉","😮","🥰"];
+  const el = document.createElement("div");
+  el.className = "reaction-picker";
+  el.innerHTML = list.map(r => `<button type="button" data-r="${r}">${r}</button>`).join("")
+                + `<button type="button" data-r="" title="Убрать">✖️</button>`;
+  document.body.appendChild(el);
+  reactionPickerEl = el;
+  el.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-r]");
+    if (!b) return;
+    const emoji = b.dataset.r;
+    closeReactionPicker();
+    try {
+      replaceEvent(await api(`/events/${event.id}/reaction`, { method: "POST", body: { emoji } }));
+      tg.HapticFeedback?.notificationOccurred("success");
+      etag = null;
+      await load(true);
+    } catch (err) { toast(err.message); }
+  });
+  setTimeout(() => {
+    document.addEventListener("pointerdown", outsideCloseReaction, { once: true });
+  }, 0);
+}
+function outsideCloseReaction(e) {
+  if (reactionPickerEl && !reactionPickerEl.contains(e.target)) closeReactionPicker();
+}
+function closeReactionPicker() {
+  if (reactionPickerEl) { reactionPickerEl.remove(); reactionPickerEl = null; }
+}
+
 $("list").addEventListener("click", async (ev) => {
   const card = ev.target.closest(".card");
   if (!card) return;
   const eventId = card.dataset.id;
   const event = findEvent(eventId);
   if (!event) return;
+
+  if (ev.target.closest("[data-reaction-open]") || ev.target.closest("[data-reaction-toggle]")) {
+    openReactionPicker(event, card);
+    return;
+  }
 
   const toggle = ev.target.closest("[data-cl-toggle]");
   if (toggle) { toggleItem(eventId, toggle.closest("[data-item]").dataset.item, toggle.checked); return; }
@@ -798,9 +891,21 @@ $("list").addEventListener("click", async (ev) => {
 
   const statusBtn = ev.target.closest("[data-status]");
   if (statusBtn) {
+    const newStatus = statusBtn.dataset.status;
+    if (newStatus === "declined") {
+      openDeclineDialog(eventId, async (comment) => {
+        try {
+          await api(`/events/${eventId}/respond`, { method: "POST", body: { status: "declined", comment } });
+          tg.HapticFeedback?.notificationOccurred("success");
+          etag = null;
+          await load(true);
+        } catch (e) { toast(e.message); await load(); }
+      });
+      return;
+    }
     statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
     try {
-      replaceEvent(await api(`/events/${eventId}/respond`, { method: "POST", body: { status: statusBtn.dataset.status } }));
+      replaceEvent(await api(`/events/${eventId}/respond`, { method: "POST", body: { status: newStatus } }));
       tg.HapticFeedback?.notificationOccurred("success");
       etag = null;
       await load(true);
@@ -1249,7 +1354,7 @@ $("unlink").onclick = () => {
 
 function startPolling() {
   const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
-    && $("archiveOverlay").hidden && pendingOps === 0;
+    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl;
   setInterval(() => { if (canPoll()) load(true); }, 15000);
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
