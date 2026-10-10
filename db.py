@@ -1,922 +1,921 @@
+"""Слой работы с БД: готовые идеи для секса читаются напрямую из sex_ideas.json."""
+from __future__ import annotations
+
 import asyncio
-import contextlib
-import hashlib
 import json
 import logging
 import os
-import re
+import secrets
+import sqlite3
+import threading
 import time
-from collections import deque
-from datetime import date as date_cls, datetime, timedelta, timezone
-from functools import lru_cache
+from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlsplit
-from zoneinfo import ZoneInfo
+from typing import Any, Sequence
 
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import (
-    BotCommand,
-    CallbackQuery,
-    ErrorEvent,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-    WebAppInfo,
+log = logging.getLogger(__name__)
+
+TURSO_URL = os.getenv("TURSO_URL", "").strip()
+TURSO_TOKEN = os.getenv("TURSO_TOKEN", "").strip()
+DB_PATH = os.getenv("DB_PATH", "calendar.db")
+
+INVITE_TTL = 7 * 24 * 3600
+MAX_ITEMS_PER_EVENT = 50
+MAX_EVENTS_PER_USER = 10000
+
+ARCHIVE_KEY = "_архив"
+CUSTOM_ARCHIVE_TITLE = "Свои идеи"
+
+TODO_COLORS = [
+    "#ef4444", "#f97316", "#eab308", "#22c55e",
+    "#14b8a6", "#3b82f6", "#8b5cf6", "#ec4899",
+]
+TODO_PRIORITIES = {"low", "medium", "high"}
+
+
+class DbError(Exception):
+    pass
+
+
+@dataclass
+class Result:
+    rows: list = field(default_factory=list)
+    affected: int = 0
+    last_id: int | None = None
+
+
+def _encode(value: Any) -> dict:
+    if value is None:
+        return {"type": "null"}
+    if isinstance(value, bool):
+        return {"type": "integer", "value": str(int(value))}
+    if isinstance(value, int):
+        return {"type": "integer", "value": str(value)}
+    if isinstance(value, float):
+        return {"type": "float", "value": value}
+    return {"type": "text", "value": str(value)}
+
+
+def _decode(value: dict) -> Any:
+    kind = value.get("type")
+    if kind == "null":
+        return None
+    if kind == "integer":
+        return int(value["value"])
+    if kind == "float":
+        return float(value["value"])
+    return value.get("value")
+
+
+def _stmt(sql: str, args: Sequence[Any] = ()) -> dict:
+    return {"sql": sql, "args": [_encode(a) for a in args]}
+
+
+def _parse_result(res: dict) -> Result:
+    rows = [tuple(_decode(v) for v in row) for row in res.get("rows", [])]
+    last = res.get("last_insert_rowid")
+    return Result(
+        rows=rows,
+        affected=int(res.get("affected_row_count") or 0),
+        last_id=int(last) if last is not None else None,
+    )
+
+
+def _check_item(item: dict) -> dict:
+    if item.get("type") == "error":
+        raise DbError(item.get("error", {}).get("message", "ошибка Turso"))
+    return item["response"]["result"]
+
+
+class _TursoBackend:
+    def __init__(self, url: str, token: str):
+        url = url.strip().rstrip("/")
+        url = "https://" + (url.split("://", 1)[1] if "://" in url else url)
+        self._endpoint = url + "/v2/pipeline"
+        self._headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        self._session = None
+
+    async def start(self) -> None:
+        import aiohttp
+        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
+
+    async def close(self) -> None:
+        if self._session is not None:
+            await self._session.close()
+
+    async def _pipeline(self, requests: list, retries: int = 0) -> list:
+        import aiohttp
+        payload = {"requests": requests + [{"type": "close"}]}
+        for attempt in range(retries + 1):
+            try:
+                async with self._session.post(
+                    self._endpoint, json=payload, headers=self._headers
+                ) as resp:
+                    status, body = resp.status, await resp.text()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                err = DbError(f"Нет связи с Turso: {e!r}")
+            else:
+                if status == 200:
+                    try:
+                        return json.loads(body)["results"]
+                    except (ValueError, KeyError) as e:
+                        raise DbError("Некорректный ответ Turso") from e
+                err = DbError(f"Turso вернул HTTP {status}: {body[:300]}")
+                if status < 500:
+                    raise err
+            if attempt < retries:
+                await asyncio.sleep(0.4 * (attempt + 1))
+                continue
+            raise err
+        raise DbError("unreachable")
+
+    async def execute(self, sql: str, args: Sequence[Any] = ()) -> Result:
+        retries = 2 if sql.lstrip()[:6].upper() in ("SELECT", "PRAGMA") else 0
+        results = await self._pipeline(
+            [{"type": "execute", "stmt": _stmt(sql, args)}], retries
+        )
+        return _parse_result(_check_item(results[0]))
+
+    async def batch(self, stmts: list[tuple[str, Sequence[Any]]]) -> list[Result]:
+        if not stmts:
+            return []
+        n = len(stmts)
+        steps = [{"stmt": _stmt("BEGIN")}]
+        for i, (sql, args) in enumerate(stmts):
+            steps.append({"stmt": _stmt(sql, args), "condition": {"type": "ok", "step": i}})
+        steps.append({"stmt": _stmt("COMMIT"), "condition": {"type": "ok", "step": n}})
+        steps.append(
+            {
+                "stmt": _stmt("ROLLBACK"),
+                "condition": {"type": "not", "cond": {"type": "ok", "step": n + 1}},
+            }
+        )
+        results = await self._pipeline([{"type": "batch", "batch": {"steps": steps}}])
+        res = _check_item(results[0])
+        step_results, step_errors = res["step_results"], res["step_errors"]
+        if step_results[n + 1] is None:
+            failed = next(((i, e) for i, e in enumerate(step_errors) if e), None)
+            if failed is not None:
+                log.error("Batch упал на шаге %s: %s", failed[0], failed[1].get("message"))
+            msg = next((e["message"] for e in step_errors if e), "транзакция отменена")
+            raise DbError(msg)
+        return [_parse_result(step_results[i + 1]) for i in range(n)]
+
+
+class _SqliteBackend:
+    def __init__(self, path: str):
+        self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self._lock = threading.Lock()
+
+    async def start(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        self._conn.close()
+
+    def _run(self, sql: str, args: Sequence[Any]) -> Result:
+        cur = self._conn.execute(sql, tuple(args))
+        rows = cur.fetchall()
+        return Result(rows=rows, affected=max(cur.rowcount, 0), last_id=cur.lastrowid)
+
+    def _execute_sync(self, sql: str, args: Sequence[Any]) -> Result:
+        with self._lock:
+            try:
+                return self._run(sql, args)
+            except sqlite3.Error as e:
+                raise DbError(str(e)) from e
+
+    def _batch_sync(self, stmts) -> list[Result]:
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                out = [self._run(sql, args) for sql, args in stmts]
+                self._conn.execute("COMMIT")
+                return out
+            except sqlite3.Error as e:
+                try:
+                    self._conn.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise DbError(str(e)) from e
+
+    async def execute(self, sql: str, args: Sequence[Any] = ()) -> Result:
+        return await asyncio.to_thread(self._execute_sync, sql, args)
+
+    async def batch(self, stmts) -> list[Result]:
+        if not stmts:
+            return []
+        return await asyncio.to_thread(self._batch_sync, stmts)
+
+
+_backend: _TursoBackend | _SqliteBackend | None = None
+
+
+def _b():
+    if _backend is None:
+        raise DbError("База данных не инициализирована")
+    return _backend
+
+
+async def _exec(sql: str, args: Sequence[Any] = ()) -> Result:
+    return await _b().execute(sql, args)
+
+
+async def _batch(stmts) -> list[Result]:
+    return await _b().batch(stmts)
+
+
+async def init_db() -> None:
+    global _backend
+    if bool(TURSO_URL) != bool(TURSO_TOKEN):
+        raise RuntimeError("Нужно задать обе переменные: TURSO_URL и TURSO_TOKEN (или ни одной)")
+    if TURSO_URL:
+        _backend = _TursoBackend(TURSO_URL, TURSO_TOKEN)
+        log.info("БД: Turso (HTTP)")
+    else:
+        _backend = _SqliteBackend(DB_PATH)
+        log.warning("БД: локальный файл %s", DB_PATH)
+    await _backend.start()
+    await _migrate()
+
+
+async def close_db() -> None:
+    global _backend
+    if _backend is not None:
+        await _backend.close()
+        _backend = None
+
+
+async def _columns(table: str) -> set[str]:
+    rows = (await _exec(f"PRAGMA table_info({table})")).rows
+    return {r[1] for r in rows}
+
+
+async def _add_column(table: str, name: str, ddl: str) -> bool:
+    if name in await _columns(table):
+        return False
+    await _exec(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+    return True
+
+
+async def _m1_base() -> None:
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id INTEGER PRIMARY KEY,
+            partner_id  INTEGER,
+            invite_code TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_by  INTEGER NOT NULL,
+            target_user INTEGER NOT NULL,
+            title       TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            date        TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'accepted', 'declined')),
+            checklist   TEXT NOT NULL DEFAULT '[]'
+        )
+        """
+    )
+    await _add_column("events", "checklist", "TEXT NOT NULL DEFAULT '[]'")
+
+
+async def _m2_features() -> None:
+    await _add_column("users", "invite_expires", "INTEGER NOT NULL DEFAULT 0")
+    await _add_column("users", "tz", "TEXT NOT NULL DEFAULT ''")
+    await _add_column("events", "time", "TEXT NOT NULL DEFAULT ''")
+    await _add_column("events", "category", "TEXT NOT NULL DEFAULT 'rest'")
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS checklist_items (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            text     TEXT NOT NULL,
+            checked  INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS reminders (
+            event_id INTEGER NOT NULL,
+            user_id  INTEGER NOT NULL,
+            PRIMARY KEY (event_id, user_id)
+        )
+        """
+    )
+
+
+async def _m3_sex_ideas() -> None:
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS sex_ideas (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL,
+            category_title TEXT NOT NULL,
+            text           TEXT NOT NULL
+        )
+        """
+    )
+
+
+async def _m4_ideas_source() -> None:
+    await _add_column("sex_ideas", "source", "TEXT NOT NULL DEFAULT 'sex'")
+    await _exec(
+        "DELETE FROM sex_ideas WHERE category_title NOT IN "
+        "('🔥 Страстная ночь', '🌹 Романтический вечер', '✨ Эксперименты и фантазии')"
+    )
+
+
+async def _m5_fix_checklist() -> None:
+    await _add_column("checklist_items", "checked", "INTEGER NOT NULL DEFAULT 0")
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS checklist_items (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            text     TEXT NOT NULL,
+            checked  INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    await _add_column("events", "time", "TEXT NOT NULL DEFAULT ''")
+    await _add_column("events", "category", "TEXT NOT NULL DEFAULT 'rest'")
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS reminders (
+            event_id INTEGER NOT NULL,
+            user_id  INTEGER NOT NULL,
+            PRIMARY KEY (event_id, user_id)
+        )
+        """
+    )
+
+
+async def _m6_hidden_ideas() -> None:
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS hidden_ideas (
+            user_id   INTEGER NOT NULL,
+            idea_key  TEXT NOT NULL,
+            PRIMARY KEY (user_id, idea_key)
+        )
+        """
+    )
+
+
+async def _m7_archived_ideas() -> None:
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS archived_ideas (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            category_title TEXT NOT NULL,
+            text           TEXT NOT NULL,
+            source         TEXT NOT NULL,
+            archived_by    INTEGER,
+            archived_at    INTEGER NOT NULL
+        )
+        """
+    )
+    await _exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_archived_ideas "
+        "ON archived_ideas (category_title, text, source)"
+    )
+
+
+async def _m8_todo() -> None:
+    await _add_column("events", "color", "TEXT NOT NULL DEFAULT ''")
+    await _add_column("events", "priority", "TEXT NOT NULL DEFAULT ''")
+
+
+async def _m9_reactions() -> None:
+    await _add_column("events", "reaction", "TEXT NOT NULL DEFAULT ''")
+    await _add_column("events", "reaction_by", "INTEGER")
+    await _add_column("events", "decline_comment", "TEXT NOT NULL DEFAULT ''")
+
+
+MIGRATIONS = [
+    (1, _m1_base),
+    (2, _m2_features),
+    (3, _m3_sex_ideas),
+    (4, _m4_ideas_source),
+    (5, _m5_fix_checklist),
+    (6, _m6_hidden_ideas),
+    (7, _m7_archived_ideas),
+    (8, _m8_todo),
+    (9, _m9_reactions),
+]
+
+
+async def _migrate() -> None:
+    await _exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+    current = (await _exec("SELECT MAX(version) FROM schema_version")).rows[0][0] or 0
+    for version, fn in MIGRATIONS:
+        if version > current:
+            log.info("Миграция БД → v%s", version)
+            await fn()
+            await _exec("INSERT INTO schema_version (version) VALUES (?)", (version,))
+
+
+# ==================== sex_ideas.json ====================
+
+def _load_json_ideas_sync() -> dict:
+    path = Path(__file__).parent / "sex_ideas.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        log.exception("Не удалось прочитать sex_ideas.json")
+        return {}
+
+
+async def _load_json_ideas() -> dict:
+    return await asyncio.to_thread(_load_json_ideas_sync)
+
+
+# ==================== users ====================
+
+USER_COLS = "telegram_id, partner_id, invite_code, invite_expires, tz"
+
+
+def _user(r) -> dict | None:
+    if not r:
+        return None
+    return {
+        "telegram_id": r[0],
+        "partner_id": r[1],
+        "invite_code": r[2],
+        "invite_expires": r[3] or 0,
+        "tz": r[4] or "",
+    }
+
+
+def _new_code() -> str:
+    return secrets.token_urlsafe(9)
+
+
+async def get_user(telegram_id: int) -> dict | None:
+    rs = await _exec(f"SELECT {USER_COLS} FROM users WHERE telegram_id = ?", (telegram_id,))
+    return _user(rs.rows[0]) if rs.rows else None
+
+
+async def get_or_create_user(telegram_id: int) -> dict:
+    user = await get_user(telegram_id)
+    if user:
+        return user
+    for _ in range(5):
+        await _exec(
+            "INSERT OR IGNORE INTO users (telegram_id, invite_code, invite_expires) VALUES (?, ?, ?)",
+            (telegram_id, _new_code(), int(time.time()) + INVITE_TTL),
+        )
+        user = await get_user(telegram_id)
+        if user:
+            return user
+    raise DbError("Не удалось создать пользователя")
+
+
+async def get_user_by_code(code: str) -> dict | None:
+    rs = await _exec(f"SELECT {USER_COLS} FROM users WHERE invite_code = ?", (code,))
+    return _user(rs.rows[0]) if rs.rows else None
+
+
+async def ensure_invite(user: dict) -> dict:
+    if user["partner_id"] is not None or user["invite_expires"] > time.time():
+        return user
+    for _ in range(5):
+        try:
+            await _exec(
+                "UPDATE users SET invite_code = ?, invite_expires = ? WHERE telegram_id = ?",
+                (_new_code(), int(time.time()) + INVITE_TTL, user["telegram_id"]),
+            )
+        except DbError:
+            continue
+        return await get_user(user["telegram_id"])
+    raise DbError("Не удалось обновить приглашение")
+
+
+async def set_timezone(telegram_id: int, tz: str) -> None:
+    await _exec("UPDATE users SET tz = ? WHERE telegram_id = ?", (tz, telegram_id))
+
+
+async def link_partners(a: int, b: int) -> bool:
+    rs = await _exec(
+        "UPDATE users SET partner_id = CASE telegram_id WHEN ? THEN ? ELSE ? END "
+        "WHERE telegram_id IN (?, ?) AND "
+        "(SELECT COUNT(*) FROM users WHERE telegram_id IN (?, ?) AND partner_id IS NULL) = 2",
+        (a, b, a, a, b, a, b),
+    )
+    return rs.affected == 2
+
+
+async def unlink_partners(user_id: int) -> int | None:
+    user = await get_user(user_id)
+    if not user or user["partner_id"] is None:
+        return None
+    p = user["partner_id"]
+    pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
+    pargs = (user_id, p, p, user_id)
+    await _batch(
+        [
+            (f"DELETE FROM checklist_items WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
+            (f"DELETE FROM reminders WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
+            (f"DELETE FROM events WHERE {pair}", pargs),
+            ("UPDATE users SET partner_id = NULL, invite_expires = 0 WHERE telegram_id IN (?, ?)",
+             (user_id, p)),
+        ]
+    )
+    return p
+
+
+# ==================== events ====================
+
+EVENT_COLS = (
+    "id, created_by, target_user, title, description, date, time, category, status, "
+    "color, priority, reaction, reaction_by, decline_comment"
 )
-from aiogram.utils.web_app import safe_parse_webapp_init_data
-from aiohttp import web
-from dotenv import load_dotenv
-
-load_dotenv()
-
-import db
-
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-blue.vercel.app").rstrip("/")
-PORT = int(os.getenv("PORT", "8080"))
-INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
-
-REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
-SHOW_TITLES = os.getenv("NOTIFY_SHOW_TITLES", "0") == "1"
-
-CATEGORY_TITLES = {
-    "rest": "Отдых",
-    "sex": "Секс",
-    "shop": "Магазин",
-    "todo": "Дела",
-}
-
-CATEGORY_ICONS = {
-    "rest": "🌿",
-    "sex": "🔥",
-    "shop": "🛒",
-    "todo": "📌",
-}
-
-SEX_IDEA_CATEGORIES = {
-    "🔥 Страстная ночь",
-    "🌹 Романтический вечер",
-    "✨ Эксперименты и фантазии",
-}
-
-ALLOWED_REACTIONS = ["❤️", "🔥", "😍", "😂", "👍", "🎉", "😮", "🥰"]
 
 
-def _origin(url: str) -> str:
-    p = urlsplit(url)
-    return f"{p.scheme}://{p.netloc}"
-
-
-ALLOWED_ORIGINS = {_origin(WEBAPP_URL)} | {
-    o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
-}
-
-DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
-MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
-CATEGORIES = {"rest", "sex", "shop", "todo"}
-INIT_DATA_MAX_AGE = 24 * 3600
-
-RATE_LIMIT = 40
-RATE_WINDOW = 60
-
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-router = Router()
-dp.include_router(router)
-
-bot_username: str = ""
-
-
-class ApiError(Exception):
-    def __init__(self, message: str, status: int = 400):
-        super().__init__(message)
-        self.message = message
-        self.status = status
-
-
-def invite_link(code: str) -> str:
-    return f"https://t.me/{bot_username}?start=ref_{code}"
-
-
-def open_app_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))]
-        ]
-    )
-
-
-def event_reply_keyboard(event_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Принять", callback_data=f"ev:accept:{event_id}"),
-                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ev:decline:{event_id}"),
-            ],
-            [InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))],
-        ]
-    )
-
-
-async def safe_send(chat_id: int, text: str, reply_markup=None) -> None:
-    try:
-        await bot.send_message(
-            chat_id, text, reply_markup=reply_markup or open_app_keyboard()
-        )
-    except Exception:
-        logging.exception("Не удалось отправить сообщение %s", chat_id)
-
-
-_bg_tasks: set = set()
-
-
-def notify(chat_id: int, text: str, reply_markup=None) -> None:
-    task = asyncio.create_task(safe_send(chat_id, text, reply_markup))
-    _bg_tasks.add(task)
-    task.add_done_callback(_bg_tasks.discard)
-
-
-def fmt_date(s: str) -> str:
-    try:
-        return date_cls.fromisoformat(s).strftime("%d.%m.%Y")
-    except ValueError:
-        return s
-
-
-def title_part(title: str) -> str:
-    return f" «{title}»" if SHOW_TITLES else ""
-
-
-@lru_cache(maxsize=256)
-def get_zone(name: str):
-    if not name or len(name) > 64:
+def _event(r) -> dict | None:
+    if not r:
         return None
-    try:
-        return ZoneInfo(name)
-    except Exception:
-        return None
-
-
-_rate_hits: dict[int, deque] = {}
-
-
-def rate_limit(uid: int) -> None:
-    now = time.monotonic()
-    q = _rate_hits.setdefault(uid, deque())
-    while q and now - q[0] > RATE_WINDOW:
-        q.popleft()
-    if len(q) >= RATE_LIMIT:
-        raise ApiError("Слишком много запросов, подождите минуту", 429)
-    q.append(now)
-    if not q:
-        _rate_hits.pop(uid, None)
-
-
-@router.message(CommandStart())
-async def cmd_start(message: Message, command: CommandObject):
-    me = message.from_user
-    user = await db.get_or_create_user(me.id)
-    notice = ""
-
-    args = command.args or ""
-    if args.startswith("ref_"):
-        inviter = await db.get_user_by_code(args[4:])
-        if inviter is None or inviter["telegram_id"] == me.id:
-            notice = "⚠️ Эта пригласительная ссылка недействительна.\n\n"
-        elif user["partner_id"] == inviter["telegram_id"]:
-            notice = "Вы уже связаны с этим партнёром 💞\n\n"
-        elif user["partner_id"] or inviter["partner_id"]:
-            notice = "⚠️ У одного из вас уже есть пара, связать не получилось.\n\n"
-        elif inviter["invite_expires"] < time.time():
-            notice = "⚠️ Срок действия ссылки истёк. Попросите партнёра прислать новую (/invite).\n\n"
-        elif await db.link_partners(me.id, inviter["telegram_id"]):
-            notice = "💞 Готово! Вы связаны с партнёром.\n\n"
-            await safe_send(
-                inviter["telegram_id"],
-                f"💞 {me.full_name} принял(а) ваше приглашение. Теперь у вас общий календарь!",
-            )
-        else:
-            notice = "⚠️ Не получилось связать вас (кто-то уже занят). Попробуйте ещё раз.\n\n"
-
-    await message.answer(
-        f"{notice}Привет, {me.first_name}! Это общий календарь на двоих: "
-        "планируйте даты и встречи и отвечайте на них в пару касаний.",
-        reply_markup=open_app_keyboard(),
-    )
-
-
-@router.message(Command("invite"))
-async def cmd_invite(message: Message):
-    user = await db.get_or_create_user(message.from_user.id)
-    if user["partner_id"]:
-        await message.answer("У вас уже есть партнёр 💞", reply_markup=open_app_keyboard())
-        return
-    user = await db.ensure_invite(user)
-    days = db.INVITE_TTL // 86400
-    await message.answer(
-        f"Отправьте эту ссылку второму человеку — после перехода по ней вы будете связаны "
-        f"(действует {days} дн.):\n\n" + invite_link(user["invite_code"])
-    )
-
-
-@router.message(Command("unlink"))
-async def cmd_unlink(message: Message):
-    user = await db.get_or_create_user(message.from_user.id)
-    if not user["partner_id"]:
-        await message.answer("У вас нет партнёра — отвязывать нечего.")
-        return
-    await message.answer(
-        "Отвязать партнёра? Все общие события будут удалены безвозвратно.",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="Да, отвязать", callback_data="unlink:yes"),
-                    InlineKeyboardButton(text="Отмена", callback_data="unlink:no"),
-                ]
-            ]
-        ),
-    )
-
-
-@router.callback_query(F.data == "unlink:no")
-async def unlink_cancel(call: CallbackQuery):
-    await call.message.edit_text("Отменено.")
-    await call.answer()
-
-
-@router.callback_query(F.data == "unlink:yes")
-async def unlink_confirm(call: CallbackQuery):
-    partner = await db.unlink_partners(call.from_user.id)
-    if partner is None:
-        await call.message.edit_text("У вас нет партнёра.")
-    else:
-        await call.message.edit_text("Готово: связь разорвана, общие события удалены.")
-        notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
-    await call.answer()
-
-
-@router.callback_query(F.data.startswith("ev:"))
-async def event_inline_action(call: CallbackQuery):
-    try:
-        _, action, raw_id = call.data.split(":", 2)
-        event_id = int(raw_id)
-    except (ValueError, AttributeError):
-        await call.answer("Некорректное действие", show_alert=False)
-        return
-
-    event = await db.get_event(event_id)
-    if event is None:
-        await call.answer("Событие не найдено", show_alert=True)
-        return
-
-    if call.from_user.id != event["target_user"]:
-        await call.answer("Отвечать может только приглашённый", show_alert=True)
-        return
-
-    if event["category"] in ("shop", "todo"):
-        await call.answer("Это не требует ответа", show_alert=True)
-        return
-
-    if action == "accept":
-        status = "accepted"
-    elif action == "decline":
-        status = "declined"
-    else:
-        await call.answer("Неизвестное действие", show_alert=False)
-        return
-
-    if event["status"] == status:
-        await call.answer("Уже отмечено")
-        return
-
-    await db.set_status(event_id, status)
-    icon = "✅" if status == "accepted" else "❌"
-    who = call.from_user.first_name
-    notify(
-        event["created_by"],
-        f"{icon} {who} ответил(а) на событие {fmt_date(event['date'])}{title_part(event['title'])}.",
-    )
-
-    try:
-        await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-    await call.answer("Готово")
-
-
-@router.error()
-async def on_error(event: ErrorEvent):
-    logging.error("Ошибка в обработчике бота", exc_info=event.exception)
-    update = event.update
-    msg = update.message or (update.callback_query.message if update.callback_query else None)
-    if msg:
-        with contextlib.suppress(Exception):
-            await msg.answer("⚠️ Что-то пошло не так, попробуйте ещё раз чуть позже.")
-
-
-def _add_cors(request: web.Request, response: web.StreamResponse) -> None:
-    origin = request.headers.get("Origin")
-    if origin and origin in ALLOWED_ORIGINS:
-        h = response.headers
-        h["Access-Control-Allow-Origin"] = origin
-        h["Vary"] = "Origin"
-        h["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-        h["Access-Control-Allow-Headers"] = "Content-Type, X-Init-Data, X-TZ, If-None-Match"
-        h["Access-Control-Expose-Headers"] = "ETag"
-        h["Access-Control-Max-Age"] = "86400"
-
-
-@web.middleware
-async def api_middleware(request: web.Request, handler):
-    try:
-        if request.method == "OPTIONS":
-            response = web.Response(status=204)
-        else:
-            response = await handler(request)
-    except ApiError as e:
-        response = web.json_response({"error": e.message}, status=e.status)
-    except web.HTTPException as e:
-        response = e
-    except db.DbError:
-        logging.exception("Ошибка базы данных")
-        response = web.json_response({"error": "Сервис временно недоступен, попробуйте позже"}, status=503)
-    except Exception:
-        logging.exception("Необработанная ошибка в API")
-        response = web.json_response({"error": "Внутренняя ошибка сервера"}, status=500)
-    _add_cors(request, response)
-    return response
-
-
-def authenticate(request: web.Request, write: bool = False):
-    raw = request.headers.get("X-Init-Data", "")
-    try:
-        data = safe_parse_webapp_init_data(BOT_TOKEN, raw)
-    except ValueError:
-        raise ApiError("unauthorized", 401)
-    if data.user is None or time.time() - data.auth_date.timestamp() > INIT_DATA_MAX_AGE:
-        raise ApiError("session expired", 401)
-    if write:
-        rate_limit(data.user.id)
-    return data.user
-
-
-async def read_json(request: web.Request) -> dict:
-    try:
-        body = await request.json()
-    except Exception:
-        raise ApiError("Некорректный запрос")
-    if not isinstance(body, dict):
-        raise ApiError("Некорректный запрос")
-    return body
-
-
-def _int_param(request: web.Request, name: str) -> int:
-    try:
-        return int(request.match_info[name])
-    except (KeyError, ValueError):
-        raise ApiError("Некорректный запрос")
-
-
-def normalize_items(raw) -> list:
-    if not isinstance(raw, list):
-        return []
-    result = []
-    for item in raw[: db.MAX_ITEMS_PER_EVENT]:
-        if isinstance(item, dict):
-            text = str(item.get("text", "")).strip()[:200]
-            checked = bool(item.get("checked", False))
-        elif isinstance(item, str):
-            text, checked = item.strip()[:200], False
-        else:
-            continue
-        if text:
-            result.append({"text": text, "checked": checked})
-    return result
-
-
-def parse_event_payload(body: dict) -> dict:
-    description = str(body.get("description", "")).strip()
-    date = str(body.get("date", ""))
-    event_time = str(body.get("time") or "").strip()
-    category = str(body.get("category", "rest"))
-    color = str(body.get("color", "")).strip()
-    priority = str(body.get("priority", "")).strip()
-
-    if category not in CATEGORIES:
-        raise ApiError("Неизвестная категория")
-    if len(description) > 2000:
-        raise ApiError("Слишком длинный текст")
-    if not DATE_RE.match(date):
-        raise ApiError("Некорректная дата")
-    try:
-        year = date_cls.fromisoformat(date).year
-    except ValueError:
-        raise ApiError("Некорректная дата")
-    if not 2000 <= year <= 2100:
-        raise ApiError("Некорректная дата")
-    if event_time and not TIME_RE.match(event_time):
-        raise ApiError("Некорректное время")
-
-    if category == "todo":
-        if color not in db.TODO_COLORS:
-            raise ApiError("Выберите цвет для дела")
-        if priority not in db.TODO_PRIORITIES:
-            raise ApiError("Выберите приоритет")
-    else:
-        color = ""
-        priority = ""
-
-    title = CATEGORY_TITLES.get(category, "Событие")
-
     return {
-        "title": title,
-        "description": description,
-        "date": date,
-        "time": event_time,
-        "category": category,
-        "color": color,
-        "priority": priority,
-        "items": normalize_items(body.get("checklist")) if category == "shop" else [],
-    }
-
-
-def event_to_dict(e: dict, uid: int) -> dict:
-    return {
-        "id": e["id"],
-        "title": e["title"],
-        "description": e["description"],
-        "date": e["date"],
-        "time": e["time"],
-        "category": e["category"],
-        "status": e["status"],
-        "color": e.get("color", ""),
-        "priority": e.get("priority", ""),
-        "reaction": e.get("reaction", ""),
-        "reaction_by": e.get("reaction_by"),
-        "reaction_mine": e.get("reaction_by") == uid,
-        "decline_comment": e.get("decline_comment", ""),
-        "is_creator": e["created_by"] == uid,
-        "checklist": e["checklist"],
-    }
-
-
-async def member_event(request: web.Request, uid: int) -> dict:
-    event = await db.get_event(_int_param(request, "id"))
-    if event is None:
-        raise ApiError("Событие не найдено", 404)
-    if uid not in (event["created_by"], event["target_user"]):
-        raise ApiError("Нет доступа", 403)
-    return event
-
-
-def parse_month(raw) -> tuple:
-    if raw is None:
-        now = datetime.now(timezone.utc)
-        year, month = now.year, now.month
-    else:
-        m = MONTH_RE.match(raw)
-        if not m or not 1 <= int(m.group(2)) <= 12 or not 2000 <= int(m.group(1)) <= 2100:
-            raise ApiError("Некорректный месяц")
-        year, month = int(m.group(1)), int(m.group(2))
-    ny, nm = (year + 1, 1) if month == 12 else (year, month + 1)
-    return f"{year:04d}-{month:02d}-01", f"{ny:04d}-{nm:02d}-01"
-
-
-async def health_check(_: web.Request) -> web.Response:
-    return web.json_response({"status": "ok"})
-
-
-async def api_state(request: web.Request) -> web.Response:
-    tg_user = authenticate(request)
-    user = await db.get_or_create_user(tg_user.id)
-
-    tz = request.headers.get("X-TZ", "").strip()
-    if tz and tz != user["tz"] and get_zone(tz):
-        await db.set_timezone(tg_user.id, tz)
-
-    start, end = parse_month(request.query.get("month"))
-    has_partner = bool(user["partner_id"])
-    if has_partner:
-        events = await db.list_events_range(tg_user.id, start, end)
-        link = ""
-    else:
-        user = await db.ensure_invite(user)
-        events = []
-        link = invite_link(user["invite_code"])
-
-    try:
-        sex_ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
-    except Exception:
-        logging.exception("Не удалось получить идеи")
-        sex_ideas = []
-
-    stats = None
-    if has_partner:
-        try:
-            stats = await db.pair_stats(tg_user.id, user["partner_id"])
-        except Exception:
-            logging.exception("Не удалось получить статистику")
-
-    body = json.dumps(
-        {
-            "has_partner": has_partner,
-            "invite_link": link,
-            "month": start[:7],
-            "events": [event_to_dict(e, tg_user.id) for e in events],
-            "sex_ideas": sex_ideas,
-            "stats": stats,
-            "todo_colors": db.TODO_COLORS,
-            "todo_priorities": sorted(db.TODO_PRIORITIES),
-            "allowed_reactions": ALLOWED_REACTIONS,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    etag = '"' + hashlib.sha1(body.encode()).hexdigest() + '"'
-    headers = {"ETag": etag, "Cache-Control": "no-store"}
-    if request.headers.get("If-None-Match") == etag:
-        return web.Response(status=304, headers=headers)
-    return web.Response(text=body, content_type="application/json", headers=headers)
-
-
-async def api_create_event(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    user = await db.get_or_create_user(tg_user.id)
-    if not user["partner_id"]:
-        raise ApiError("Сначала свяжитесь с партнёром", 409)
-
-    data = parse_event_payload(await read_json(request))
-    if await db.count_events_created(tg_user.id) >= db.MAX_EVENTS_PER_USER:
-        raise ApiError("Достигнут лимит событий", 409)
-
-    event = await db.create_event(
-        tg_user.id, user["partner_id"], data["title"], data["description"],
-        data["date"], data["time"], data["category"], data["items"],
-        color=data["color"], priority=data["priority"],
-    )
-
-    if data["category"] == "shop":
-        notify(
-            user["partner_id"],
-            f"🛒 Партнёр добавил список покупок на {fmt_date(data['date'])}. "
-            "Откройте календарь, чтобы посмотреть.",
-        )
-    elif data["category"] == "todo":
-        icon = CATEGORY_ICONS.get("todo", "📌")
-        at = f" в {data['time']}" if data["time"] else ""
-        notify(
-            user["partner_id"],
-            f"{icon} Новое дело на {fmt_date(data['date'])}{at}. "
-            "Откройте календарь, чтобы посмотреть.",
-        )
-    else:
-        icon = CATEGORY_ICONS.get(data["category"], "➕")
-        notify(
-            user["partner_id"],
-            f"{icon} Новое событие на {fmt_date(data['date'])}"
-            f"{(' в ' + data['time']) if data['time'] else ''}. "
-            "Ответьте прямо здесь или откройте календарь.",
-            reply_markup=event_reply_keyboard(event["id"]),
-        )
-    return web.json_response(event_to_dict(event, tg_user.id), status=201)
-
-
-async def api_update_event(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    event = await member_event(request, tg_user.id)
-    if event["category"] != "todo" and event["created_by"] != tg_user.id:
-        raise ApiError("Редактировать событие может только его автор", 403)
-
-    data = parse_event_payload(await read_json(request))
-    identity_changed = (
-        data["title"], data["category"], data["date"], data["time"]
-    ) != (event["title"], event["category"], event["date"], event["time"])
-    changed = identity_changed or data["description"] != event["description"] \
-              or data["color"] != event.get("color", "") \
-              or data["priority"] != event.get("priority", "")
-    if not changed:
-        return web.json_response(event_to_dict(event, tg_user.id))
-
-    reset = identity_changed and data["category"] not in ("shop", "todo")
-    updated = await db.update_event(
-        event["id"], data["title"], data["description"], data["date"],
-        data["time"], data["category"], reset_status=reset,
-        color=data["color"], priority=data["priority"],
-    )
-    if data["category"] == "shop":
-        notify(
-            event["target_user"],
-            f"✏️ Список покупок на {fmt_date(data['date'])} изменён.",
-        )
-    elif data["category"] == "todo":
-        notify(
-            event["target_user"],
-            f"📌 Дело на {fmt_date(data['date'])} изменено.",
-        )
-    else:
-        suffix = " Оно снова ждёт вашего ответа." if identity_changed else ""
-        notify(
-            event["target_user"],
-            f"✏️ Событие на {fmt_date(data['date'])}{title_part(data['title'])} изменено.{suffix}",
-        )
-    return web.json_response(event_to_dict(updated, tg_user.id))
-
-
-async def api_delete_event(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    event = await member_event(request, tg_user.id)
-    if event["category"] != "todo" and event["created_by"] != tg_user.id:
-        raise ApiError("Удалить событие может только его автор. Вы можете отказаться от него.", 403)
-
-    await db.delete_event(event["id"])
-    return web.json_response({"status": "deleted"})
-
-
-async def api_respond(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    event = await member_event(request, tg_user.id)
-    body = await read_json(request)
-
-    if event["category"] in ("shop", "todo"):
-        raise ApiError("Это не требует ответа")
-
-    status = body.get("status")
-    if status not in ("accepted", "declined"):
-        raise ApiError("Некорректный статус")
-    if event["target_user"] != tg_user.id:
-        raise ApiError("Отвечать на событие может только приглашённый", 403)
-
-    comment = str(body.get("comment") or "").strip()[:500]
-
-    if event["status"] != status or comment != event.get("decline_comment", ""):
-        await db.set_status(event["id"], status)
-        if status == "declined":
-            await db.set_decline_comment(event["id"], comment)
-        else:
-            # при принятии комментарий очищаем
-            await db.set_decline_comment(event["id"], "")
-
-        what = "принял(а)" if status == "accepted" else "отклонил(а)"
-        icon = "✅" if status == "accepted" else "❌"
-        extra = f"\n💬 {comment}" if status == "declined" and comment else ""
-        notify(
-            event["created_by"],
-            f"{icon} {tg_user.first_name} {what} событие на "
-            f"{fmt_date(event['date'])}{title_part(event['title'])}.{extra}",
-        )
-        event = await db.get_event(event["id"])
-    return web.json_response(event_to_dict(event, tg_user.id))
-
-
-async def api_set_reaction(request: web.Request) -> web.Response:
-    """Ставит/снимает эмодзи-реакцию на событие. Пустая строка — снять."""
-    tg_user = authenticate(request, write=True)
-    event = await member_event(request, tg_user.id)
-    body = await read_json(request)
-    emoji = str(body.get("emoji") or "").strip()
-
-    if emoji and emoji not in ALLOWED_REACTIONS:
-        raise ApiError("Недопустимая реакция")
-    if event["category"] in ("shop", "todo"):
-        # На магазин/дела реагировать бессмысленно, но не запрещаем жёстко.
-        pass
-
-    await db.set_reaction(event["id"], emoji, tg_user.id)
-    updated = await db.get_event(event["id"])
-    return web.json_response(event_to_dict(updated, tg_user.id))
-
-
-async def _shop_event(request: web.Request, uid: int) -> dict:
-    event = await member_event(request, uid)
-    if event["category"] != "shop":
-        raise ApiError("Список доступен только для категории «Магазин»")
-    return event
-
-
-async def api_add_item(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    event = await _shop_event(request, tg_user.id)
-    text = str((await read_json(request)).get("text", "")).strip()[:200]
-    if not text:
-        raise ApiError("Введите текст пункта")
-    if not await db.add_item(event["id"], text):
-        raise ApiError(f"Не больше {db.MAX_ITEMS_PER_EVENT} пунктов в списке", 409)
-    return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id), status=201)
-
-
-async def api_set_item(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    event = await _shop_event(request, tg_user.id)
-    checked = (await read_json(request)).get("checked")
-    if not isinstance(checked, bool):
-        raise ApiError("Некорректный запрос")
-    if not await db.set_item_checked(event["id"], _int_param(request, "item_id"), checked):
-        raise ApiError("Пункт не найден", 404)
-    return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id))
-
-
-async def api_delete_item(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    event = await _shop_event(request, tg_user.id)
-    if not await db.delete_item(event["id"], _int_param(request, "item_id")):
-        raise ApiError("Пункт не найден", 404)
-    return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id))
-
-
-async def api_add_sex_idea(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    user = await db.get_or_create_user(tg_user.id)
-    body = await read_json(request)
-    category_title = str(body.get("category_title", "")).strip()
-    text = str(body.get("text", "")).strip()[:300]
-    if category_title not in SEX_IDEA_CATEGORIES:
-        raise ApiError("Идеи можно добавлять только в категории для секса")
-    if not text:
-        raise ApiError("Укажите текст идеи")
-    await db.add_sex_idea(tg_user.id, category_title, text)
-    ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
-    return web.json_response({"status": "ok", "ideas": ideas})
-
-
-async def api_delete_sex_idea(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    user = await db.get_or_create_user(tg_user.id)
-    raw_id = request.match_info.get("id", "")
-
-    if raw_id.startswith("json_"):
-        await db.hide_json_idea_for_pair(tg_user.id, user["partner_id"], raw_id)
-    else:
-        try:
-            idea_id = int(raw_id)
-        except ValueError:
-            raise ApiError("Некорректный id идеи")
-        if not await db.delete_sex_idea(idea_id, archived_by=tg_user.id):
-            raise ApiError("Идея не найдена", 404)
-
-    ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
-    return web.json_response({"status": "deleted", "ideas": ideas})
-
-
-async def api_archive(request: web.Request) -> web.Response:
-    try:
-        items = await db.get_archived_ideas()
-    except Exception:
-        logging.exception("Не удалось прочитать архив идей")
-        items = []
-    body = json.dumps(items, ensure_ascii=False, indent=2)
-    return web.Response(text=body, content_type="application/json; charset=utf-8")
-
-
-async def api_archived_todos(request: web.Request) -> web.Response:
-    tg_user = authenticate(request)
-    try:
-        items = await db.list_archived_todos(tg_user.id)
-    except Exception:
-        logging.exception("Не удалось прочитать архив дел")
-        items = []
-    out = [{
-        "id": e["id"],
-        "title": e["title"],
-        "description": e["description"],
-        "date": e["date"],
-        "time": e["time"],
-        "category": e["category"],
-        "status": e["status"],
-        "color": e.get("color", ""),
-        "priority": e.get("priority", ""),
-        "is_creator": e["created_by"] == tg_user.id,
+        "id": r[0],
+        "created_by": r[1],
+        "target_user": r[2],
+        "title": r[3],
+        "description": r[4],
+        "date": r[5],
+        "time": r[6] or "",
+        "category": r[7],
+        "status": r[8],
+        "color": r[9] or "",
+        "priority": r[10] or "",
+        "reaction": r[11] or "",
+        "reaction_by": r[12],
+        "decline_comment": r[13] or "",
         "checklist": [],
-    } for e in items]
-    return web.json_response({"items": out})
+    }
 
 
-async def api_unlink(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    partner = await db.unlink_partners(tg_user.id)
-    if partner is None:
-        raise ApiError("У вас нет партнёра", 409)
-    notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
-    return web.json_response({"status": "unlinked"})
+async def _attach_items(events: list[dict]) -> list[dict]:
+    shop = [e for e in events if e["category"] == "shop"]
+    if not shop:
+        return events
+    by_id = {e["id"]: e for e in shop}
+    marks = ",".join("?" * len(by_id))
+    rs = await _exec(
+        f"SELECT id, event_id, text, checked FROM checklist_items "
+        f"WHERE event_id IN ({marks}) ORDER BY id",
+        tuple(by_id),
+    )
+    for item_id, event_id, text, checked in rs.rows:
+        by_id[event_id]["checklist"].append({"id": item_id, "text": text, "checked": bool(checked)})
+    return events
 
 
-async def index(_: web.Request) -> web.FileResponse:
-    return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
+async def count_events_created(user_id: int) -> int:
+    rs = await _exec("SELECT COUNT(*) FROM events WHERE created_by = ?", (user_id,))
+    return rs.rows[0][0]
 
 
-async def send_due_reminders() -> None:
-    now_utc = datetime.now(timezone.utc)
-    lo = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
-    hi = (now_utc + timedelta(days=1)).strftime("%Y-%m-%d")
-    for c in await db.reminder_candidates(lo, hi):
-        local = now_utc.astimezone(get_zone(c["tz"]) or timezone.utc)
-        if local.strftime("%Y-%m-%d") != c["date"] or local.hour < REMINDER_HOUR:
-            continue
-        if not await db.mark_reminded(c["event_id"], c["user_id"]):
-            continue
-        at = f" в {c['time']}" if c["time"] else ""
-        if c.get("category") == "todo":
-            prio = c.get("priority") or "medium"
-            icon = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(prio, "📌")
-            await safe_send(
-                c["user_id"],
-                f"{icon} Сегодня дело{at}{title_part(c['title'])}. "
-                "Откройте календарь, чтобы посмотреть.",
-            )
-        else:
-            await safe_send(
-                c["user_id"],
-                f"⏰ Сегодня у вас запланировано событие{at}{title_part(c['title'])}. "
-                "Откройте календарь, чтобы посмотреть детали.",
-            )
-
-
-async def cleanup_old_reminders() -> None:
-    now = datetime.now(timezone.utc)
-    cutoff_reminders = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-    cutoff_todos = (now - timedelta(days=182)).strftime("%Y-%m-%d")
-    try:
-        n = await db.purge_old_reminders(cutoff_reminders)
-        if n:
-            logging.info("Очищено старых напоминаний: %s", n)
-    except Exception:
-        logging.exception("Не удалось очистить старые напоминания")
-    try:
-        n2 = await db.purge_old_todos(cutoff_todos)
-        if n2:
-            logging.info("Удалено старых дел (6+ мес): %s", n2)
-    except Exception:
-        logging.exception("Не удалось очистить старые дела")
-
-
-_last_cleanup_day: str = ""
-
-
-async def reminder_loop() -> None:
-    global _last_cleanup_day
-    while True:
+async def create_event(created_by, target_user, title, description, date, event_time, category,
+                       items=None, color: str = "", priority: str = ""):
+    initial_status = "accepted" if category in ("shop", "todo") else "pending"
+    rs = await _exec(
+        "INSERT INTO events (created_by, target_user, title, description, date, time, category, status, color, priority) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (created_by, target_user, title, description, date, event_time, category, initial_status, color, priority),
+    )
+    event_id = rs.last_id
+    if items and category == "shop":
         try:
-            await send_due_reminders()
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            if today != _last_cleanup_day:
-                _last_cleanup_day = today
-                await cleanup_old_reminders()
-        except asyncio.CancelledError:
+            await _batch(
+                [("INSERT INTO checklist_items (event_id, text, checked) VALUES (?, ?, ?)",
+                  (event_id, it["text"], int(it["checked"]))) for it in items]
+            )
+        except DbError:
+            await _exec("DELETE FROM events WHERE id = ?", (event_id,))
             raise
-        except Exception:
-            logging.exception("Ошибка рассылки напоминаний")
-        await asyncio.sleep(60)
+    return await get_event(event_id)
 
 
-async def main() -> None:
-    global bot_username
-    logging.basicConfig(level=logging.INFO)
-    await db.init_db()
-    bot_username = (await bot.get_me()).username
-    with contextlib.suppress(Exception):
-        await bot.set_my_commands(
-            [
-                BotCommand(command="start", description="Открыть календарь"),
-                BotCommand(command="invite", description="Ссылка-приглашение для партнёра"),
-                BotCommand(command="unlink", description="Отвязать партнёра"),
-            ]
+async def list_events_range(user_id: int, start: str, end: str) -> list[dict]:
+    rs = await _exec(
+        f"SELECT {EVENT_COLS} FROM events "
+        "WHERE (created_by = ? OR target_user = ?) AND date >= ? AND date < ? "
+        "ORDER BY date, time, id",
+        (user_id, user_id, start, end),
+    )
+    return await _attach_items([_event(r) for r in rs.rows])
+
+
+async def get_event(event_id: int) -> dict | None:
+    rs = await _exec(f"SELECT {EVENT_COLS} FROM events WHERE id = ?", (event_id,))
+    if not rs.rows:
+        return None
+    return (await _attach_items([_event(rs.rows[0])]))[0]
+
+
+async def set_status(event_id: int, status: str) -> None:
+    await _exec("UPDATE events SET status = ? WHERE id = ?", (status, event_id))
+
+
+async def update_event(event_id, title, description, date, event_time, category, reset_status: bool,
+                       color: str = "", priority: str = ""):
+    stmts = [
+        (
+            "UPDATE events SET title = ?, description = ?, date = ?, time = ?, category = ?, "
+            "color = ?, priority = ?, "
+            "status = CASE WHEN ? THEN 'pending' ELSE status END WHERE id = ?",
+            (title, description, date, event_time, category, color, priority,
+             int(reset_status), event_id),
         )
+    ]
+    if reset_status:
+        stmts.append(("DELETE FROM reminders WHERE event_id = ?", (event_id,)))
+    if category != "shop":
+        stmts.append(("DELETE FROM checklist_items WHERE event_id = ?", (event_id,)))
+    await _batch(stmts)
+    return await get_event(event_id)
 
-    app = web.Application(middlewares=[api_middleware])
-    app.router.add_get("/", index)
-    app.router.add_get("/health", health_check)
-    app.router.add_get("/api/state", api_state)
-    app.router.add_get("/api/archive.json", api_archive)
-    app.router.add_get("/api/todos/archive", api_archived_todos)
-    app.router.add_post("/api/events", api_create_event)
-    app.router.add_put("/api/events/{id}", api_update_event)
-    app.router.add_delete("/api/events/{id}", api_delete_event)
-    app.router.add_post("/api/events/{id}/respond", api_respond)
-    app.router.add_post("/api/events/{id}/reaction", api_set_reaction)
-    app.router.add_post("/api/events/{id}/items", api_add_item)
-    app.router.add_put("/api/events/{id}/items/{item_id}", api_set_item)
-    app.router.add_delete("/api/events/{id}/items/{item_id}", api_delete_item)
-    app.router.add_post("/api/sex-ideas", api_add_sex_idea)
-    app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
-    app.router.add_post("/api/unlink", api_unlink)
 
-    runner = web.AppRunner(app)
-    await runner.setup()
-    await web.TCPSite(runner, "0.0.0.0", PORT).start()
-    logging.info("Web app: http://0.0.0.0:%s  (public: %s)", PORT, WEBAPP_URL)
+async def delete_event(event_id: int) -> None:
+    await _batch(
+        [
+            ("DELETE FROM checklist_items WHERE event_id = ?", (event_id,)),
+            ("DELETE FROM reminders WHERE event_id = ?", (event_id,)),
+            ("DELETE FROM events WHERE id = ?", (event_id,)),
+        ]
+    )
 
-    reminders = asyncio.create_task(reminder_loop())
+
+async def add_item(event_id: int, text: str) -> bool:
+    rs = await _exec(
+        "INSERT INTO checklist_items (event_id, text, checked) "
+        "SELECT ?, ?, 0 WHERE (SELECT COUNT(*) FROM checklist_items WHERE event_id = ?) < ?",
+        (event_id, text, event_id, MAX_ITEMS_PER_EVENT),
+    )
+    return rs.affected == 1
+
+
+async def set_item_checked(event_id: int, item_id: int, checked: bool) -> bool:
+    rs = await _exec(
+        "UPDATE checklist_items SET checked = ? WHERE id = ? AND event_id = ?",
+        (int(checked), item_id, event_id),
+    )
+    return rs.affected == 1
+
+
+async def delete_item(event_id: int, item_id: int) -> bool:
+    rs = await _exec("DELETE FROM checklist_items WHERE id = ? AND event_id = ?", (item_id, event_id))
+    return rs.affected == 1
+
+
+async def set_reaction(event_id: int, emoji: str, by_user_id: int) -> None:
+    await _exec(
+        "UPDATE events SET reaction = ?, reaction_by = ? WHERE id = ?",
+        (emoji, by_user_id, event_id),
+    )
+
+
+async def set_decline_comment(event_id: int, comment: str) -> None:
+    await _exec(
+        "UPDATE events SET decline_comment = ? WHERE id = ?",
+        (comment, event_id),
+    )
+
+
+# ==================== sex_ideas ====================
+
+async def _hidden_idea_keys(user_id: int, partner_id: int | None) -> set[str]:
+    if partner_id:
+        rs = await _exec(
+            "SELECT DISTINCT idea_key FROM hidden_ideas WHERE user_id IN (?, ?)",
+            (user_id, partner_id),
+        )
+    else:
+        rs = await _exec(
+            "SELECT idea_key FROM hidden_ideas WHERE user_id = ?", (user_id,)
+        )
+    return {r[0] for r in rs.rows}
+
+
+async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
+    ideas = []
+    hidden = await _hidden_idea_keys(user_id, partner_id)
+
+    data = await _load_json_ideas()
+    idx = 1
+    for category_title, texts in data.items():
+        if category_title == ARCHIVE_KEY:
+            continue
+        if not isinstance(texts, list):
+            continue
+        for txt in texts:
+            key = f"json_{idx}"
+            idx += 1
+            if key in hidden:
+                continue
+            ideas.append({"id": key, "category_title": category_title, "text": txt})
+
+    if partner_id:
+        rs = await _exec(
+            "SELECT id, category_title, text FROM sex_ideas "
+            "WHERE source = 'sex' AND user_id IN (?, ?) ORDER BY id DESC",
+            (user_id, partner_id)
+        )
+    else:
+        rs = await _exec(
+            "SELECT id, category_title, text FROM sex_ideas "
+            "WHERE source = 'sex' AND user_id = ? ORDER BY id DESC",
+            (user_id,)
+        )
+    for r in rs.rows:
+        ideas.append({"id": r[0], "category_title": r[1], "text": r[2]})
+
+    return ideas
+
+
+async def add_sex_idea(user_id: int, category_title: str, text: str) -> int | None:
+    rs = await _exec(
+        "INSERT INTO sex_ideas (user_id, category_title, text, source) VALUES (?, ?, ?, 'sex')",
+        (user_id, category_title, text)
+    )
+    return rs.last_id
+
+
+async def archive_idea(category_title: str, text: str, source: str, archived_by: int | None) -> None:
+    await _exec(
+        "INSERT OR IGNORE INTO archived_ideas "
+        "(category_title, text, source, archived_by, archived_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (category_title, text, source, archived_by, int(time.time())),
+    )
+
+
+async def delete_sex_idea(idea_id: int, archived_by: int | None = None) -> bool:
+    rs = await _exec(
+        "SELECT category_title, text FROM sex_ideas WHERE id = ? AND source = 'sex'",
+        (idea_id,),
+    )
+    if not rs.rows:
+        return False
+    _category_title, text = rs.rows[0]
     try:
-        await dp.start_polling(bot)
-    finally:
-        reminders.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await reminders
-        await runner.cleanup()
-        await bot.session.close()
-        await db.close_db()
+        await archive_idea(CUSTOM_ARCHIVE_TITLE, text, "custom", archived_by)
+    except Exception:
+        log.exception("Не удалось записать идею в архив (не критично)")
+    rs2 = await _exec("DELETE FROM sex_ideas WHERE id = ? AND source = 'sex'", (idea_id,))
+    return rs2.affected == 1
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key: str) -> None:
+    try:
+        data = await _load_json_ideas()
+        idx = 1
+        found_title = None
+        found_text = None
+        for category_title, texts in data.items():
+            if category_title == ARCHIVE_KEY or not isinstance(texts, list):
+                continue
+            for txt in texts:
+                key = f"json_{idx}"
+                idx += 1
+                if key == idea_key:
+                    found_title, found_text = category_title, txt
+                    break
+            if found_text is not None:
+                break
+        if found_text is not None:
+            await archive_idea(found_title, found_text, "builtin", user_id)
+    except Exception:
+        log.exception("Не удалось архивировать JSON-идею (не критично)")
+
+    rows = [(user_id, idea_key)]
+    if partner_id and partner_id != user_id:
+        rows.append((partner_id, idea_key))
+    await _batch(
+        [("INSERT OR IGNORE INTO hidden_ideas (user_id, idea_key) VALUES (?, ?)", r) for r in rows]
+    )
+
+
+async def get_archived_ideas(limit: int = 2000) -> list[dict]:
+    rs = await _exec(
+        "SELECT id, category_title, text, source, archived_by, archived_at "
+        "FROM archived_ideas ORDER BY archived_at DESC, id DESC LIMIT ?",
+        (limit,),
+    )
+    return [
+        {
+            "id": r[0],
+            "category_title": r[1],
+            "text": r[2],
+            "source": r[3],
+            "archived_by": r[4],
+            "archived_at": r[5],
+        }
+        for r in rs.rows
+    ]
+
+
+# ==================== напоминания ====================
+
+async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
+    rs = await _exec(
+        "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz, e.category, e.priority "
+        "FROM events e JOIN users u ON u.telegram_id IN (e.created_by, e.target_user) "
+        "WHERE e.status = 'accepted' AND e.date BETWEEN ? AND ? "
+        "AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.event_id = e.id AND r.user_id = u.telegram_id)",
+        (date_from, date_to),
+    )
+    return [
+        {
+            "event_id": r[0], "title": r[1], "date": r[2], "time": r[3] or "",
+            "user_id": r[4], "tz": r[5] or "", "category": r[6] or "", "priority": r[7] or "",
+        }
+        for r in rs.rows
+    ]
+
+
+async def mark_reminded(event_id: int, user_id: int) -> bool:
+    rs = await _exec(
+        "INSERT OR IGNORE INTO reminders (event_id, user_id) VALUES (?, ?)", (event_id, user_id)
+    )
+    return rs.affected == 1
+
+
+async def purge_old_reminders(date_before: str) -> int:
+    rs = await _exec(
+        "DELETE FROM reminders WHERE event_id IN "
+        "(SELECT id FROM events WHERE date < ?)",
+        (date_before,),
+    )
+    return rs.affected
+
+
+async def purge_old_todos(date_before: str) -> int:
+    rs = await _batch(
+        [
+            ("DELETE FROM checklist_items WHERE event_id IN "
+             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
+            ("DELETE FROM reminders WHERE event_id IN "
+             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
+            ("DELETE FROM events WHERE category = 'todo' AND date < ?", (date_before,)),
+        ]
+    )
+    return rs[2].affected
+
+
+async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
+    from datetime import date as _d, timedelta as _td
+    cutoff = (_d.today() - _td(days=31)).isoformat()
+    rs = await _exec(
+        "SELECT id, created_by, target_user, title, description, date, time, category, status, "
+        "color, priority, reaction, reaction_by, decline_comment "
+        "FROM events "
+        "WHERE category = 'todo' AND date < ? AND (created_by = ? OR target_user = ?) "
+        "ORDER BY date DESC, id DESC LIMIT ?",
+        (cutoff, user_id, user_id, limit),
+    )
+    return [_event(r) for r in rs.rows]
+
+
+# ==================== статистика ====================
+
+async def pair_stats(user_id: int, partner_id: int) -> dict:
+    pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
+    pargs = (user_id, partner_id, partner_id, user_id)
+
+    rs_total = await _exec(f"SELECT COUNT(*) FROM events WHERE {pair}", pargs)
+    total = rs_total.rows[0][0] if rs_total.rows else 0
+
+    rs_status = await _exec(
+        f"SELECT status, COUNT(*) FROM events WHERE {pair} GROUP BY status",
+        pargs,
+    )
+    by_status = {row[0]: row[1] for row in rs_status.rows}
+
+    rs_cat = await _exec(
+        f"SELECT category, COUNT(*) FROM events WHERE {pair} GROUP BY category",
+        pargs,
+    )
+    by_category = {row[0]: row[1] for row in rs_cat.rows}
+
+    return {
+        "total": total,
+        "pending": by_status.get("pending", 0),
+        "accepted": by_status.get("accepted", 0),
+        "declined": by_status.get("declined", 0),
+        "by_category": by_category,
+    }
