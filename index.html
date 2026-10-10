@@ -193,8 +193,10 @@
       <option value="shop">Магазин</option>
     </select>
 
-    <label for="fTitle">Название (необязательно)</label>
-    <input type="text" id="fTitle" maxlength="200" placeholder="Если пусто — название категории">
+    <div id="titleField">
+      <label for="fTitle">Название (необязательно)</label>
+      <input type="text" id="fTitle" maxlength="200" placeholder="Если пусто — название категории">
+    </div>
 
     <label for="fDesc">Описание (необязательно)</label>
     <textarea id="fDesc" maxlength="2000"></textarea>
@@ -620,6 +622,7 @@ $("list").addEventListener("keydown", (ev) => {
 let formChecklist = [];  // [{text, checked}] — только при создании события «Магазин»
 
 function updateChecklistSection() {
+  $("titleField").hidden = $("fCategory").value === "shop";   // у «Магазина» названия нет
   const show = $("fCategory").value === "shop" && !editingEvent;
   $("checklistSection").hidden = !show;
   if (!show) return;
@@ -693,7 +696,7 @@ $("fSave").onclick = async () => {
   if (!date) { $("fError").textContent = "Выберите дату"; return; }
 
   const payload = {
-    title: $("fTitle").value.trim() || CATEGORIES[category].label,
+    title: (category === "shop" ? "" : $("fTitle").value.trim()) || CATEGORIES[category].label,
     category,
     description: $("fDesc").value.trim(),
     date,
