@@ -154,11 +154,9 @@
       <option value="Магазин">Магазин</option>
     </select>
 
-    <!-- Описание всегда доступно -->
     <label for="fDesc">Описание (необязательно)</label>
     <textarea id="fDesc" maxlength="2000" placeholder="Дополнительная информация..."></textarea>
 
-    <!-- Чек-лист для Магазина (появляется только если выбрана категория Магазин) -->
     <div id="checklistContainer" hidden>
       <label style="margin-top: 12px;">Список покупок</label>
       <div class="checklist-builder" id="checklistBuilder"></div>
@@ -224,11 +222,15 @@ function toast(text) {
 }
 
 async function load() {
+  // Не перезагружаем список с сервера, если открыта форма или пользователь кликает по чекбоксу
+  if (!$("overlay").hidden) return;
   try {
-    state = await api("/state");
+    const newState = await api("/state");
+    // Сравниваем базово, чтобы не перерисовывать DOM без изменений
+    state = newState;
     render();
   } catch (e) {
-    toast(e.message);
+    console.error(e);
   }
 }
 
@@ -266,7 +268,6 @@ function parsePayload(desc, title) {
   try {
     const data = JSON.parse(desc);
     if (data && typeof data === "object" && Array.isArray(data.items)) {
-      // Гарантируем наличие стабильных ID у каждого пункта
       data.items = data.items.map(item => ({
         id: item.id || Math.random().toString(36).substr(2, 9),
         text: item.text || "",
@@ -351,35 +352,45 @@ function shiftMonth(delta) {
 $("prev").onclick = () => shiftMonth(-1);
 $("next").onclick = () => shiftMonth(1);
 
-$("list").addEventListener("click", async (ev) => {
+// Мгновенный отклик чекбокса без ожидания перерисовки списка
+$("list").addEventListener("change", async (ev) => {
   const checkbox = ev.target.closest("input[type='checkbox'][data-checklist-id]");
-  if (checkbox) {
-    const eventId = checkbox.dataset.eventId;
-    const itemId = checkbox.dataset.checklistId;
-    const event = state.events.find(e => String(e.id) === String(eventId));
-    if (!event) return;
+  if (!checkbox) return;
 
-    const payload = parsePayload(event.description, event.title);
-    if (payload && payload.items) {
-      const item = payload.items.find(i => i.id === itemId);
-      if (item) {
-        item.done = checkbox.checked;
-        try {
-          await api(`/events/${eventId}`, {
-            method: "PUT",
-            body: JSON.stringify({ title: event.title, description: JSON.stringify(payload), date: event.date })
-          });
-          tg.HapticFeedback?.selectionChanged();
-          await load();
-        } catch (e) {
-          toast(e.message);
-          await load();
-        }
+  const eventId = checkbox.dataset.eventId;
+  const itemId = checkbox.dataset.checklistId;
+  const event = state.events.find(e => String(e.id) === String(eventId));
+  if (!event) return;
+
+  const payload = parsePayload(event.description, event.title);
+  if (payload && payload.items) {
+    const item = payload.items.find(i => i.id === itemId);
+    if (item) {
+      item.done = checkbox.checked;
+      
+      // Мгновенно обновляем визуальный класс без перерисовки всего списка
+      const label = checkbox.closest(".checklist-item-view");
+      if (label) {
+        if (checkbox.checked) label.classList.add("checked");
+        else label.classList.remove("checked");
+      }
+
+      tg.HapticFeedback?.selectionChanged();
+
+      try {
+        await api(`/events/${eventId}`, {
+          method: "PUT",
+          body: JSON.stringify({ title: event.title, description: JSON.stringify(payload), date: event.date })
+        });
+      } catch (e) {
+        toast(e.message);
+        load(); // в случае ошибки откатываемся назад
       }
     }
-    return;
   }
+});
 
+$("list").addEventListener("click", async (ev) => {
   const card = ev.target.closest(".card");
   if (!card) return;
   const eventId = card.dataset.id;
