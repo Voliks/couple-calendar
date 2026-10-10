@@ -46,6 +46,12 @@ CATEGORY_TITLES = {
     "shop": "Магазин",
 }
 
+CATEGORY_ICONS = {
+    "rest": "🌿",
+    "sex": "🔥",
+    "shop": "🛒",
+}
+
 SEX_IDEA_CATEGORIES = {
     "🔥 Страстная ночь",
     "🌹 Романтический вечер",
@@ -98,9 +104,24 @@ def open_app_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-async def safe_send(chat_id: int, text: str) -> None:
+def event_reply_keyboard(event_id: int) -> InlineKeyboardMarkup:
+    """Inline-кнопки «Принять / Отклонить» прямо в уведомлении бота."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Принять", callback_data=f"ev:accept:{event_id}"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ev:decline:{event_id}"),
+            ],
+            [InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))],
+        ]
+    )
+
+
+async def safe_send(chat_id: int, text: str, reply_markup=None) -> None:
     try:
-        await bot.send_message(chat_id, text, reply_markup=open_app_keyboard())
+        await bot.send_message(
+            chat_id, text, reply_markup=reply_markup or open_app_keyboard()
+        )
     except Exception:
         logging.exception("Не удалось отправить сообщение %s", chat_id)
 
@@ -108,8 +129,8 @@ async def safe_send(chat_id: int, text: str) -> None:
 _bg_tasks: set = set()
 
 
-def notify(chat_id: int, text: str) -> None:
-    task = asyncio.create_task(safe_send(chat_id, text))
+def notify(chat_id: int, text: str, reply_markup=None) -> None:
+    task = asyncio.create_task(safe_send(chat_id, text, reply_markup))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
 
@@ -135,17 +156,20 @@ def get_zone(name: str):
         return None
 
 
-_hits: dict = {}
+_rate_hits: dict[int, deque] = {}
 
 
 def rate_limit(uid: int) -> None:
     now = time.monotonic()
-    q = _hits.setdefault(uid, deque())
+    q = _rate_hits.setdefault(uid, deque())
     while q and now - q[0] > RATE_WINDOW:
         q.popleft()
     if len(q) >= RATE_LIMIT:
         raise ApiError("Слишком много запросов, подождите минуту", 429)
     q.append(now)
+    # Если очередь опустела (после очистки) — удаляем ключ, чтобы не копить пустые deque.
+    if not q:
+        _rate_hits.pop(uid, None)
 
 
 @router.message(CommandStart())
@@ -229,6 +253,57 @@ async def unlink_confirm(call: CallbackQuery):
         await call.message.edit_text("Готово: связь разорвана, общие события удалены.")
         notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
     await call.answer()
+
+
+@router.callback_query(F.data.startswith("ev:"))
+async def event_inline_action(call: CallbackQuery):
+    """Принять/отклонить событие прямо из уведомления бота."""
+    try:
+        _, action, raw_id = call.data.split(":", 2)
+        event_id = int(raw_id)
+    except (ValueError, AttributeError):
+        await call.answer("Некорректное действие", show_alert=False)
+        return
+
+    event = await db.get_event(event_id)
+    if event is None:
+        await call.answer("Событие не найдено", show_alert=True)
+        return
+
+    if call.from_user.id != event["target_user"]:
+        await call.answer("Отвечать может только приглашённый", show_alert=True)
+        return
+
+    if event["category"] == "shop":
+        await call.answer("Это список покупок — отвечать не нужно", show_alert=True)
+        return
+
+    if action == "accept":
+        status = "accepted"
+    elif action == "decline":
+        status = "declined"
+    else:
+        await call.answer("Неизвестное действие", show_alert=False)
+        return
+
+    if event["status"] == status:
+        await call.answer("Уже отмечено")
+        return
+
+    await db.set_status(event_id, status)
+    icon = "✅" if status == "accepted" else "❌"
+    who = call.from_user.first_name
+    notify(
+        event["created_by"],
+        f"{icon} {who} ответил(а) на событие {fmt_date(event['date'])}{title_part(event['title'])}.",
+    )
+
+    # Скрываем кнопки у сообщения, чтобы не нажимали повторно
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.answer("Готово")
 
 
 @router.error()
@@ -418,6 +493,13 @@ async def api_state(request: web.Request) -> web.Response:
         logging.exception("Не удалось получить идеи")
         sex_ideas = []
 
+    stats = None
+    if has_partner:
+        try:
+            stats = await db.pair_stats(tg_user.id, user["partner_id"])
+        except Exception:
+            logging.exception("Не удалось получить статистику")
+
     body = json.dumps(
         {
             "has_partner": has_partner,
@@ -425,6 +507,7 @@ async def api_state(request: web.Request) -> web.Response:
             "month": start[:7],
             "events": [event_to_dict(e, tg_user.id) for e in events],
             "sex_ideas": sex_ideas,
+            "stats": stats,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -458,10 +541,13 @@ async def api_create_event(request: web.Request) -> web.Response:
             "Откройте календарь, чтобы посмотреть.",
         )
     else:
+        icon = CATEGORY_ICONS.get(data["category"], "➕")
         notify(
             user["partner_id"],
-            f"➕ Новое событие на {fmt_date(data['date'])}{title_part(data['title'])}. "
-            "Откройте календарь для ответа.",
+            f"{icon} Новое событие на {fmt_date(data['date'])}"
+            f"{(' в ' + data['time']) if data['time'] else ''}. "
+            "Ответьте прямо здесь или откройте календарь.",
+            reply_markup=event_reply_keyboard(event["id"]),
         )
     return web.json_response(event_to_dict(event, tg_user.id), status=201)
 
