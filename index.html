@@ -107,10 +107,10 @@
   .error { color: rgb(var(--declined)); font-size: 14px; margin-top: 10px; min-height: 1em; }
   .hint { font-size: 13px; color: var(--hint); margin-top: 12px; }
 
-  /* Кнопки уровня для секса */
-  .sex-levels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 6px; }
-  .sex-btn { padding: 10px 4px; border-radius: 10px; background: var(--bg2); font-size: 14px; font-weight: 500; text-align: center; border: 2px solid transparent; transition: all .15s; }
-  .sex-btn.active { border-color: var(--accent); background: rgba(36, 129, 204, 0.12); font-weight: 600; }
+  /* Кнопки идей для секса */
+  .sex-ideas { display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 6px; }
+  .sex-idea-btn { padding: 10px 12px; border-radius: 10px; background: var(--bg2); font-size: 14px; font-weight: 500; text-align: left; border: 2px solid transparent; transition: all .15s; }
+  .sex-idea-btn.active { border-color: var(--accent); background: rgba(36, 129, 204, 0.12); font-weight: 600; }
 
   /* Список покупок */
   .checklist { margin-top: 10px; }
@@ -193,18 +193,18 @@
       <option value="shop">Магазин</option>
     </select>
 
-    <!-- Выбор уровня для категории Секс -->
-    <div id="sexLevelSection" hidden>
-      <label>Уровень интенсивности</label>
-      <div class="sex-levels">
-        <button type="button" class="sex-btn active" data-level="🔥 Тепло">🔥 Тепло</button>
-        <button type="button" class="sex-btn" data-level="🌶️ Горячо">🌶️ Горячо</button>
-        <button type="button" class="sex-btn" data-level="🌋 Жарааа!">🌋 Жарааа!</button>
-      </div>
-    </div>
-
     <label for="fDesc">Описание (необязательно)</label>
     <textarea id="fDesc" maxlength="2000"></textarea>
+
+    <!-- Выбор готовых идей для категории Секс (после описания) -->
+    <div id="sexIdeasSection" hidden>
+      <label>Выберите идею</label>
+      <div class="sex-ideas">
+        <button type="button" class="sex-idea-btn active" data-title="🔥 Страстная ночь">🔥 Страстная ночь</button>
+        <button type="button" class="sex-idea-btn" data-title="🌹 Романтический вечер">🌹 Романтический вечер</button>
+        <button type="button" class="sex-idea-btn" data-title="✨ Эксперименты и фантазии">✨ Эксперименты и фантазии</button>
+      </div>
+    </div>
 
     <div id="checklistSection" hidden>
       <label>Список покупок</label>
@@ -215,7 +215,7 @@
       </div>
     </div>
 
-    <div class="hint" id="fHint" hidden>Если изменить дату, время или категорию, партнёру придётся ответить заново. Список покупок редактируется прямо в карточке события.</div>
+    <div class="hint" id="fHint" hidden>Если изменить дату, время или категорию, партнёру придётся ответить заново.</div>
 
     <div class="error" id="fError" role="alert"></div>
     <div class="row">
@@ -262,7 +262,7 @@ let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
 let editingEvent = null;
 let loaded = false;
-let selectedSexLevel = "🔥 Тепло";
+let selectedSexTitle = "🔥 Страстная ночь";
 const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
 const monthCache = {};
 
@@ -623,7 +623,7 @@ function updateFormSections() {
   const isSex = cat === "sex";
 
   $("checklistSection").hidden = !(isShop && !editingEvent);
-  $("sexLevelSection").hidden = !isSex;
+  $("sexIdeasSection").hidden = !isSex;
 }
 
 function openForm(event = null) {
@@ -635,14 +635,13 @@ function openForm(event = null) {
   $("fDesc").value = event ? event.description || "" : "";
   
   if (event && event.category === "sex") {
-    selectedSexLevel = event.title || "🔥 Тепло";
+    selectedSexTitle = event.title || "🔥 Страстная ночь";
   } else {
-    selectedSexLevel = "🔥 Тепло";
+    selectedSexTitle = "🔥 Страстная ночь";
   }
 
-  // Обновляем активную кнопку уровня
-  document.querySelectorAll(".sex-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.level === selectedSexLevel);
+  document.querySelectorAll(".sex-idea-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.title === selectedSexTitle);
   });
 
   $("fHint").hidden = !event;
@@ -669,12 +668,11 @@ $("fCategory").addEventListener("change", () => {
   updateFormSections();
 });
 
-// Клик по кнопкам уровня секса
-document.querySelectorAll(".sex-btn").forEach((btn) => {
+document.querySelectorAll(".sex-idea-btn").forEach((btn) => {
   btn.onclick = () => {
-    document.querySelectorAll(".sex-btn").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".sex-idea-btn").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
-    selectedSexLevel = btn.dataset.level;
+    selectedSexTitle = btn.dataset.title;
     tg.HapticFeedback?.selectionChanged();
   };
 });
@@ -709,7 +707,7 @@ $("fSave").onclick = async () => {
     description: $("fDesc").value.trim(),
     date,
     time: $("fTime").value,
-    sex_level: category === "sex" ? selectedSexLevel : undefined,
+    sex_title: category === "sex" ? selectedSexTitle : undefined,
   };
   if (!editingEvent && category === "shop") payload.checklist = formChecklist;
 
