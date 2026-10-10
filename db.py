@@ -317,10 +317,7 @@ async def _m3_sex_ideas() -> None:
 
 
 async def _m4_ideas_source() -> None:
-    # Разделяем идеи по источнику: 'sex' (форма секса) и 'shop' (список покупок).
     await _add_column("sex_ideas", "source", "TEXT NOT NULL DEFAULT 'sex'")
-    # Чистим уже сохранённые «идеи», которые на самом деле пункты списка покупок:
-    # у них category_title — не из фиксированного набора категорий секса.
     await _exec(
         "DELETE FROM sex_ideas WHERE category_title NOT IN "
         "('🔥 Страстная ночь', '🌹 Романтический вечер', '✨ Эксперименты и фантазии')"
@@ -328,7 +325,6 @@ async def _m4_ideas_source() -> None:
 
 
 async def _m5_fix_checklist() -> None:
-    # Чиним старую схему checklist_items, где не было колонки checked.
     await _add_column("checklist_items", "checked", "INTEGER NOT NULL DEFAULT 0")
     await _exec(
         """
@@ -353,12 +349,26 @@ async def _m5_fix_checklist() -> None:
     )
 
 
+async def _m6_hidden_ideas() -> None:
+    # Скрытые идеи из sex_ideas.json: файл общий для всех, а прячем их для пары.
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS hidden_ideas (
+            user_id   INTEGER NOT NULL,
+            idea_key  TEXT NOT NULL,
+            PRIMARY KEY (user_id, idea_key)
+        )
+        """
+    )
+
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
     (3, _m3_sex_ideas),
     (4, _m4_ideas_source),
     (5, _m5_fix_checklist),
+    (6, _m6_hidden_ideas),
 ]
 
 
@@ -595,10 +605,25 @@ async def delete_item(event_id: int, item_id: int) -> bool:
     return rs.affected == 1
 
 
+async def _hidden_idea_keys(user_id: int, partner_id: int | None) -> set[str]:
+    """Ключи JSON-идей, скрытых хотя бы одним из пары."""
+    if partner_id:
+        rs = await _exec(
+            "SELECT DISTINCT idea_key FROM hidden_ideas WHERE user_id IN (?, ?)",
+            (user_id, partner_id),
+        )
+    else:
+        rs = await _exec(
+            "SELECT idea_key FROM hidden_ideas WHERE user_id = ?", (user_id,)
+        )
+    return {r[0] for r in rs.rows}
+
+
 async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
     ideas = []
+    hidden = await _hidden_idea_keys(user_id, partner_id)
 
-    # 1. Всегда читаем актуальные идеи прямо из sex_ideas.json на лету
+    # 1. Актуальные идеи из sex_ideas.json (минус скрытые для пары)
     json_path = Path(__file__).parent / "sex_ideas.json"
     if json_path.exists():
         try:
@@ -606,12 +631,15 @@ async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
             idx = 1
             for category_title, texts in data.items():
                 for txt in texts:
-                    ideas.append({"id": f"json_{idx}", "category_title": category_title, "text": txt})
+                    key = f"json_{idx}"
                     idx += 1
+                    if key in hidden:
+                        continue
+                    ideas.append({"id": key, "category_title": category_title, "text": txt})
         except Exception:
             log.exception("Не удалось прочитать sex_ideas.json")
 
-    # 2. Кастомные идеи, которые пользователи добавили сами — только из формы «Секс»
+    # 2. Кастомные идеи (и свои, и партнёра) — только source='sex'
     if partner_id:
         rs = await _exec(
             "SELECT id, category_title, text FROM sex_ideas "
@@ -638,6 +666,22 @@ async def add_sex_idea(user_id: int, category_title: str, text: str) -> int | No
     return rs.last_id
 
 
+async def delete_sex_idea(idea_id: int) -> bool:
+    """Удаляет кастомную идею из БД (у обоих партнёров). Чужую тоже можно."""
+    rs = await _exec("DELETE FROM sex_ideas WHERE id = ? AND source = 'sex'", (idea_id,))
+    return rs.affected == 1
+
+
+async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key: str) -> None:
+    """Прячет JSON-идею у обоих партнёров. В файле она остаётся."""
+    rows = [(user_id, idea_key)]
+    if partner_id and partner_id != user_id:
+        rows.append((partner_id, idea_key))
+    await _batch(
+        [("INSERT OR IGNORE INTO hidden_ideas (user_id, idea_key) VALUES (?, ?)", r) for r in rows]
+    )
+
+
 async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
     rs = await _exec(
         "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz "
@@ -657,3 +701,13 @@ async def mark_reminded(event_id: int, user_id: int) -> bool:
         "INSERT OR IGNORE INTO reminders (event_id, user_id) VALUES (?, ?)", (event_id, user_id)
     )
     return rs.affected == 1
+
+
+async def purge_old_reminders(date_before: str) -> int:
+    """Удаляет напоминания по событиям старше указанной даты (YYYY-MM-DD)."""
+    rs = await _exec(
+        "DELETE FROM reminders WHERE event_id IN "
+        "(SELECT id FROM events WHERE date < ?)",
+        (date_before,),
+    )
+    return rs.affected
