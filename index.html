@@ -107,10 +107,6 @@
   .sex-idea-trigger:active { background: rgba(36, 129, 204, 0.2); }
   .sex-idea-trigger .trg-count { font-size: 12px; color: var(--accent); font-weight: 700; }
 
-  .idea-add-row { display: flex; gap: 8px; margin-top: 12px; }
-  .idea-add-row input { flex: 1; }
-  .idea-add-row button { padding: 0 16px; border-radius: 12px; background: var(--accent); color: var(--accent-text); font-weight: 600; }
-
   .chosen-block { margin-top: 12px; padding: 10px 12px; border-radius: 12px;
     background: rgba(36, 129, 204, .10); border: 1px solid rgba(36, 129, 204, .35); }
   .chosen-title { font-size: 13px; color: var(--hint); margin-bottom: 8px; }
@@ -148,14 +144,26 @@
   .toasts { position: fixed; left: 0; right: 0; top: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 30; pointer-events: none; }
   .toast { background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: 90%; }
 
+  /* ===== Модалка идей ===== */
   .ideas-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; z-index: 20; }
   .ideas-sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
     max-height: 85vh; display: flex; flex-direction: column;
     padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px)); animation: up .18s ease-out; }
-  .ideas-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
-  .ideas-head h3 { margin: 0; font-size: 18px; }
-  .ideas-head .ideas-done { padding: 8px 14px; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-weight: 600; font-size: 14px; }
+
+  .ideas-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .ideas-head h3 { margin: 0; font-size: 18px; flex: 1; min-width: 0; word-break: break-word; }
+  /* Кнопка «+ Добавить» в шапке */
+  .ideas-head .ideas-add-toggle { padding: 8px 12px; border-radius: 10px; background: var(--bg2);
+    font-weight: 600; font-size: 14px; color: var(--accent); flex-shrink: 0; }
+  .ideas-head .ideas-add-toggle:active { background: rgba(36, 129, 204, .2); }
+
   .ideas-hint { font-size: 12px; color: var(--hint); margin-bottom: 8px; }
+
+  /* Форма добавления идеи — скрыта по умолчанию, показывается по кнопке «+ Добавить» */
+  .idea-form { display: flex; gap: 8px; margin-bottom: 10px; }
+  .idea-form input { flex: 1; }
+  .idea-form button { padding: 0 16px; border-radius: 12px; background: var(--accent); color: var(--accent-text); font-weight: 600; white-space: nowrap; }
+
   .ideas-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
   .idea-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
     border-radius: 12px; background: var(--bg2); font-size: 15px; text-align: left;
@@ -168,9 +176,10 @@
   .idea-item .idea-text { flex: 1; word-break: break-word; }
   .idea-item .idea-del { font-size: 16px; opacity: .5; padding: 0 4px; border-radius: 6px; line-height: 1; }
   .idea-item .idea-del:hover { opacity: 1; background: rgba(0,0,0,.06); }
-  .ideas-add { display: flex; gap: 8px; margin-top: 12px; }
-  .ideas-add input { flex: 1; }
-  .ideas-add button { padding: 0 16px; border-radius: 12px; background: var(--accent); color: var(--accent-text); font-weight: 600; }
+
+  /* Нижняя кнопка «Готово» на всю ширину — там, где раньше был «Добавить» */
+  .ideas-done { width: 100%; margin-top: 12px; padding: 14px; border-radius: 12px;
+    background: var(--accent); color: var(--accent-text); font-weight: 600; font-size: 16px; }
 </style>
 </head>
 <body>
@@ -267,18 +276,24 @@
   </div>
 </div>
 
+<!-- Модалка идей: сверху «+ Добавить», снизу «Готово» на всю ширину -->
 <div class="ideas-overlay" id="ideasOverlay" hidden>
   <div class="ideas-sheet" role="dialog" aria-modal="true">
     <div class="ideas-head">
       <h3 id="ideasModalTitle">Идеи</h3>
-      <button type="button" class="ideas-done" id="ideasDone">Готово</button>
+      <button type="button" class="ideas-add-toggle" id="addIdeaToggle">+ Добавить</button>
     </div>
     <div class="ideas-hint">Отметьте одну или несколько идей — они появятся в блоке «Выбрано».</div>
-    <div class="ideas-list" id="ideasContainer"></div>
-    <div class="ideas-add">
-      <input type="text" id="newIdeaInput" placeholder="Добавить свою идею..." maxlength="300" aria-label="Новая идея">
-      <button type="button" id="addIdeaBtn">Добавить</button>
+
+    <!-- Форма добавления, скрыта по умолчанию -->
+    <div class="idea-form" id="ideaForm" hidden>
+      <input type="text" id="newIdeaInput" placeholder="Текст новой идеи..." maxlength="300" aria-label="Новая идея">
+      <button type="button" id="addIdeaBtn">ОК</button>
     </div>
+
+    <div class="ideas-list" id="ideasContainer"></div>
+
+    <button type="button" class="ideas-done" id="ideasDone">Готово</button>
   </div>
 </div>
 
@@ -455,7 +470,6 @@ function checklistHtml(e) {
 }
 
 function answerHtml(e, expired) {
-  // Магазин — не приглашение, ответ не нужен.
   if (e.category === "shop") return "";
   if (e.is_creator) return "";
   if (e.status === "pending") {
@@ -713,9 +727,12 @@ function renderFormChecklist() {
     </div>`).join("");
 }
 
+/* ---- Модалка идей ---- */
+
 function openIdeasModal(title) {
   currentCategoryTitle = title;
   $("ideasModalTitle").textContent = title;
+  hideIdeaForm();
   renderIdeas();
   $("ideasOverlay").hidden = false;
   document.body.style.overflow = "hidden";
@@ -725,15 +742,29 @@ function openIdeasModal(title) {
 function closeIdeasModal() {
   $("ideasOverlay").hidden = true;
   document.body.style.overflow = "";
-  $("newIdeaInput").value = "";
+  hideIdeaForm();
   if (!$("overlay").hidden) tg.BackButton?.show(); else tg.BackButton?.hide();
+}
+
+function showIdeaForm() {
+  $("ideaForm").hidden = false;
+  $("addIdeaToggle").hidden = true;
+  const inp = $("newIdeaInput");
+  inp.value = "";
+  setTimeout(() => inp.focus(), 50);
+}
+
+function hideIdeaForm() {
+  $("ideaForm").hidden = true;
+  $("addIdeaToggle").hidden = false;
+  $("newIdeaInput").value = "";
 }
 
 function renderIdeas() {
   const listEl = $("ideasContainer");
   const filtered = (state.sex_ideas || []).filter(i => i.category_title === currentCategoryTitle);
   if (!filtered.length) {
-    listEl.innerHTML = `<div class="cl-empty">Пока нет идей. Добавьте первую ниже!</div>`;
+    listEl.innerHTML = `<div class="cl-empty">Пока нет идей. Добавьте первую!</div>`;
     return;
   }
   listEl.innerHTML = filtered.map(i => {
@@ -830,22 +861,27 @@ $("chosenChips").addEventListener("click", (e) => {
   tg.HapticFeedback?.selectionChanged();
 });
 
-$("addIdeaBtn").onclick = async () => {
+/* Показать/скрыть форму добавления */
+$("addIdeaToggle").onclick = () => showIdeaForm();
+
+async function submitNewIdea() {
   const input = $("newIdeaInput");
   const text = input.value.trim();
   if (!text || !currentCategoryTitle) return;
   try {
     const res = await api("/sex-ideas", { method: "POST", body: { category_title: currentCategoryTitle, text } });
     state.sex_ideas = res.ideas;
-    input.value = "";
     if (!selectedIdeas.includes(text)) selectedIdeas.push(text);
+    hideIdeaForm();
     renderIdeas();
     renderChosen();
     tg.HapticFeedback?.selectionChanged();
   } catch (e) { toast(e.message); }
-};
+}
+$("addIdeaBtn").onclick = submitNewIdea;
 $("newIdeaInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); $("addIdeaBtn").click(); }
+  if (e.key === "Enter") { e.preventDefault(); submitNewIdea(); }
+  if (e.key === "Escape") { e.preventDefault(); hideIdeaForm(); }
 });
 
 $("ideasDone").onclick = () => closeIdeasModal();
