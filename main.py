@@ -205,10 +205,6 @@ async def api_update_event(request: web.Request) -> web.Response:
         return json_error("Некорректная дата")
 
     updated = await db.update_event(event_id, title, description, date)
-    
-    partner_id = event["target_user"] if event["created_by"] == tg_user.id else event["created_by"]
-    await safe_send(partner_id, f"✏️ Событие «{title}» на {date} было изменено.")
-    
     return web.json_response(event_to_dict(updated, tg_user.id))
 
 
@@ -227,10 +223,6 @@ async def api_delete_event(request: web.Request) -> web.Response:
         return json_error("Нет доступа", 403)
 
     await db.delete_event(event_id)
-
-    partner_id = event["target_user"] if event["created_by"] == tg_user.id else event["created_by"]
-    await safe_send(partner_id, f"🗑️ Событие «{event['title']}» было удалено.")
-
     return web.json_response({"status": "deleted"})
 
 
