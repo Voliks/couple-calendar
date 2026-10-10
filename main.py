@@ -46,6 +46,12 @@ CATEGORY_TITLES = {
     "shop": "Магазин",
 }
 
+SEX_IDEA_CATEGORIES = {
+    "🔥 Страстная ночь",
+    "🌹 Романтический вечер",
+    "✨ Эксперименты и фантазии",
+}
+
 
 def _origin(url: str) -> str:
     p = urlsplit(url)
@@ -406,7 +412,11 @@ async def api_state(request: web.Request) -> web.Response:
         events = []
         link = invite_link(user["invite_code"])
 
-    sex_ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
+    try:
+        sex_ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
+    except Exception:
+        logging.exception("Не удалось получить идеи")
+        sex_ideas = []
 
     body = json.dumps(
         {
@@ -440,11 +450,19 @@ async def api_create_event(request: web.Request) -> web.Response:
         tg_user.id, user["partner_id"], data["title"], data["description"],
         data["date"], data["time"], data["category"], data["items"],
     )
-    notify(
-        user["partner_id"],
-        f"➕ Новое событие на {fmt_date(data['date'])}{title_part(data['title'])}. "
-        "Откройте календарь для ответа.",
-    )
+
+    if data["category"] == "shop":
+        notify(
+            user["partner_id"],
+            f"🛒 Партнёр добавил список покупок на {fmt_date(data['date'])}. "
+            "Откройте календарь, чтобы посмотреть.",
+        )
+    else:
+        notify(
+            user["partner_id"],
+            f"➕ Новое событие на {fmt_date(data['date'])}{title_part(data['title'])}. "
+            "Откройте календарь для ответа.",
+        )
     return web.json_response(event_to_dict(event, tg_user.id), status=201)
 
 
@@ -462,15 +480,23 @@ async def api_update_event(request: web.Request) -> web.Response:
     if not changed:
         return web.json_response(event_to_dict(event, tg_user.id))
 
+    # Для «Магазина» ответ не нужен — не сбрасываем статус и не просим ответить.
+    reset = identity_changed and data["category"] != "shop"
     updated = await db.update_event(
         event["id"], data["title"], data["description"], data["date"],
-        data["time"], data["category"], reset_status=identity_changed,
+        data["time"], data["category"], reset_status=reset,
     )
-    suffix = " Оно снова ждёт вашего ответа." if identity_changed else ""
-    notify(
-        event["target_user"],
-        f"✏️ Событие на {fmt_date(data['date'])}{title_part(data['title'])} изменено.{suffix}",
-    )
+    if data["category"] == "shop":
+        notify(
+            event["target_user"],
+            f"✏️ Список покупок на {fmt_date(data['date'])} изменён.",
+        )
+    else:
+        suffix = " Оно снова ждёт вашего ответа." if identity_changed else ""
+        notify(
+            event["target_user"],
+            f"✏️ Событие на {fmt_date(data['date'])}{title_part(data['title'])} изменено.{suffix}",
+        )
     return web.json_response(event_to_dict(updated, tg_user.id))
 
 
@@ -481,10 +507,16 @@ async def api_delete_event(request: web.Request) -> web.Response:
         raise ApiError("Удалить событие может только его автор. Вы можете отказаться от него.", 403)
 
     await db.delete_event(event["id"])
-    notify(
-        event["target_user"],
-        f"🗑 Событие на {fmt_date(event['date'])}{title_part(event['title'])} удалено автором.",
-    )
+    if event["category"] == "shop":
+        notify(
+            event["target_user"],
+            f"🗑 Список покупок на {fmt_date(event['date'])} удалён автором.",
+        )
+    else:
+        notify(
+            event["target_user"],
+            f"🗑 Событие на {fmt_date(event['date'])}{title_part(event['title'])} удалено автором.",
+        )
     return web.json_response({"status": "deleted"})
 
 
@@ -492,6 +524,9 @@ async def api_respond(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     body = await read_json(request)
+
+    if event["category"] == "shop":
+        raise ApiError("На список покупок не нужно отвечать")
 
     status = body.get("status")
     if status not in ("accepted", "declined"):
@@ -555,8 +590,10 @@ async def api_add_sex_idea(request: web.Request) -> web.Response:
     body = await read_json(request)
     category_title = str(body.get("category_title", "")).strip()
     text = str(body.get("text", "")).strip()[:300]
-    if not category_title or not text:
-        raise ApiError("Укажите категорию и текст идеи")
+    if category_title not in SEX_IDEA_CATEGORIES:
+        raise ApiError("Идеи можно добавлять только в категории для секса")
+    if not text:
+        raise ApiError("Укажите текст идеи")
     await db.add_sex_idea(tg_user.id, category_title, text)
     ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
     return web.json_response({"status": "ok", "ideas": ideas})
