@@ -21,7 +21,7 @@ DB_PATH = os.getenv("DB_PATH", "calendar.db")
 
 INVITE_TTL = 7 * 24 * 3600
 MAX_ITEMS_PER_EVENT = 50
-MAX_EVENTS_PER_USER = 2000
+MAX_EVENTS_PER_USER = 10000
 
 
 class DbError(Exception):
@@ -148,6 +148,9 @@ class _TursoBackend:
         res = _check_item(results[0])
         step_results, step_errors = res["step_results"], res["step_errors"]
         if step_results[n + 1] is None:
+            failed = next(((i, e) for i, e in enumerate(step_errors) if e), None)
+            if failed is not None:
+                log.error("Batch упал на шаге %s: %s", failed[0], failed[1].get("message"))
             msg = next((e["message"] for e in step_errors if e), "транзакция отменена")
             raise DbError(msg)
         return [_parse_result(step_results[i + 1]) for i in range(n)]
@@ -711,3 +714,32 @@ async def purge_old_reminders(date_before: str) -> int:
         (date_before,),
     )
     return rs.affected
+
+
+async def pair_stats(user_id: int, partner_id: int) -> dict:
+    """Простая статистика по паре: счётчики по статусам и категориям."""
+    pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
+    pargs = (user_id, partner_id, partner_id, user_id)
+
+    rs_total = await _exec(f"SELECT COUNT(*) FROM events WHERE {pair}", pargs)
+    total = rs_total.rows[0][0] if rs_total.rows else 0
+
+    rs_status = await _exec(
+        f"SELECT status, COUNT(*) FROM events WHERE {pair} GROUP BY status",
+        pargs,
+    )
+    by_status = {row[0]: row[1] for row in rs_status.rows}
+
+    rs_cat = await _exec(
+        f"SELECT category, COUNT(*) FROM events WHERE {pair} GROUP BY category",
+        pargs,
+    )
+    by_category = {row[0]: row[1] for row in rs_cat.rows}
+
+    return {
+        "total": total,
+        "pending": by_status.get("pending", 0),
+        "accepted": by_status.get("accepted", 0),
+        "declined": by_status.get("declined", 0),
+        "by_category": by_category,
+    }
