@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import db  # noqa: E402  (после load_dotenv, чтобы подхватить DB_PATH)
+import db
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-blue.vercel.app").rstrip("/")
@@ -22,7 +22,7 @@ PORT = int(os.getenv("PORT", "8080"))
 INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-INIT_DATA_MAX_AGE = 24 * 3600  # секунд
+INIT_DATA_MAX_AGE = 24 * 3600
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -47,11 +47,8 @@ def open_app_keyboard() -> InlineKeyboardMarkup:
 async def safe_send(chat_id: int, text: str) -> None:
     try:
         await bot.send_message(chat_id, text, reply_markup=open_app_keyboard())
-    except Exception:  # пользователь мог заблокировать бота
+    except Exception:
         logging.exception("Не удалось отправить сообщение %s", chat_id)
-
-
-# ───────────────────────── Telegram-бот ─────────────────────────
 
 
 @router.message(CommandStart())
@@ -96,20 +93,15 @@ async def cmd_invite(message: Message):
     )
 
 
-# ───────────────────────── HTTP API ─────────────────────────
-
-
 def json_error(message: str, status: int = 400) -> web.Response:
     return web.json_response({"error": message}, status=status)
 
 
 async def health_check(_: web.Request) -> web.Response:
-    """Простой эндпоинт для проверки работы сервера (для UptimeRobot)."""
     return web.json_response({"status": "ok"})
 
 
 def authenticate(request: web.Request):
-    """Проверяет подпись initData от Telegram и возвращает пользователя."""
     raw = request.headers.get("X-Init-Data", "")
     try:
         data = safe_parse_webapp_init_data(BOT_TOKEN, raw)
@@ -165,7 +157,7 @@ async def api_create_event(request: web.Request) -> web.Response:
     date = str(body.get("date", ""))
     if not title:
         return json_error("Введите название")
-    if len(title) > 200 or len(description) > 2000:
+    if len(title) > 200 or len(description) > 5000:
         return json_error("Слишком длинный текст")
     if not DATE_RE.match(date):
         return json_error("Некорректная дата")
@@ -199,7 +191,7 @@ async def api_update_event(request: web.Request) -> web.Response:
     
     if not title:
         return json_error("Введите название")
-    if len(title) > 200 or len(description) > 2000:
+    if len(title) > 200 or len(description) > 5000:
         return json_error("Слишком длинный текст")
     if not DATE_RE.match(date):
         return json_error("Некорректная дата")
@@ -261,9 +253,6 @@ async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
 
-# ───────────────────────── CORS Middleware ─────────────────────────
-
-
 @web.middleware
 async def cors_middleware(request, handler):
     if request.method == "OPTIONS":
@@ -277,9 +266,6 @@ async def cors_middleware(request, handler):
     return response
 
 
-# ───────────────────────── Запуск ─────────────────────────
-
-
 async def main() -> None:
     global bot_username
     logging.basicConfig(level=logging.INFO)
@@ -288,7 +274,7 @@ async def main() -> None:
 
     app = web.Application(middlewares=[cors_middleware])
     app.router.add_get("/", index)
-    app.router.add_get("/health", health_check)  # Маршрут для пингера
+    app.router.add_get("/health", health_check)
     app.router.add_get("/api/state", api_state)
     app.router.add_post("/api/events", api_create_event)
     app.router.add_put("/api/events/{id}", api_update_event)
