@@ -111,6 +111,11 @@
   .sex-ideas-buttons { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 6px; }
   .sex-idea-trigger { padding: 12px 14px; border-radius: 12px; background: var(--bg2); font-size: 15px; font-weight: 500; text-align: left; border: 2px solid transparent; transition: all .15s; }
   .sex-idea-trigger:active { background: rgba(36, 129, 204, 0.2); }
+  .selected-idea-label { display: block; font-size: 13px; color: var(--hint); margin: 12px 0 4px; }
+  .selected-idea { padding: 12px 14px; border-radius: 12px; background: rgba(36, 129, 204, 0.12); border: 1px solid rgba(36, 129, 204, 0.35); display: flex; align-items: flex-start; gap: 10px; }
+  .selected-idea .si-text { flex: 1; font-size: 15px; word-break: break-word; }
+  .selected-idea .si-clear { font-size: 18px; opacity: .55; padding: 0 4px; border-radius: 6px; line-height: 1; flex-shrink: 0; }
+  .selected-idea .si-clear:hover { opacity: 1; background: rgba(0,0,0,.06); }
 
   /* Модальное окно списка идей */
   .ideas-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; z-index: 20; }
@@ -211,6 +216,13 @@
         <button type="button" class="sex-idea-trigger" data-title="🔥 Страстная ночь">🔥 Страстная ночь</button>
         <button type="button" class="sex-idea-trigger" data-title="🌹 Романтический вечер">🌹 Романтический вечер</button>
         <button type="button" class="sex-idea-trigger" data-title="✨ Эксперименты и фантазии">✨ Эксперименты и фантазии</button>
+      </div>
+      <div id="selectedIdeaWrap" hidden>
+        <span class="selected-idea-label">Выбранная идея</span>
+        <div class="selected-idea">
+          <span class="si-text" id="selectedIdeaText"></span>
+          <button type="button" class="si-clear" id="clearSelectedIdea" aria-label="Убрать идею">×</button>
+        </div>
       </div>
     </div>
 
@@ -640,6 +652,20 @@ $("list").addEventListener("keydown", (ev) => {
 });
 
 let formChecklist = [];
+let selectedIdeaText = "";
+
+function setSelectedIdea(text) {
+  selectedIdeaText = (text || "").trim();
+  const wrap = $("selectedIdeaWrap");
+  if (!wrap) return;
+  if (selectedIdeaText) {
+    $("selectedIdeaText").textContent = selectedIdeaText;
+    wrap.hidden = false;
+  } else {
+    $("selectedIdeaText").textContent = "";
+    wrap.hidden = true;
+  }
+}
 
 function updateFormSections() {
   const cat = $("fCategory").value;
@@ -648,6 +674,7 @@ function updateFormSections() {
 
   $("checklistSection").hidden = !(isShop && !editingEvent);
   $("sexIdeasSection").hidden = !isSex;
+  if (!isSex) setSelectedIdea("");
 }
 
 function openForm(event = null) {
@@ -657,6 +684,7 @@ function openForm(event = null) {
   $("fTime").value = event ? event.time : "";
   $("fCategory").value = event ? event.category : "rest";
   $("fDesc").value = event ? event.description || "" : "";
+  setSelectedIdea("");
 
   $("fHint").hidden = !event;
   $("fError").textContent = "";
@@ -714,12 +742,15 @@ function renderIdeas(title) {
 $("ideasContainer").addEventListener("click", (e) => {
   const item = e.target.closest("[data-idea-text]");
   if (!item) return;
-  const text = item.dataset.ideaText;
-  const descEl = $("fDesc");
-  descEl.value = descEl.value ? descEl.value + "\n" + text : text;
+  setSelectedIdea(item.dataset.ideaText);
   $("ideasOverlay").hidden = true;
   tg.HapticFeedback?.notificationOccurred("success");
 });
+
+$("clearSelectedIdea").onclick = () => {
+  setSelectedIdea("");
+  tg.HapticFeedback?.selectionChanged();
+};
 
 $("addIdeaBtn").onclick = async () => {
   const input = $("newIdeaInput");
@@ -768,9 +799,15 @@ $("fSave").onclick = async () => {
   const date = $("fDate").value;
   if (!date) { $("fError").textContent = "Выберите дату"; return; }
 
+  const notes = $("fDesc").value.trim();
+  let description = notes;
+  if (category === "sex" && selectedIdeaText) {
+    description = notes ? (selectedIdeaText + "\n" + notes) : selectedIdeaText;
+  }
+
   const payload = {
     category,
-    description: $("fDesc").value.trim(),
+    description,
     date,
     time: $("fTime").value,
   };
