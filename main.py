@@ -37,10 +37,15 @@ WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-blue.vercel.a
 PORT = int(os.getenv("PORT", "8080"))
 INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
 
-# Во сколько (по местному времени пользователя) слать напоминания «сегодня у вас событие»
 REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
-# 1 — показывать название события в уведомлениях (по умолчанию скрыто: превью на экране блокировки)
 SHOW_TITLES = os.getenv("NOTIFY_SHOW_TITLES", "0") == "1"
+
+# Названия категорий по умолчанию
+CATEGORY_TITLES = {
+    "rest": "Отдых",
+    "sex": "Секс",
+    "shop": "Магазин",
+}
 
 
 def _origin(url: str) -> str:
@@ -48,7 +53,6 @@ def _origin(url: str) -> str:
     return f"{p.scheme}://{p.netloc}"
 
 
-# Кому разрешено обращаться к API из браузера (фронтенд на другом домене)
 ALLOWED_ORIGINS = {_origin(WEBAPP_URL)} | {
     o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
 }
@@ -59,8 +63,8 @@ MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
 CATEGORIES = {"rest", "sex", "shop"}
 INIT_DATA_MAX_AGE = 24 * 3600  # секунд
 
-RATE_LIMIT = 40   # изменяющих запросов
-RATE_WINDOW = 60  # за столько секунд (на пользователя)
+RATE_LIMIT = 40
+RATE_WINDOW = 60
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -68,9 +72,6 @@ router = Router()
 dp.include_router(router)
 
 bot_username: str = ""
-
-
-# ───────────────────────── Вспомогательное ─────────────────────────
 
 
 class ApiError(Exception):
@@ -95,7 +96,7 @@ def open_app_keyboard() -> InlineKeyboardMarkup:
 async def safe_send(chat_id: int, text: str) -> None:
     try:
         await bot.send_message(chat_id, text, reply_markup=open_app_keyboard())
-    except Exception:  # пользователь мог заблокировать бота
+    except Exception:
         logging.exception("Не удалось отправить сообщение %s", chat_id)
 
 
@@ -103,9 +104,8 @@ _bg_tasks: set = set()
 
 
 def notify(chat_id: int, text: str) -> None:
-    """Отправляет уведомление в фоне, не задерживая ответ API."""
     task = asyncio.create_task(safe_send(chat_id, text))
-    _bg_tasks.add(task)  # держим ссылку, иначе задачу может собрать GC
+    _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
 
 
@@ -122,7 +122,6 @@ def title_part(title: str) -> str:
 
 @lru_cache(maxsize=256)
 def get_zone(name: str):
-    """ZoneInfo или None, если часовой пояс некорректен."""
     if not name or len(name) > 64:
         return None
     try:
@@ -142,9 +141,6 @@ def rate_limit(uid: int) -> None:
     if len(q) >= RATE_LIMIT:
         raise ApiError("Слишком много запросов, подождите минуту", 429)
     q.append(now)
-
-
-# ───────────────────────── Telegram-бот ─────────────────────────
 
 
 @router.message(CommandStart())
@@ -240,9 +236,6 @@ async def on_error(event: ErrorEvent):
             await msg.answer("⚠️ Что-то пошло не так, попробуйте ещё раз чуть позже.")
 
 
-# ───────────────────────── HTTP API: инфраструктура ─────────────────────────
-
-
 def _add_cors(request: web.Request, response: web.StreamResponse) -> None:
     origin = request.headers.get("Origin")
     if origin and origin in ALLOWED_ORIGINS:
@@ -257,7 +250,6 @@ def _add_cors(request: web.Request, response: web.StreamResponse) -> None:
 
 @web.middleware
 async def api_middleware(request: web.Request, handler):
-    """CORS + единая обработка ошибок (в т.ч. базы данных)."""
     try:
         if request.method == "OPTIONS":
             response = web.Response(status=204)
@@ -278,7 +270,6 @@ async def api_middleware(request: web.Request, handler):
 
 
 def authenticate(request: web.Request, write: bool = False):
-    """Проверяет подпись initData от Telegram и возвращает пользователя."""
     raw = request.headers.get("X-Init-Data", "")
     try:
         data = safe_parse_webapp_init_data(BOT_TOKEN, raw)
@@ -309,7 +300,6 @@ def _int_param(request: web.Request, name: str) -> int:
 
 
 def normalize_items(raw) -> list:
-    """Приводит пункты списка к [{text, checked}] (макс. 50, текст до 200 символов)."""
     if not isinstance(raw, list):
         return []
     result = []
@@ -327,18 +317,15 @@ def normalize_items(raw) -> list:
 
 
 def parse_event_payload(body: dict) -> dict:
-    title = str(body.get("title", "")).strip()
     description = str(body.get("description", "")).strip()
     date = str(body.get("date", ""))
     event_time = str(body.get("time") or "").strip()
     category = str(body.get("category", "rest"))
 
-    if not title:
-        raise ApiError("Введите название")
-    if len(title) > 200 or len(description) > 2000:
-        raise ApiError("Слишком длинный текст")
     if category not in CATEGORIES:
         raise ApiError("Неизвестная категория")
+    if len(description) > 2000:
+        raise ApiError("Слишком длинный текст")
     if not DATE_RE.match(date):
         raise ApiError("Некорректная дата")
     try:
@@ -349,6 +336,9 @@ def parse_event_payload(body: dict) -> dict:
         raise ApiError("Некорректная дата")
     if event_time and not TIME_RE.match(event_time):
         raise ApiError("Некорректное время")
+
+    # Автоматически устанавливаем название на основе категории
+    title = CATEGORY_TITLES.get(category, "Событие")
 
     return {
         "title": title,
@@ -375,7 +365,6 @@ def event_to_dict(e: dict, uid: int) -> dict:
 
 
 async def member_event(request: web.Request, uid: int) -> dict:
-    """Событие из URL; 404 если нет, 403 если пользователь не участник."""
     event = await db.get_event(_int_param(request, "id"))
     if event is None:
         raise ApiError("Событие не найдено", 404)
@@ -384,12 +373,7 @@ async def member_event(request: web.Request, uid: int) -> dict:
     return event
 
 
-def partner_of(event: dict, uid: int) -> int:
-    return event["target_user"] if event["created_by"] == uid else event["created_by"]
-
-
 def parse_month(raw) -> tuple:
-    """'YYYY-MM' → (начало месяца, начало следующего) в виде строк дат."""
     if raw is None:
         now = datetime.now(timezone.utc)
         year, month = now.year, now.month
@@ -402,11 +386,7 @@ def parse_month(raw) -> tuple:
     return f"{year:04d}-{month:02d}-01", f"{ny:04d}-{nm:02d}-01"
 
 
-# ───────────────────────── HTTP API: эндпоинты ─────────────────────────
-
-
 async def health_check(_: web.Request) -> web.Response:
-    """Простой эндпоинт для проверки работы сервера (для UptimeRobot)."""
     return web.json_response({"status": "ok"})
 
 
@@ -508,7 +488,6 @@ async def api_delete_event(request: web.Request) -> web.Response:
 
 
 async def api_respond(request: web.Request) -> web.Response:
-    """Ответ на событие. Партнёр может передумать: accepted ⇄ declined."""
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     body = await read_json(request)
@@ -582,9 +561,6 @@ async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
 
-# ───────────────────────── Напоминания ─────────────────────────
-
-
 async def send_due_reminders() -> None:
     now_utc = datetime.now(timezone.utc)
     lo = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -614,9 +590,6 @@ async def reminder_loop() -> None:
         await asyncio.sleep(60)
 
 
-# ───────────────────────── Запуск ─────────────────────────
-
-
 async def main() -> None:
     global bot_username
     logging.basicConfig(level=logging.INFO)
@@ -633,7 +606,7 @@ async def main() -> None:
 
     app = web.Application(middlewares=[api_middleware])
     app.router.add_get("/", index)
-    app.router.add_get("/health", health_check)  # Маршрут для пингера
+    app.router.add_get("/health", health_check)
     app.router.add_get("/api/state", api_state)
     app.router.add_post("/api/events", api_create_event)
     app.router.add_put("/api/events/{id}", api_update_event)
