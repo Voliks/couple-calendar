@@ -60,6 +60,8 @@ SEX_IDEA_CATEGORIES = {
     "✨ Эксперименты и фантазии",
 }
 
+ALLOWED_REACTIONS = ["❤️", "🔥", "😍", "😂", "👍", "🎉", "😮", "🥰"]
+
 
 def _origin(url: str) -> str:
     p = urlsplit(url)
@@ -451,6 +453,10 @@ def event_to_dict(e: dict, uid: int) -> dict:
         "status": e["status"],
         "color": e.get("color", ""),
         "priority": e.get("priority", ""),
+        "reaction": e.get("reaction", ""),
+        "reaction_by": e.get("reaction_by"),
+        "reaction_mine": e.get("reaction_by") == uid,
+        "decline_comment": e.get("decline_comment", ""),
         "is_creator": e["created_by"] == uid,
         "checklist": e["checklist"],
     }
@@ -523,6 +529,7 @@ async def api_state(request: web.Request) -> web.Response:
             "stats": stats,
             "todo_colors": db.TODO_COLORS,
             "todo_priorities": sorted(db.TODO_PRIORITIES),
+            "allowed_reactions": ALLOWED_REACTIONS,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -579,7 +586,6 @@ async def api_create_event(request: web.Request) -> web.Response:
 async def api_update_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
-    # Для «Дел» редактировать может любой из пары; для остальных — только автор.
     if event["category"] != "todo" and event["created_by"] != tg_user.id:
         raise ApiError("Редактировать событие может только его автор", 403)
 
@@ -621,7 +627,6 @@ async def api_update_event(request: web.Request) -> web.Response:
 async def api_delete_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
-    # «Дела» может удалять любой из пары.
     if event["category"] != "todo" and event["created_by"] != tg_user.id:
         raise ApiError("Удалить событие может только его автор. Вы можете отказаться от него.", 403)
 
@@ -643,17 +648,61 @@ async def api_respond(request: web.Request) -> web.Response:
     if event["target_user"] != tg_user.id:
         raise ApiError("Отвечать на событие может только приглашённый", 403)
 
-    if event["status"] != status:
+    comment = str(body.get("comment") or "").strip()[:500]
+
+    if event["status"] != status or comment != event.get("decline_comment", ""):
         await db.set_status(event["id"], status)
+        if status == "declined":
+            await db.set_decline_comment(event["id"], comment)
+        else:
+            await db.set_decline_comment(event["id"], "")
+
         what = "принял(а)" if status == "accepted" else "отклонил(а)"
         icon = "✅" if status == "accepted" else "❌"
+        extra = f"\n💬 {comment}" if status == "declined" and comment else ""
         notify(
             event["created_by"],
             f"{icon} {tg_user.first_name} {what} событие на "
-            f"{fmt_date(event['date'])}{title_part(event['title'])}.",
+            f"{fmt_date(event['date'])}{title_part(event['title'])}.{extra}",
         )
         event = await db.get_event(event["id"])
     return web.json_response(event_to_dict(event, tg_user.id))
+
+
+async def api_set_reaction(request: web.Request) -> web.Response:
+    """Ставит/снимает эмодзи-реакцию. Только для принятых событий."""
+    tg_user = authenticate(request, write=True)
+    event = await member_event(request, tg_user.id)
+    body = await read_json(request)
+    emoji = str(body.get("emoji") or "").strip()
+
+    if event["category"] in ("shop", "todo"):
+        raise ApiError("Здесь реакция не нужна")
+    if event["status"] != "accepted":
+        raise ApiError("Реакция доступна только для принятого события")
+    if emoji and emoji not in ALLOWED_REACTIONS:
+        raise ApiError("Недопустимая реакция")
+
+    await db.set_reaction(event["id"], emoji, tg_user.id)
+    updated = await db.get_event(event["id"])
+    return web.json_response(event_to_dict(updated, tg_user.id))
+
+
+async def api_set_decline_comment(request: web.Request) -> web.Response:
+    """Оставить/изменить текстовый комментарий к отклонённому событию."""
+    tg_user = authenticate(request, write=True)
+    event = await member_event(request, tg_user.id)
+    if event["category"] in ("shop", "todo"):
+        raise ApiError("Здесь комментарий не нужен")
+    if event["status"] != "declined":
+        raise ApiError("Комментарий доступен только для отклонённого события")
+
+    body = await read_json(request)
+    comment = str(body.get("comment") or "").strip()[:500]
+
+    await db.set_decline_comment(event["id"], comment)
+    updated = await db.get_event(event["id"])
+    return web.json_response(event_to_dict(updated, tg_user.id))
 
 
 async def _shop_event(request: web.Request, uid: int) -> dict:
@@ -738,7 +787,6 @@ async def api_archive(request: web.Request) -> web.Response:
 
 
 async def api_archived_todos(request: web.Request) -> web.Response:
-    """Экран «Архив дел» — дела старше 1 месяца."""
     tg_user = authenticate(request)
     try:
         items = await db.list_archived_todos(tg_user.id)
@@ -804,7 +852,7 @@ async def send_due_reminders() -> None:
 async def cleanup_old_reminders() -> None:
     now = datetime.now(timezone.utc)
     cutoff_reminders = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-    cutoff_todos = (now - timedelta(days=182)).strftime("%Y-%m-%d")  # ~6 месяцев
+    cutoff_todos = (now - timedelta(days=182)).strftime("%Y-%m-%d")
     try:
         n = await db.purge_old_reminders(cutoff_reminders)
         if n:
@@ -862,6 +910,8 @@ async def main() -> None:
     app.router.add_put("/api/events/{id}", api_update_event)
     app.router.add_delete("/api/events/{id}", api_delete_event)
     app.router.add_post("/api/events/{id}/respond", api_respond)
+    app.router.add_post("/api/events/{id}/reaction", api_set_reaction)
+    app.router.add_post("/api/events/{id}/comment", api_set_decline_comment)
     app.router.add_post("/api/events/{id}/items", api_add_item)
     app.router.add_put("/api/events/{id}/items/{item_id}", api_set_item)
     app.router.add_delete("/api/events/{id}/items/{item_id}", api_delete_item)
