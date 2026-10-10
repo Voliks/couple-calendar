@@ -107,6 +107,11 @@
   .error { color: rgb(var(--declined)); font-size: 14px; margin-top: 10px; min-height: 1em; }
   .hint { font-size: 13px; color: var(--hint); margin-top: 12px; }
 
+  /* Кнопки уровня для секса */
+  .sex-levels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 6px; }
+  .sex-btn { padding: 10px 4px; border-radius: 10px; background: var(--bg2); font-size: 14px; font-weight: 500; text-align: center; border: 2px solid transparent; transition: all .15s; }
+  .sex-btn.active { border-color: var(--accent); background: rgba(36, 129, 204, 0.12); font-weight: 600; }
+
   /* Список покупок */
   .checklist { margin-top: 10px; }
   .checklist-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06); }
@@ -188,6 +193,16 @@
       <option value="shop">Магазин</option>
     </select>
 
+    <!-- Выбор уровня для категории Секс -->
+    <div id="sexLevelSection" hidden>
+      <label>Уровень интенсивности</label>
+      <div class="sex-levels">
+        <button type="button" class="sex-btn active" data-level="🔥 Тепло">🔥 Тепло</button>
+        <button type="button" class="sex-btn" data-level="🌶️ Горячо">🌶️ Горячо</button>
+        <button type="button" class="sex-btn" data-level="🌋 Жарааа!">🌋 Жарааа!</button>
+      </div>
+    </div>
+
     <label for="fDesc">Описание (необязательно)</label>
     <textarea id="fDesc" maxlength="2000"></textarea>
 
@@ -247,6 +262,7 @@ let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
 let editingEvent = null;
 let loaded = false;
+let selectedSexLevel = "🔥 Тепло";
 const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
 const monthCache = {};
 
@@ -601,21 +617,13 @@ $("list").addEventListener("keydown", (ev) => {
 
 let formChecklist = [];
 
-function updateChecklistSection() {
-  const show = $("fCategory").value === "shop" && !editingEvent;
-  $("checklistSection").hidden = !show;
-  if (!show) return;
-  const container = $("fChecklist");
-  if (!formChecklist.length) {
-    container.innerHTML = `<div class="cl-empty">Пока пусто. Добавьте пункты ниже.</div>`;
-    return;
-  }
-  container.innerHTML = formChecklist.map((item, idx) => `
-    <div class="checklist-item" data-idx="${idx}">
-      <span class="cl-text">${esc(item.text)}</span>
-      <button type="button" class="cl-remove" data-form-cl-remove aria-label="Удалить пункт «${esc(item.text)}»">×</button>
-    </div>
-  `).join("");
+function updateFormSections() {
+  const cat = $("fCategory").value;
+  const isShop = cat === "shop";
+  const isSex = cat === "sex";
+
+  $("checklistSection").hidden = !(isShop && !editingEvent);
+  $("sexLevelSection").hidden = !isSex;
 }
 
 function openForm(event = null) {
@@ -625,13 +633,26 @@ function openForm(event = null) {
   $("fTime").value = event ? event.time : "";
   $("fCategory").value = event ? event.category : "rest";
   $("fDesc").value = event ? event.description || "" : "";
+  
+  if (event && event.category === "sex") {
+    selectedSexLevel = event.title || "🔥 Тепло";
+  } else {
+    selectedSexLevel = "🔥 Тепло";
+  }
+
+  // Обновляем активную кнопку уровня
+  document.querySelectorAll(".sex-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.level === selectedSexLevel);
+  });
+
   $("fHint").hidden = !event;
   $("fError").textContent = "";
   formChecklist = [];
-  updateChecklistSection();
+  updateFormSections();
   $("overlay").hidden = false;
   tg.BackButton?.show();
 }
+
 function closeForm() {
   $("overlay").hidden = true;
   tg.BackButton?.hide();
@@ -645,7 +666,17 @@ try { tg.BackButton?.onClick(() => { if (!$("overlay").hidden) closeForm(); }); 
 
 $("fCategory").addEventListener("change", () => {
   if ($("fCategory").value !== "shop") formChecklist = [];
-  updateChecklistSection();
+  updateFormSections();
+});
+
+// Клик по кнопкам уровня секса
+document.querySelectorAll(".sex-btn").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll(".sex-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    selectedSexLevel = btn.dataset.level;
+    tg.HapticFeedback?.selectionChanged();
+  };
 });
 
 $("fClAdd").onclick = () => {
@@ -654,7 +685,7 @@ $("fClAdd").onclick = () => {
   if (!text || formChecklist.length >= 50) return;
   formChecklist.push({ text, checked: false });
   input.value = "";
-  updateChecklistSection();
+  updateFormSections();
   input.focus();
 };
 $("fClInput").addEventListener("keydown", (e) => {
@@ -664,7 +695,7 @@ $("fChecklist").addEventListener("click", (ev) => {
   const idxEl = ev.target.closest("[data-idx]");
   if (idxEl && ev.target.closest("[data-form-cl-remove]")) {
     formChecklist.splice(Number(idxEl.dataset.idx), 1);
-    updateChecklistSection();
+    updateFormSections();
   }
 });
 
@@ -678,6 +709,7 @@ $("fSave").onclick = async () => {
     description: $("fDesc").value.trim(),
     date,
     time: $("fTime").value,
+    sex_level: category === "sex" ? selectedSexLevel : undefined,
   };
   if (!editingEvent && category === "shop") payload.checklist = formChecklist;
 
