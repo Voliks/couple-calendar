@@ -693,7 +693,7 @@ async def api_delete_sex_idea(request: web.Request) -> web.Response:
             idea_id = int(raw_id)
         except ValueError:
             raise ApiError("Некорректный id идеи")
-        if not await db.delete_sex_idea(idea_id):
+        if not await db.delete_sex_idea(idea_id, archived_by=tg_user.id):
             raise ApiError("Идея не найдена", 404)
 
     ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
@@ -701,14 +701,15 @@ async def api_delete_sex_idea(request: web.Request) -> web.Response:
 
 
 async def api_archive(request: web.Request) -> web.Response:
-    """Только для ручного просмотра: отдаёт _архив из sex_ideas.json.
-    Авторизация не нужна, но и данные не секретные — просто тексты идей."""
+    """Только для ручного просмотра: отдаёт архив удалённых идей из БД.
+    Авторизация не нужна — данные не секретные (тексты идей, id того, кто удалил)."""
     try:
-        archive = await asyncio.to_thread(db.read_json_archive_sync)
+        items = await db.get_archived_ideas()
     except Exception:
         logging.exception("Не удалось прочитать архив идей")
-        archive = {}
-    return web.json_response(archive, dumps=lambda o: json.dumps(o, ensure_ascii=False, indent=2))
+        items = []
+    body = json.dumps(items, ensure_ascii=False, indent=2)
+    return web.Response(text=body, content_type="application/json; charset=utf-8")
 
 
 async def api_unlink(request: web.Request) -> web.Response:
