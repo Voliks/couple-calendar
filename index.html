@@ -3,7 +3,6 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- Адрес сервера API (бот на Render). Если фронтенд отдаётся самим ботом — оставьте content пустым. -->
 <meta name="api-base" content="https://couple-calendar-ycu9.onrender.com">
 <title>Календарь на двоих</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -47,7 +46,6 @@
     border: 2px solid transparent; font-size: 16px; }
   .day.today .num { color: var(--accent); font-weight: 700; }
   .day.selected { border-color: var(--accent); background: var(--bg2); }
-  /* Статусы различаются формой, а не только цветом: кольцо — ждёт, круг — принято, ромб — отклонено */
   .dots { display: flex; gap: 3px; height: 7px; }
   .dot { width: 7px; height: 7px; border-radius: 50%; }
   .dot.pending  { border: 2px solid rgb(var(--pending)); }
@@ -139,13 +137,11 @@
 </head>
 <body>
 
-<!-- Экран: подключение к серверу (на бесплатном хостинге сервер может просыпаться до минуты) -->
 <section id="loading" class="loading" role="status">
   <div class="spinner" id="loadingSpinner" aria-hidden="true"></div>
   <p id="loadingHint">Подключаемся…</p>
 </section>
 
-<!-- Экран: партнёр не привязан -->
 <section id="welcome" class="welcome" hidden>
   <h1>Календарь на двоих</h1>
   <p>Чтобы начать, отправьте пригласительную ссылку второму человеку. Когда он откроет её в боте, вы будете связаны.</p>
@@ -153,7 +149,6 @@
   <button class="btn ghost" id="copy">Скопировать ссылку</button>
 </section>
 
-<!-- Экран: календарь -->
 <main id="app" hidden>
   <div class="cal-head">
     <button class="nav" id="prev" aria-label="Предыдущий месяц">‹</button>
@@ -193,11 +188,6 @@
       <option value="shop">Магазин</option>
     </select>
 
-    <div id="titleField">
-      <label for="fTitle">Название (необязательно)</label>
-      <input type="text" id="fTitle" maxlength="200" placeholder="Если пусто — название категории">
-    </div>
-
     <label for="fDesc">Описание (необязательно)</label>
     <textarea id="fDesc" maxlength="2000"></textarea>
 
@@ -210,7 +200,7 @@
       </div>
     </div>
 
-    <div class="hint" id="fHint" hidden>Если изменить дату, время, категорию или название, партнёру придётся ответить заново. Список покупок редактируется прямо в карточке события.</div>
+    <div class="hint" id="fHint" hidden>Если изменить дату, время или категорию, партнёру придётся ответить заново. Список покупок редактируется прямо в карточке события.</div>
 
     <div class="error" id="fError" role="alert"></div>
     <div class="row">
@@ -223,7 +213,6 @@
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
 <script>
-// Безопасная инициализация Telegram SDK (страница открывается и вне Telegram — для отладки)
 const tg = window.Telegram?.WebApp || {
   initData: "",
   ready: () => {},
@@ -247,7 +236,7 @@ const MONTHS_FORMAT = new Intl.DateTimeFormat("ru", { month: "long", year: "nume
 const DAY_FORMAT = new Intl.DateTimeFormat("ru", { day: "numeric", month: "long" });
 
 const pad = (n) => String(n).padStart(2, "0");
-const fmt = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;      // m: 0..11
+const fmt = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
 const todayStr = () => { const t = new Date(); return fmt(t.getFullYear(), t.getMonth(), t.getDate()); };
 const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -259,9 +248,8 @@ let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getM
 let editingEvent = null;
 let loaded = false;
 const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
-const monthCache = {};            // "2026-10" → события (чтобы листать месяцы без пустых экранов)
+const monthCache = {};
 
-/* ── API ── */
 const API_BASE = (document.querySelector('meta[name="api-base"]')?.content || "").replace(/\/$/, "");
 
 class HttpError extends Error {
@@ -270,7 +258,7 @@ class HttpError extends Error {
 
 async function request(path, { method = "GET", body, etag } = {}) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 60000);   // холодный старт Render может занять ~минуту
+  const timer = setTimeout(() => ctrl.abort(), 60000);
   try {
     const headers = { "X-Init-Data": tg.initData || "", "X-TZ": TZ };
     if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -303,19 +291,18 @@ function toast(text) {
 function confirmDialog(message, onYes) {
   try {
     if (tg.showConfirm) { tg.showConfirm(message, (ok) => { if (ok) onYes(); }); return; }
-  } catch (e) { /* старый клиент Telegram — используем обычный confirm */ }
+  } catch (e) {}
   if (confirm(message)) onYes();
 }
 
-/* ── Загрузка состояния ── */
 let etag = null, etagKey = "";
 
 async function load(silent = false) {
   const key = monthKey();
   try {
     const r = await request("/state?month=" + key, { etag: etagKey === key ? etag : null });
-    if (key !== monthKey()) return;          // пользователь уже перелистнул месяц
-    if (r.status === 304) return;            // данные не менялись — ничего не перерисовываем
+    if (key !== monthKey()) return;
+    if (r.status === 304) return;
     state = r.data; etag = r.etag; etagKey = key;
     monthCache[key] = state.events;
     render();
@@ -348,7 +335,6 @@ async function bootstrap() {
   startPolling();
 }
 
-/* ── Рендер ── */
 function render() {
   $("welcome").hidden = state.has_partner;
   $("app").hidden = !state.has_partner;
@@ -363,7 +349,7 @@ function renderCalendar() {
   const byDay = {};
   for (const e of state.events) (byDay[e.date] ||= []).push(e);
 
-  const offset = (new Date(view.y, view.m, 1).getDay() + 6) % 7;   // неделя с понедельника
+  const offset = (new Date(view.y, view.m, 1).getDay() + 6) % 7;
   const days = new Date(view.y, view.m + 1, 0).getDate();
   const today = todayStr();
   let html = "";
@@ -430,7 +416,6 @@ function cardHtml(e) {
   </article>`;
 }
 
-/* Обновляет только изменившиеся карточки (фокус и введённый текст не теряются) */
 const sigs = new WeakMap();
 function reconcile(container, items) {
   if (!items.length) { container.replaceChildren(); return false; }
@@ -454,7 +439,7 @@ function reconcile(container, items) {
         if (newInput && typed) newInput.value = typed;
         if (newInput && hadFocus) {
           newInput.focus({ preventScroll: true });
-          try { newInput.setSelectionRange(sel[0], sel[1]); } catch (e) { /* ignore */ }
+          try { newInput.setSelectionRange(sel[0], sel[1]); } catch (e) {}
         }
       }
       el = fresh;
@@ -477,7 +462,6 @@ function renderList() {
   }
 }
 
-/* ── Календарь: навигация ── */
 $("grid").addEventListener("click", (ev) => {
   const btn = ev.target.closest(".day");
   if (!btn) return;
@@ -502,17 +486,15 @@ function shiftMonth(delta) {
 $("prev").onclick = () => shiftMonth(-1);
 $("next").onclick = () => shiftMonth(1);
 
-/* ── Локальные изменения события без перезагрузки ── */
 function replaceEvent(updated) {
   const i = state.events.findIndex((e) => e.id === updated.id);
   if (i >= 0) state.events[i] = updated; else state.events.push(updated);
   monthCache[monthKey()] = state.events;
-  etag = null;                       // следующий опрос заберёт актуальное состояние
+  etag = null;
   renderCalendar();
   renderList();
 }
 
-/* Операции со списком идут по очереди; пока они выполняются, опрос не перетирает локальные правки */
 let pendingOps = 0;
 let opChain = Promise.resolve();
 function queueOp(fn) {
@@ -529,7 +511,7 @@ function toggleItem(eventId, itemId, checked) {
   const ev = findEvent(eventId);
   const it = ev?.checklist.find((x) => String(x.id) === String(itemId));
   if (!it) return;
-  it.checked = checked;                                  // оптимистично
+  it.checked = checked;
   renderList();
   queueOp(async () => {
     try {
@@ -543,7 +525,7 @@ function toggleItem(eventId, itemId, checked) {
 function removeItem(eventId, itemId) {
   const ev = findEvent(eventId);
   if (!ev) return;
-  ev.checklist = ev.checklist.filter((x) => String(x.id) !== String(itemId));   // оптимистично
+  ev.checklist = ev.checklist.filter((x) => String(x.id) !== String(itemId));
   renderList();
   queueOp(async () => {
     try {
@@ -565,12 +547,11 @@ function addItem(eventId, input) {
     } catch (e) {
       toast(e.message);
       const again = [...document.querySelectorAll(".cl-input")].find((i) => i.closest(".card")?.dataset.id === String(eventId));
-      if (again && !again.value) again.value = text;     // вернуть введённое
+      if (again && !again.value) again.value = text;
     }
   });
 }
 
-/* ── Действия в карточках ── */
 $("list").addEventListener("click", async (ev) => {
   const card = ev.target.closest(".card");
   if (!card) return;
@@ -618,11 +599,9 @@ $("list").addEventListener("keydown", (ev) => {
   }
 });
 
-/* ── Форма создания / редактирования ── */
-let formChecklist = [];  // [{text, checked}] — только при создании события «Магазин»
+let formChecklist = [];
 
 function updateChecklistSection() {
-  $("titleField").hidden = $("fCategory").value === "shop";   // у «Магазина» названия нет
   const show = $("fCategory").value === "shop" && !editingEvent;
   $("checklistSection").hidden = !show;
   if (!show) return;
@@ -645,7 +624,6 @@ function openForm(event = null) {
   $("fDate").value = event ? event.date : selected;
   $("fTime").value = event ? event.time : "";
   $("fCategory").value = event ? event.category : "rest";
-  $("fTitle").value = event ? event.title : "";
   $("fDesc").value = event ? event.description || "" : "";
   $("fHint").hidden = !event;
   $("fError").textContent = "";
@@ -663,7 +641,7 @@ $("add").onclick = () => openForm();
 $("fCancel").onclick = closeForm;
 $("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeForm(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("overlay").hidden) closeForm(); });
-try { tg.BackButton?.onClick(() => { if (!$("overlay").hidden) closeForm(); }); } catch (e) { /* старый клиент */ }
+try { tg.BackButton?.onClick(() => { if (!$("overlay").hidden) closeForm(); }); } catch (e) {}
 
 $("fCategory").addEventListener("change", () => {
   if ($("fCategory").value !== "shop") formChecklist = [];
@@ -696,7 +674,6 @@ $("fSave").onclick = async () => {
   if (!date) { $("fError").textContent = "Выберите дату"; return; }
 
   const payload = {
-    title: (category === "shop" ? "" : $("fTitle").value.trim()) || CATEGORIES[category].label,
     category,
     description: $("fDesc").value.trim(),
     date,
@@ -726,7 +703,6 @@ $("fSave").onclick = async () => {
   }
 };
 
-/* ── Партнёр: приглашение и отвязка ── */
 $("share").onclick = () => {
   const url = "https://t.me/share/url?url=" + encodeURIComponent(state.invite_link) +
               "&text=" + encodeURIComponent("Давай вести общий календарь на двоих!");
@@ -748,7 +724,6 @@ $("unlink").onclick = () => {
   });
 };
 
-/* ── Старт и автообновление ── */
 function startPolling() {
   const canPoll = () => !document.hidden && $("overlay").hidden && pendingOps === 0;
   setInterval(() => { if (canPoll()) load(true); }, 15000);
