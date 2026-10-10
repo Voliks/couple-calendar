@@ -1,13 +1,4 @@
-"""Слой работы с БД.
-
-Бэкенды:
-  * Turso (если заданы TURSO_URL и TURSO_TOKEN) — через документированный HTTP-протокол
-    Turso (Hrana over HTTP, /v2/pipeline) поверх aiohttp. Никаких дополнительных
-    зависимостей: устаревший libsql-client больше не нужен.
-  * Локальный SQLite-файл (DB_PATH, по умолчанию calendar.db) — для разработки.
-
-Все функции бросают DbError при ошибках БД — обработка в одном месте (middleware в main.py).
-"""
+"""Слой работы с БД с поддержкой общих идей для категории Секс."""
 from __future__ import annotations
 
 import asyncio
@@ -27,13 +18,13 @@ TURSO_URL = os.getenv("TURSO_URL", "").strip()
 TURSO_TOKEN = os.getenv("TURSO_TOKEN", "").strip()
 DB_PATH = os.getenv("DB_PATH", "calendar.db")
 
-INVITE_TTL = 7 * 24 * 3600          # срок жизни пригласительной ссылки, секунд
-MAX_ITEMS_PER_EVENT = 50            # пунктов в списке покупок
-MAX_EVENTS_PER_USER = 2000          # событий, созданных одним пользователем
+INVITE_TTL = 7 * 24 * 3600
+MAX_ITEMS_PER_EVENT = 50
+MAX_EVENTS_PER_USER = 2000
 
 
 class DbError(Exception):
-    """Любая ошибка работы с базой данных."""
+    pass
 
 
 @dataclass
@@ -41,9 +32,6 @@ class Result:
     rows: list = field(default_factory=list)
     affected: int = 0
     last_id: int | None = None
-
-
-# ───────────────────────── Бэкенд: Turso по HTTP ─────────────────────────
 
 
 def _encode(value: Any) -> dict:
@@ -66,7 +54,7 @@ def _decode(value: dict) -> Any:
         return int(value["value"])
     if kind == "float":
         return float(value["value"])
-    return value.get("value")  # text / blob (base64)
+    return value.get("value")
 
 
 def _stmt(sql: str, args: Sequence[Any] = ()) -> dict:
@@ -92,7 +80,6 @@ def _check_item(item: dict) -> dict:
 class _TursoBackend:
     def __init__(self, url: str, token: str):
         url = url.strip().rstrip("/")
-        # libsql://, wss:// и т.п. → https:// (HTTP-протокол стабильнее websocket)
         url = "https://" + (url.split("://", 1)[1] if "://" in url else url)
         self._endpoint = url + "/v2/pipeline"
         self._headers = {
@@ -102,8 +89,7 @@ class _TursoBackend:
         self._session = None
 
     async def start(self) -> None:
-        import aiohttp  # ленивый импорт: локальный SQLite работает и без aiohttp
-
+        import aiohttp
         self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
 
     async def close(self) -> None:
@@ -112,7 +98,6 @@ class _TursoBackend:
 
     async def _pipeline(self, requests: list, retries: int = 0) -> list:
         import aiohttp
-
         payload = {"requests": requests + [{"type": "close"}]}
         for attempt in range(retries + 1):
             try:
@@ -135,10 +120,9 @@ class _TursoBackend:
                 await asyncio.sleep(0.4 * (attempt + 1))
                 continue
             raise err
-        raise DbError("unreachable")  # pragma: no cover
+        raise DbError("unreachable")
 
     async def execute(self, sql: str, args: Sequence[Any] = ()) -> Result:
-        # Безопасно повторять только чтение
         retries = 2 if sql.lstrip()[:6].upper() in ("SELECT", "PRAGMA") else 0
         results = await self._pipeline(
             [{"type": "execute", "stmt": _stmt(sql, args)}], retries
@@ -146,7 +130,6 @@ class _TursoBackend:
         return _parse_result(_check_item(results[0]))
 
     async def batch(self, stmts: list[tuple[str, Sequence[Any]]]) -> list[Result]:
-        """Атомарно выполняет несколько запросов (BEGIN … COMMIT / ROLLBACK)."""
         if not stmts:
             return []
         n = len(stmts)
@@ -163,13 +146,10 @@ class _TursoBackend:
         results = await self._pipeline([{"type": "batch", "batch": {"steps": steps}}])
         res = _check_item(results[0])
         step_results, step_errors = res["step_results"], res["step_errors"]
-        if step_results[n + 1] is None:  # COMMIT не выполнился
+        if step_results[n + 1] is None:
             msg = next((e["message"] for e in step_errors if e), "транзакция отменена")
             raise DbError(msg)
         return [_parse_result(step_results[i + 1]) for i in range(n)]
-
-
-# ───────────────────────── Бэкенд: локальный SQLite ─────────────────────────
 
 
 class _SqliteBackend:
@@ -235,20 +215,16 @@ async def _batch(stmts) -> list[Result]:
     return await _b().batch(stmts)
 
 
-# ───────────────────────── Инициализация и миграции ─────────────────────────
-
-
 async def init_db() -> None:
     global _backend
     if bool(TURSO_URL) != bool(TURSO_TOKEN):
-        # Тихий откат на локальный файл на хостинге с эфемерным диском = потеря данных
         raise RuntimeError("Нужно задать обе переменные: TURSO_URL и TURSO_TOKEN (или ни одной)")
     if TURSO_URL:
         _backend = _TursoBackend(TURSO_URL, TURSO_TOKEN)
         log.info("БД: Turso (HTTP)")
     else:
         _backend = _SqliteBackend(DB_PATH)
-        log.warning("БД: локальный файл %s (TURSO_URL/TURSO_TOKEN не заданы)", DB_PATH)
+        log.warning("БД: локальный файл %s", DB_PATH)
     await _backend.start()
     await _migrate()
 
@@ -266,7 +242,6 @@ async def _columns(table: str) -> set[str]:
 
 
 async def _add_column(table: str, name: str, ddl: str) -> bool:
-    """Добавляет колонку, если её ещё нет. True — если добавили."""
     if name in await _columns(table):
         return False
     await _exec(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
@@ -299,26 +274,13 @@ async def _m1_base() -> None:
         """
     )
     await _add_column("events", "checklist", "TEXT NOT NULL DEFAULT '[]'")
-    await _exec("CREATE INDEX IF NOT EXISTS idx_events_created ON events (created_by)")
-    await _exec("CREATE INDEX IF NOT EXISTS idx_events_target ON events (target_user)")
 
 
 async def _m2_features() -> None:
-    # users: срок жизни приглашения и часовой пояс (для напоминаний)
     await _add_column("users", "invite_expires", "INTEGER NOT NULL DEFAULT 0")
     await _add_column("users", "tz", "TEXT NOT NULL DEFAULT ''")
-
-    # events: время и категория (раньше категория хранилась в title)
     await _add_column("events", "time", "TEXT NOT NULL DEFAULT ''")
-    added_category = await _add_column("events", "category", "TEXT NOT NULL DEFAULT 'rest'")
-    if added_category:
-        await _exec(
-            "UPDATE events SET category = CASE title "
-            "WHEN 'Магазин' THEN 'shop' WHEN 'Секс' THEN 'sex' ELSE 'rest' END"
-        )
-    await _exec("CREATE INDEX IF NOT EXISTS idx_events_date ON events (date)")
-
-    # Пункты списка покупок — отдельной таблицей (атомарные обновления без гонок)
+    await _add_column("events", "category", "TEXT NOT NULL DEFAULT 'rest'")
     await _exec(
         """
         CREATE TABLE IF NOT EXISTS checklist_items (
@@ -329,9 +291,6 @@ async def _m2_features() -> None:
         )
         """
     )
-    await _exec("CREATE INDEX IF NOT EXISTS idx_items_event ON checklist_items (event_id)")
-
-    # Отправленные напоминания (одно на пару «событие — пользователь»)
     await _exec(
         """
         CREATE TABLE IF NOT EXISTS reminders (
@@ -342,31 +301,33 @@ async def _m2_features() -> None:
         """
     )
 
-    # Перенос старых JSON-чеклистов в таблицу пунктов
-    old = (await _exec("SELECT id, checklist FROM events WHERE checklist != '[]'")).rows
-    for event_id, raw in old:
-        have = (await _exec("SELECT 1 FROM checklist_items WHERE event_id = ? LIMIT 1", (event_id,))).rows
-        if have:
-            continue
-        try:
-            data = json.loads(raw) if isinstance(raw, str) else []
-        except (ValueError, TypeError):
-            data = []
-        stmts = []
-        for it in data if isinstance(data, list) else []:
-            if isinstance(it, dict):
-                text, checked = str(it.get("text", "")).strip()[:200], bool(it.get("checked"))
-            else:
-                text, checked = str(it).strip()[:200], False
-            if text:
-                stmts.append(
-                    ("INSERT INTO checklist_items (event_id, text, checked) VALUES (?, ?, ?)",
-                     (event_id, text, int(checked)))
-                )
-        await _batch(stmts)
+
+async def _m3_sex_ideas() -> None:
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS sex_ideas (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL,
+            category_title TEXT NOT NULL,
+            text           TEXT NOT NULL
+        )
+        """
+    )
+    count = (await _exec("SELECT COUNT(*) FROM sex_ideas")).rows[0][0]
+    if count == 0:
+        defaults = [
+            (0, "🔥 Страстная ночь", "Свечи, приглушенный свет и массаж"),
+            (0, "🔥 Страстная ночь", "Интимная обстановка без спешки"),
+            (0, "🌹 Романтический вечер", "Ужин при свечах и долгие разговоры"),
+            (0, "🌹 Романтический вечер", "Прогулка под луной и романтика"),
+            (0, "✨ Эксперименты и фантазии", "Воплощение заветных желаний"),
+            (0, "✨ Эксперименты и фантазии", "Новые ролевые игры и сюрпризы")
+        ]
+        for uid, c_title, txt in defaults:
+            await _exec("INSERT INTO sex_ideas (user_id, category_title, text) VALUES (?, ?, ?)", (uid, c_title, txt))
 
 
-MIGRATIONS = [(1, _m1_base), (2, _m2_features)]
+MIGRATIONS = [(1, _m1_base), (2, _m2_features), (3, _m3_sex_ideas)]
 
 
 async def _migrate() -> None:
@@ -375,11 +336,9 @@ async def _migrate() -> None:
     for version, fn in MIGRATIONS:
         if version > current:
             log.info("Миграция БД → v%s", version)
-            await fn()  # миграции идемпотентны: сбой между fn и INSERT не страшен
+            await fn()
             await _exec("INSERT INTO schema_version (version) VALUES (?)", (version,))
 
-
-# ───────────────────────── Пользователи ─────────────────────────
 
 USER_COLS = "telegram_id, partner_id, invite_code, invite_expires, tz"
 
@@ -426,7 +385,6 @@ async def get_user_by_code(code: str) -> dict | None:
 
 
 async def ensure_invite(user: dict) -> dict:
-    """Возвращает пользователя с действующим кодом приглашения (при необходимости обновляет)."""
     if user["partner_id"] is not None or user["invite_expires"] > time.time():
         return user
     for _ in range(5):
@@ -436,7 +394,7 @@ async def ensure_invite(user: dict) -> dict:
                 (_new_code(), int(time.time()) + INVITE_TTL, user["telegram_id"]),
             )
         except DbError:
-            continue  # крайне маловероятная коллизия UNIQUE
+            continue
         return await get_user(user["telegram_id"])
     raise DbError("Не удалось обновить приглашение")
 
@@ -446,7 +404,6 @@ async def set_timezone(telegram_id: int, tz: str) -> None:
 
 
 async def link_partners(a: int, b: int) -> bool:
-    """Атомарно связывает двух свободных пользователей. False — если кто-то уже занят."""
     rs = await _exec(
         "UPDATE users SET partner_id = CASE telegram_id WHEN ? THEN ? ELSE ? END "
         "WHERE telegram_id IN (?, ?) AND "
@@ -457,7 +414,6 @@ async def link_partners(a: int, b: int) -> bool:
 
 
 async def unlink_partners(user_id: int) -> int | None:
-    """Разрывает связь и удаляет общие события. Возвращает id бывшего партнёра."""
     user = await get_user(user_id)
     if not user or user["partner_id"] is None:
         return None
@@ -475,8 +431,6 @@ async def unlink_partners(user_id: int) -> int | None:
     )
     return p
 
-
-# ───────────────────────── События ─────────────────────────
 
 EVENT_COLS = "id, created_by, target_user, title, description, date, time, category, status"
 
@@ -539,7 +493,6 @@ async def create_event(created_by, target_user, title, description, date, event_
 
 
 async def list_events_range(user_id: int, start: str, end: str) -> list[dict]:
-    """События пользователя с date в диапазоне [start, end)."""
     rs = await _exec(
         f"SELECT {EVENT_COLS} FROM events "
         "WHERE (created_by = ? OR target_user = ?) AND date >= ? AND date < ? "
@@ -561,7 +514,6 @@ async def set_status(event_id: int, status: str) -> None:
 
 
 async def update_event(event_id, title, description, date, event_time, category, reset_status: bool):
-    """Обновляет событие. reset_status — вернуть в «ждёт ответа» и сбросить напоминания."""
     stmts = [
         (
             "UPDATE events SET title = ?, description = ?, date = ?, time = ?, category = ?, "
@@ -587,11 +539,7 @@ async def delete_event(event_id: int) -> None:
     )
 
 
-# ───────────────────────── Пункты списка покупок ─────────────────────────
-
-
 async def add_item(event_id: int, text: str) -> bool:
-    """Добавляет пункт, если не превышен лимит. False — лимит исчерпан."""
     rs = await _exec(
         "INSERT INTO checklist_items (event_id, text, checked) "
         "SELECT ?, ?, 0 WHERE (SELECT COUNT(*) FROM checklist_items WHERE event_id = ?) < ?",
@@ -613,11 +561,29 @@ async def delete_item(event_id: int, item_id: int) -> bool:
     return rs.affected == 1
 
 
-# ───────────────────────── Напоминания ─────────────────────────
+async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
+    if partner_id:
+        rs = await _exec(
+            "SELECT id, category_title, text FROM sex_ideas WHERE user_id IN (0, ?, ?) ORDER BY id DESC",
+            (user_id, partner_id)
+        )
+    else:
+        rs = await _exec(
+            "SELECT id, category_title, text FROM sex_ideas WHERE user_id IN (0, ?) ORDER BY id DESC",
+            (user_id,)
+        )
+    return [{"id": r[0], "category_title": r[1], "text": r[2]} for r in rs.rows]
+
+
+async def add_sex_idea(user_id: int, category_title: str, text: str) -> int | None:
+    rs = await _exec(
+        "INSERT INTO sex_ideas (user_id, category_title, text) VALUES (?, ?, ?)",
+        (user_id, category_title, text)
+    )
+    return rs.last_id
 
 
 async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
-    """Принятые события в окне дат × участники, которым ещё не слали напоминание."""
     rs = await _exec(
         "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz "
         "FROM events e JOIN users u ON u.telegram_id IN (e.created_by, e.target_user) "
@@ -632,7 +598,6 @@ async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
 
 
 async def mark_reminded(event_id: int, user_id: int) -> bool:
-    """True — если пометили впервые (т.е. напоминание нужно отправить)."""
     rs = await _exec(
         "INSERT OR IGNORE INTO reminders (event_id, user_id) VALUES (?, ?)", (event_id, user_id)
     )
