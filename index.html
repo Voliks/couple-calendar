@@ -115,6 +115,7 @@
   input, select, textarea { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid transparent;
     background: var(--bg2); color: var(--text); font: inherit; }
   textarea { resize: none; min-height: 80px; }
+  select:disabled { opacity: .5; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 0; }
   .two > div { min-width: 0; }
   input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
@@ -310,6 +311,21 @@
         <button type="button" class="prio-btn" data-prio="medium">🟡 Средний</button>
         <button type="button" class="prio-btn" data-prio="high">🔴 Высокий</button>
       </div>
+      <label for="fRemindBefore">Напомнить за</label>
+      <select id="fRemindBefore">
+        <option value="0">Не напоминать</option>
+        <option value="5">5 минут</option>
+        <option value="15">15 минут</option>
+        <option value="30">30 минут</option>
+        <option value="60">1 час</option>
+        <option value="120">2 часа</option>
+        <option value="180">3 часа</option>
+        <option value="360">6 часов</option>
+        <option value="720">12 часов</option>
+        <option value="1440">1 день</option>
+        <option value="2880">2 дня</option>
+      </select>
+      <div class="hint" id="remindHint">Напоминание работает, только если указано время события.</div>
     </div>
 
     <div id="sexIdeasSection" hidden>
@@ -419,10 +435,15 @@ function hexToRgb(hex) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
   return m ? `${parseInt(m[1],16)}, ${parseInt(m[2],16)}, ${parseInt(m[3],16)}` : "139, 92, 246";
 }
+function humanizeMinutes(m) {
+  if (m < 60) return `${m} мин`;
+  if (m < 1440) return `${m / 60} ч`;
+  return `${m / 1440} дн`;
+}
 
 let state = {
   has_partner: false, invite_link: "", events: [], sex_ideas: [],
-  stats: null, todo_colors: [], allowed_reactions: [],
+  stats: null, todo_colors: [], allowed_reactions: [], allowed_remind_before: [],
 };
 let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
@@ -673,7 +694,10 @@ function cardHtml(e) {
   const sk = statusKey(e);
   const isShop = e.category === "shop";
   const isTodo = e.category === "todo";
-  const tag = `${cat.icon} ${cat.label}${e.time ? " · " + esc(e.time) : ""}`;
+  const remindText = (isTodo && e.remind_before && e.time)
+    ? ` · 🔔 за ${humanizeMinutes(e.remind_before)}`
+    : "";
+  const tag = `${cat.icon} ${cat.label}${e.time ? " · " + esc(e.time) : ""}${remindText}`;
 
   const cardCls = isTodo ? "todo" : (isShop ? "accepted" : sk);
   const cardStyle = isTodo && e.color ? ` style="--c: ${hexToRgb(e.color)};"` : "";
@@ -984,6 +1008,18 @@ function availableTodoColors() {
   return (state.todo_colors && state.todo_colors.length) ? state.todo_colors : todoColorsFallback;
 }
 
+function updateRemindAvailability() {
+  const cat = $("fCategory").value;
+  const hasTime = !!$("fTime").value;
+  const isTodo = cat === "todo";
+  const sel = $("fRemindBefore");
+  if (!sel) return;
+  sel.disabled = !isTodo || !hasTime;
+  const hint = $("remindHint");
+  if (hint) hint.hidden = !isTodo || hasTime;
+  if (!hasTime) sel.value = "0";
+}
+
 function updateFormSections() {
   const cat = $("fCategory").value;
   const isShop = cat === "shop";
@@ -996,6 +1032,7 @@ function updateFormSections() {
 
   if (isShop && !editingEvent) renderFormChecklist();
   if (isTodo) renderTodoSection();
+  updateRemindAvailability();
 
   if (!isSex) {
     selectedIdeas = [];
@@ -1224,9 +1261,11 @@ function openForm(event = null) {
   if (event && event.category === "todo") {
     formColor = event.color || availableTodoColors()[6];
     formPriority = event.priority || "medium";
+    $("fRemindBefore").value = String(event.remind_before || 0);
   } else {
     formColor = availableTodoColors()[6];
     formPriority = "medium";
+    $("fRemindBefore").value = "0";
   }
 
   $("fHint").hidden = !event || (event && (event.category === "shop" || event.category === "todo"));
@@ -1252,6 +1291,8 @@ $("fCategory").addEventListener("change", () => {
   if ($("fCategory").value !== "shop") formChecklist = [];
   updateFormSections();
 });
+$("fTime").addEventListener("change", updateRemindAvailability);
+$("fTime").addEventListener("input", updateRemindAvailability);
 
 $("fClAdd").onclick = () => {
   const input = $("fClInput");
@@ -1303,6 +1344,8 @@ $("fSave").onclick = async () => {
     if (!formColor) { $("fError").textContent = "Выберите цвет"; return; }
     payload.color = formColor;
     payload.priority = formPriority || "medium";
+    const rb = parseInt($("fRemindBefore").value, 10) || 0;
+    payload.remind_before = ($("fTime").value ? rb : 0);
   }
   if (!editingEvent && category === "shop") payload.checklist = formChecklist;
 
