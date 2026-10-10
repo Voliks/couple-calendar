@@ -403,6 +403,11 @@ async def _m9_reactions() -> None:
     await _add_column("events", "decline_comment", "TEXT NOT NULL DEFAULT ''")
 
 
+async def _m10_two_comments() -> None:
+    await _add_column("events", "decline_comment_creator", "TEXT NOT NULL DEFAULT ''")
+    await _add_column("events", "decline_comment_target", "TEXT NOT NULL DEFAULT ''")
+
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -413,6 +418,7 @@ MIGRATIONS = [
     (7, _m7_archived_ideas),
     (8, _m8_todo),
     (9, _m9_reactions),
+    (10, _m10_two_comments),
 ]
 
 
@@ -542,7 +548,8 @@ async def unlink_partners(user_id: int) -> int | None:
 
 EVENT_COLS = (
     "id, created_by, target_user, title, description, date, time, category, status, "
-    "color, priority, reaction, reaction_by, decline_comment"
+    "color, priority, reaction, reaction_by, decline_comment, "
+    "decline_comment_creator, decline_comment_target"
 )
 
 
@@ -564,6 +571,8 @@ def _event(r) -> dict | None:
         "reaction": r[11] or "",
         "reaction_by": r[12],
         "decline_comment": r[13] or "",
+        "decline_comment_creator": r[14] or "",
+        "decline_comment_target": r[15] or "",
         "checklist": [],
     }
 
@@ -690,10 +699,19 @@ async def set_reaction(event_id: int, emoji: str, by_user_id: int) -> None:
 
 
 async def set_decline_comment(event_id: int, comment: str) -> None:
+    """Старое поле — оставлено для совместимости. Используйте set_decline_comment_slot."""
     await _exec(
         "UPDATE events SET decline_comment = ? WHERE id = ?",
         (comment, event_id),
     )
+
+
+async def set_decline_comment_slot(event_id: int, slot: str, comment: str) -> None:
+    """slot = 'creator' (автор события) | 'target' (приглашённый)."""
+    if slot not in ("creator", "target"):
+        raise ValueError("bad slot")
+    col = "decline_comment_creator" if slot == "creator" else "decline_comment_target"
+    await _exec(f"UPDATE events SET {col} = ? WHERE id = ?", (comment, event_id))
 
 
 # ==================== sex_ideas ====================
@@ -881,9 +899,7 @@ async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
     from datetime import date as _d, timedelta as _td
     cutoff = (_d.today() - _td(days=31)).isoformat()
     rs = await _exec(
-        "SELECT id, created_by, target_user, title, description, date, time, category, status, "
-        "color, priority, reaction, reaction_by, decline_comment "
-        "FROM events "
+        f"SELECT {EVENT_COLS} FROM events "
         "WHERE category = 'todo' AND date < ? AND (created_by = ? OR target_user = ?) "
         "ORDER BY date DESC, id DESC LIMIT ?",
         (cutoff, user_id, user_id, limit),
