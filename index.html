@@ -60,7 +60,7 @@
   .card p { margin: 4px 0 0; color: var(--text); opacity: .8; white-space: pre-wrap; word-break: break-word; }
   
   /* Чек-лист в карточке */
-  .checklist-view { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .checklist-view { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
   .checklist-item-view { display: flex; align-items: center; gap: 8px; font-size: 15px; cursor: pointer; }
   .checklist-item-view input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
   .checklist-item-view.checked span { text-decoration: line-through; opacity: 0.5; }
@@ -154,11 +154,15 @@
       <option value="Магазин">Магазин</option>
     </select>
 
-    <label for="fDesc">Описание (необязательно)</label>
-    <textarea id="fDesc" maxlength="2000" placeholder="Дополнительная информация..."></textarea>
+    <!-- Описание для Отдых / Секс -->
+    <div id="descContainer">
+      <label for="fDesc">Описание (необязательно)</label>
+      <textarea id="fDesc" maxlength="2000"></textarea>
+    </div>
 
+    <!-- Чек-лист для Магазина -->
     <div id="checklistContainer" hidden>
-      <label style="margin-top: 12px;">Список покупок</label>
+      <label>Список покупок</label>
       <div class="checklist-builder" id="checklistBuilder"></div>
       <button class="btn ghost" id="addChecklistItem" style="margin-top: 8px; width: 100%;">+ Добавить пункт</button>
     </div>
@@ -223,11 +227,10 @@ function toast(text) {
 
 async function load() {
   try {
-    const newState = await api("/state");
-    state = newState;
+    state = await api("/state");
     render();
   } catch (e) {
-    console.error(e);
+    toast(e.message);
   }
 }
 
@@ -261,22 +264,11 @@ function renderCalendar() {
 
 const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function parsePayload(desc, title) {
+function parseChecklist(desc) {
   try {
     const data = JSON.parse(desc);
-    if (data && typeof data === "object" && Array.isArray(data.items)) {
-      data.items = data.items.map(item => ({
-        id: item.id || Math.random().toString(36).substr(2, 9),
-        text: item.text || "",
-        done: !!item.done
-      }));
-      return data;
-    }
+    if (Array.isArray(data)) return data;
   } catch (e) {}
-  
-  if (title === "Магазин") {
-    return { text: desc || "", items: [] };
-  }
   return null;
 }
 
@@ -288,34 +280,26 @@ function renderList() {
     return;
   }
   $("list").innerHTML = items.map((e) => {
-    const answer = !e.is_creator && e.status === "pending" && e.title !== "Магазин"
+    const answer = !e.is_creator && e.status === "pending"
       ? `<div class="answer">
            <button class="yes" data-id="${e.id}" data-status="accepted">Да</button>
            <button class="no" data-id="${e.id}" data-status="declined">Нет</button>
          </div>` : "";
 
     let contentHtml = "";
-    const payload = parsePayload(e.description, e.title);
-    
-    if (e.title === "Магазин" && payload) {
-      if (payload.text) {
-        contentHtml += `<p>${esc(payload.text)}</p>`;
-      }
-      if (payload.items && payload.items.length > 0) {
-        contentHtml += `<div class="checklist-view">` + payload.items.map((item) => `
-          <label class="checklist-item-view ${item.done ? 'checked' : ''}">
-            <input type="checkbox" data-checklist-id="${item.id}" data-event-id="${e.id}" ${item.done ? 'checked' : ''}>
-            <span>${esc(item.text)}</span>
-          </label>
-        `).join("") + `</div>`;
-      }
+    const checklist = parseChecklist(e.description);
+    if (e.title === "Магазин" && checklist) {
+      contentHtml = `<div class="checklist-view">` + checklist.map((item, idx) => `
+        <label class="checklist-item-view ${item.done ? 'checked' : ''}">
+          <input type="checkbox" data-checklist-idx="${idx}" data-event-id="${e.id}" ${item.done ? 'checked' : ''}>
+          <span>${esc(item.text)}</span>
+        </label>
+      `).join("") + `</div>`;
     } else if (e.description) {
       contentHtml = `<p>${esc(e.description)}</p>`;
     }
 
-    const displayStatus = e.title === "Магазин" ? "Принято" : STATUS_TEXT[e.status];
-
-    return `<article class="card ${e.title === "Магазин" ? 'accepted' : e.status}" data-id="${e.id}">
+    return `<article class="card ${e.status}" data-id="${e.id}">
       <div class="card-header">
         <h3>${esc(e.title)}</h3>
         <div class="card-actions">
@@ -324,7 +308,7 @@ function renderList() {
         </div>
       </div>
       ${contentHtml}
-      <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span><b>${displayStatus}</b></div>
+      <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span><b>${STATUS_TEXT[e.status]}</b></div>
       ${answer}
     </article>`;
   }).join("");
@@ -351,44 +335,32 @@ function shiftMonth(delta) {
 $("prev").onclick = () => shiftMonth(-1);
 $("next").onclick = () => shiftMonth(1);
 
-// Мгновенный локальный отклик чекбокса без перезагрузки страницы
-$("list").addEventListener("change", async (ev) => {
-  const checkbox = ev.target.closest("input[type='checkbox'][data-checklist-id]");
-  if (!checkbox) return;
+$("list").addEventListener("click", async (ev) => {
+  const checkbox = ev.target.closest("input[type='checkbox'][data-checklist-idx]");
+  if (checkbox) {
+    const eventId = checkbox.dataset.eventId;
+    const idx = parseInt(checkbox.dataset.checklistIdx);
+    const event = state.events.find(e => String(e.id) === String(eventId));
+    if (!event) return;
 
-  const eventId = checkbox.dataset.eventId;
-  const itemId = checkbox.dataset.checklistId;
-  const event = state.events.find(e => String(e.id) === String(eventId));
-  if (!event) return;
-
-  const payload = parsePayload(event.description, event.title);
-  if (payload && payload.items) {
-    const item = payload.items.find(i => i.id === itemId);
-    if (item) {
-      item.done = checkbox.checked;
-      
-      const label = checkbox.closest(".checklist-item-view");
-      if (label) {
-        if (checkbox.checked) label.classList.add("checked");
-        else label.classList.remove("checked");
-      }
-
-      tg.HapticFeedback?.selectionChanged();
-
+    const checklist = parseChecklist(event.description);
+    if (checklist && checklist[idx]) {
+      checklist[idx].done = checkbox.checked;
       try {
         await api(`/events/${eventId}`, {
           method: "PUT",
-          body: JSON.stringify({ title: event.title, description: JSON.stringify(payload), date: event.date })
+          body: JSON.stringify({ title: event.title, description: JSON.stringify(checklist), date: event.date })
         });
+        tg.HapticFeedback?.selectionChanged();
+        await load();
       } catch (e) {
         toast(e.message);
-        load();
+        await load();
       }
     }
+    return;
   }
-});
 
-$("list").addEventListener("click", async (ev) => {
   const card = ev.target.closest(".card");
   if (!card) return;
   const eventId = card.dataset.id;
@@ -398,7 +370,7 @@ $("list").addEventListener("click", async (ev) => {
   if (statusBtn) {
     statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
     try {
-      await api(`/events/${eventId}`, {
+      await api(`/events/${eventId}/respond`, {
         method: "POST", body: JSON.stringify({ status: statusBtn.dataset.status })
       });
       tg.HapticFeedback?.notificationOccurred("success");
@@ -417,10 +389,10 @@ $("list").addEventListener("click", async (ev) => {
     $("fTitle").value = event.title;
     toggleCategoryFields(event.title);
 
-    const payload = parsePayload(event.description, event.title);
-    if (event.title === "Магазин" && payload) {
-      $("fDesc").value = payload.text || "";
-      renderChecklistBuilder(payload.items || []);
+    if (event.title === "Магазин") {
+      const checklist = parseChecklist(event.description) || [];
+      renderChecklistBuilder(checklist);
+      $("fDesc").value = "";
     } else {
       $("fDesc").value = event.description || "";
       renderChecklistBuilder([]);
@@ -446,8 +418,10 @@ $("list").addEventListener("click", async (ev) => {
 
 function toggleCategoryFields(category) {
   if (category === "Магазин") {
+    $("descContainer").hidden = true;
     $("checklistContainer").hidden = false;
   } else {
+    $("descContainer").hidden = false;
     $("checklistContainer").hidden = true;
   }
 }
@@ -455,15 +429,15 @@ function toggleCategoryFields(category) {
 $("fTitle").addEventListener("change", (e) => {
   toggleCategoryFields(e.target.value);
   if (e.target.value === "Магазин" && $("checklistBuilder").children.length === 0) {
-    renderChecklistBuilder([{ id: Math.random().toString(36).substr(2, 9), text: "", done: false }]);
+    renderChecklistBuilder([{ text: "", done: false }]);
   }
 });
 
 function renderChecklistBuilder(items) {
   const container = $("checklistBuilder");
-  container.innerHTML = items.map((item) => `
-    <div class="checklist-row" data-item-id="${item.id}">
-      <input type="text" class="checklist-input" value="${esc(item.text)}" placeholder="Название товара">
+  container.innerHTML = items.map((item, idx) => `
+    <div class="checklist-row">
+      <input type="text" class="checklist-input" value="${esc(item.text)}" placeholder="Название товара" data-idx="${idx}">
       <button type="button" class="remove-checklist-row">✕</button>
     </div>
   `).join("");
@@ -473,8 +447,6 @@ $("addChecklistItem").onclick = () => {
   const container = $("checklistBuilder");
   const div = document.createElement("div");
   div.className = "checklist-row";
-  const newId = Math.random().toString(36).substr(2, 9);
-  div.setAttribute("data-item-id", newId);
   div.innerHTML = `
     <input type="text" class="checklist-input" value="" placeholder="Название товара">
     <button type="button" class="remove-checklist-row">✕</button>
@@ -496,7 +468,7 @@ function openForm() {
   $("fTitle").value = "Отдых";
   toggleCategoryFields("Отдых");
   $("fDesc").value = "";
-  renderChecklistBuilder([{ id: Math.random().toString(36).substr(2, 9), text: "", done: false }]);
+  renderChecklistBuilder([{ text: "", done: false }]);
   $("fError").textContent = "";
   $("overlay").hidden = false;
 }
@@ -513,30 +485,26 @@ $("fSave").onclick = async () => {
   if (!date) { $("fError").textContent = "Выберите дату"; return; }
 
   let description = "";
-  const plainDesc = $("fDesc").value.trim();
-
   if (title === "Магазин") {
-    const rows = document.querySelectorAll(".checklist-row");
+    const rows = document.querySelectorAll(".checklist-input");
     const items = [];
     rows.forEach(r => {
-      const input = r.querySelector(".checklist-input");
-      const text = input ? input.value.trim() : "";
+      const text = r.value.trim();
       if (text) {
-        items.push({
-          id: r.dataset.itemId || Math.random().toString(36).substr(2, 9),
-          text,
-          done: false
-        });
+        items.push({ text, done: false });
       }
     });
-    description = JSON.stringify({ text: plainDesc, items });
+    if (items.length === 0) {
+      $("fError").textContent = "Добавьте хотя бы один товар в список";
+      return;
+    }
+    description = JSON.stringify(items);
   } else {
-    description = plainDesc;
+    description = $("fDesc").value.trim();
   }
 
   $("fSave").disabled = true;
   try {
-    let createdEvent;
     if (editingEventId) {
       await api(`/events/${editingEventId}`, {
         method: "PUT",
@@ -544,19 +512,11 @@ $("fSave").onclick = async () => {
       });
       toast("Событие изменено");
     } else {
-      createdEvent = await api("/events", {
+      await api("/events", {
         method: "POST",
         body: JSON.stringify({ title, description, date })
       });
     }
-
-    if (!editingEventId && title === "Магазин" && createdEvent && createdEvent.id) {
-      await api(`/events/${createdEvent.id}/respond`, {
-        method: "POST",
-        body: JSON.stringify({ status: "accepted" })
-      }).catch(() => {});
-    }
-
     tg.HapticFeedback?.notificationOccurred("success");
     selected = date;
     const d = parse(date);
@@ -581,7 +541,8 @@ $("copy").onclick = async () => {
 };
 
 load();
-// Фоновый опрос полностью убран, чтобы не ломать фокус при кликах по чекбоксам
+setInterval(() => { if (!document.hidden && $("overlay").hidden) load(); }, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
 </script>
 </body>
 </html>
