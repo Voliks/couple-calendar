@@ -124,6 +124,23 @@ def authenticate(request: web.Request):
     return data.user
 
 
+def _normalize_checklist(raw) -> list:
+    """Приводит чеклист к списку {text: str, checked: bool}."""
+    if not isinstance(raw, list):
+        return []
+    result = []
+    for item in raw[:50]:  # максимум 50 пунктов
+        if isinstance(item, dict):
+            text = str(item.get("text", "")).strip()[:200]
+            if text:
+                result.append({"text": text, "checked": bool(item.get("checked", False))})
+        elif isinstance(item, str):
+            text = item.strip()[:200]
+            if text:
+                result.append({"text": text, "checked": False})
+    return result
+
+
 def event_to_dict(row, uid: int) -> dict:
     return {
         "id": row["id"],
@@ -132,6 +149,7 @@ def event_to_dict(row, uid: int) -> dict:
         "date": row["date"],
         "status": row["status"],
         "is_creator": row["created_by"] == uid,
+        "checklist": row.get("checklist") or [],
     }
 
 
@@ -163,6 +181,7 @@ async def api_create_event(request: web.Request) -> web.Response:
     title = str(body.get("title", "")).strip()
     description = str(body.get("description", "")).strip()
     date = str(body.get("date", ""))
+    checklist = body.get("checklist")
     if not title:
         return json_error("Введите название")
     if len(title) > 200 or len(description) > 2000:
@@ -170,7 +189,13 @@ async def api_create_event(request: web.Request) -> web.Response:
     if not DATE_RE.match(date):
         return json_error("Некорректная дата")
 
-    event = await db.create_event(tg_user.id, user["partner_id"], title, description, date)
+    # Нормализуем чеклист (только для «Магазин»)
+    if title == "Магазин" and isinstance(checklist, list):
+        checklist = _normalize_checklist(checklist)
+    else:
+        checklist = []
+
+    event = await db.create_event(tg_user.id, user["partner_id"], title, description, date, checklist)
     await safe_send(
         user["partner_id"],
         f"➕ Новое событие на {date}: {title}! Откройте календарь для ответа.",
@@ -196,7 +221,8 @@ async def api_update_event(request: web.Request) -> web.Response:
     title = str(body.get("title", "")).strip()
     description = str(body.get("description", "")).strip()
     date = str(body.get("date", ""))
-    
+    checklist = body.get("checklist")
+
     if not title:
         return json_error("Введите название")
     if len(title) > 200 or len(description) > 2000:
@@ -204,7 +230,12 @@ async def api_update_event(request: web.Request) -> web.Response:
     if not DATE_RE.match(date):
         return json_error("Некорректная дата")
 
-    updated = await db.update_event(event_id, title, description, date)
+    if title == "Магазин" and isinstance(checklist, list):
+        checklist = _normalize_checklist(checklist)
+    else:
+        checklist = []
+
+    updated = await db.update_event(event_id, title, description, date, checklist)
     return web.json_response(event_to_dict(updated, tg_user.id))
 
 
@@ -257,6 +288,30 @@ async def api_respond(request: web.Request) -> web.Response:
     return web.json_response(event_to_dict(event, tg_user.id))
 
 
+async def api_update_checklist(request: web.Request) -> web.Response:
+    """Обновляет только чеклист события (оба партнёра могут). Не сбрасывает статус."""
+    tg_user = authenticate(request)
+    try:
+        event_id = int(request.match_info["id"])
+        body = await request.json()
+    except Exception:
+        return json_error("Некорректный запрос")
+
+    event = await db.get_event(event_id)
+    if event is None:
+        return json_error("Событие не найдено", 404)
+
+    if event["created_by"] != tg_user.id and event["target_user"] != tg_user.id:
+        return json_error("Нет доступа", 403)
+
+    if event["title"] != "Магазин":
+        return json_error("Чеклист доступен только для категории «Магазин»", 400)
+
+    checklist = _normalize_checklist(body.get("checklist"))
+    updated = await db.update_checklist(event_id, checklist)
+    return web.json_response(event_to_dict(updated, tg_user.id))
+
+
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
@@ -294,6 +349,7 @@ async def main() -> None:
     app.router.add_put("/api/events/{id}", api_update_event)
     app.router.add_delete("/api/events/{id}", api_delete_event)
     app.router.add_post("/api/events/{id}/respond", api_respond)
+    app.router.add_put("/api/events/{id}/checklist", api_update_checklist)
 
     runner = web.AppRunner(app)
     await runner.setup()

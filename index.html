@@ -90,6 +90,23 @@
   .btn:disabled { opacity: .5; }
   .error { color: rgb(var(--declined)); font-size: 14px; margin-top: 10px; min-height: 1em; }
 
+  /* Чеклист */
+  .checklist { margin-top: 10px; }
+  .checklist-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06); }
+  .checklist-item:last-child { border-bottom: 0; }
+  .checklist-item input[type="checkbox"] { width: 20px; height: 20px; accent-color: rgb(var(--accepted)); flex-shrink: 0; cursor: pointer; }
+  .checklist-item .cl-text { flex: 1; word-break: break-word; }
+  .checklist-item.checked .cl-text { text-decoration: line-through; opacity: .55; }
+  .checklist-item .cl-remove { font-size: 18px; opacity: .5; padding: 2px 6px; border-radius: 6px; }
+  .checklist-item .cl-remove:hover { opacity: 1; background: rgba(0,0,0,.05); }
+  .cl-add-row { display: flex; gap: 8px; margin-top: 10px; }
+  .cl-add-row input { flex: 1; }
+  .cl-add-row button { padding: 0 14px; border-radius: 12px; background: var(--bg2); font-weight: 600; white-space: nowrap; }
+  .cl-add-row button:active { background: var(--accent); color: var(--accent-text); }
+  .card .checklist { margin-top: 10px; background: rgba(0,0,0,.03); border-radius: 10px; padding: 4px 10px; }
+  .card .checklist-item { padding: 7px 0; }
+  .card .checklist-item .cl-text { font-size: 15px; }
+
   /* Нет партнёра */
   .welcome { text-align: center; padding: 60px 8px 0; }
   .welcome h1 { font-size: 24px; margin: 0 0 10px; }
@@ -142,6 +159,16 @@
 
     <label for="fDesc">Описание (необязательно)</label>
     <textarea id="fDesc" maxlength="2000"></textarea>
+
+    <div id="checklistSection" hidden>
+      <label>Список покупок</label>
+      <div class="checklist" id="fChecklist"></div>
+      <div class="cl-add-row">
+        <input type="text" id="fClInput" placeholder="Добавить пункт..." maxlength="200">
+        <button type="button" id="fClAdd">+</button>
+      </div>
+    </div>
+
     <div class="error" id="fError"></div>
     <div class="row">
       <button class="btn ghost" id="fCancel">Отмена</button>
@@ -244,6 +271,25 @@ function renderCalendar() {
 
 const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+function renderChecklistHtml(checklist, interactive) {
+  if (!checklist || !checklist.length) return "";
+  const items = checklist.map((item, idx) => {
+    const checked = item.checked ? "checked" : "";
+    const cls = item.checked ? "checklist-item checked" : "checklist-item";
+    if (interactive) {
+      return `<div class="${cls}" data-idx="${idx}">
+        <input type="checkbox" ${checked} data-cl-toggle>
+        <span class="cl-text">${esc(item.text)}</span>
+      </div>`;
+    }
+    return `<div class="${cls}">
+      <input type="checkbox" ${checked} disabled>
+      <span class="cl-text">${esc(item.text)}</span>
+    </div>`;
+  }).join("");
+  return `<div class="checklist">${items}</div>`;
+}
+
 function renderList() {
   $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
   const items = state.events.filter((e) => e.date === selected);
@@ -257,6 +303,9 @@ function renderList() {
            <button class="yes" data-id="${e.id}" data-status="accepted">Да</button>
            <button class="no" data-id="${e.id}" data-status="declined">Нет</button>
          </div>` : "";
+    const clHtml = (e.title === "Магазин" && e.checklist && e.checklist.length)
+      ? renderChecklistHtml(e.checklist, true)
+      : "";
     return `<article class="card ${e.status}" data-id="${e.id}">
       <div class="card-header">
         <h3>${esc(e.title)}</h3>
@@ -266,6 +315,7 @@ function renderList() {
         </div>
       </div>
       ${e.description ? `<p>${esc(e.description)}</p>` : ""}
+      ${clHtml}
       <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span><b>${STATUS_TEXT[e.status]}</b></div>
       ${answer}
     </article>`;
@@ -294,12 +344,38 @@ function shiftMonth(delta) {
 $("prev").onclick = () => shiftMonth(-1);
 $("next").onclick = () => shiftMonth(1);
 
-/* ── Ответ, Редактирование, Удаление в списке ── */
+/* ── Ответ, Редактирование, Удаление, Чеклист в списке ── */
 $("list").addEventListener("click", async (ev) => {
   const card = ev.target.closest(".card");
   if (!card) return;
   const eventId = card.dataset.id;
   const event = state.events.find(e => String(e.id) === String(eventId));
+
+  // Переключение пункта чеклиста
+  const clToggle = ev.target.closest("[data-cl-toggle]");
+  if (clToggle && event) {
+    const itemEl = clToggle.closest(".checklist-item");
+    const idx = Number(itemEl.dataset.idx);
+    const newChecklist = (event.checklist || []).map((it, i) =>
+      i === idx ? { ...it, checked: !it.checked } : it
+    );
+    // Оптимистичное обновление UI
+    itemEl.classList.toggle("checked", newChecklist[idx].checked);
+    clToggle.checked = newChecklist[idx].checked;
+    try {
+      await api(`/events/${eventId}/checklist`, {
+        method: "PUT",
+        body: JSON.stringify({ checklist: newChecklist })
+      });
+      tg.HapticFeedback?.selectionChanged();
+      // Обновляем локальный стейт, чтобы не ждать полного load
+      event.checklist = newChecklist;
+    } catch (e) {
+      toast(e.message);
+      await load();
+    }
+    return;
+  }
 
   // Ответ на событие
   const statusBtn = ev.target.closest("[data-status]");
@@ -326,6 +402,8 @@ $("list").addEventListener("click", async (ev) => {
     $("fTitle").value = event.title;
     $("fDesc").value = event.description || "";
     $("fError").textContent = "";
+    formChecklist = (event.checklist || []).map(it => ({ ...it }));
+    updateChecklistSection();
     $("overlay").hidden = false;
     return;
   }
@@ -345,6 +423,26 @@ $("list").addEventListener("click", async (ev) => {
 });
 
 /* ── Форма создания / редактирования ── */
+let formChecklist = [];  // [{text, checked}, ...]
+
+function updateChecklistSection() {
+  const isShop = $("fTitle").value === "Магазин";
+  $("checklistSection").hidden = !isShop;
+  if (!isShop) return;
+  const container = $("fChecklist");
+  if (!formChecklist.length) {
+    container.innerHTML = `<div class="empty" style="padding:12px 0;font-size:14px">Пока пусто. Добавьте пункты ниже.</div>`;
+    return;
+  }
+  container.innerHTML = formChecklist.map((item, idx) => `
+    <div class="checklist-item ${item.checked ? "checked" : ""}" data-idx="${idx}">
+      <input type="checkbox" ${item.checked ? "checked" : ""} data-form-cl-toggle>
+      <span class="cl-text">${esc(item.text)}</span>
+      <button type="button" class="cl-remove" data-form-cl-remove title="Удалить">×</button>
+    </div>
+  `).join("");
+}
+
 function openForm() {
   editingEventId = null;
   $("sheetTitle").textContent = "Новое событие";
@@ -352,6 +450,8 @@ function openForm() {
   $("fTitle").value = "Отдых";
   $("fDesc").value = "";
   $("fError").textContent = "";
+  formChecklist = [];
+  updateChecklistSection();
   $("overlay").hidden = false;
 }
 const closeForm = () => { $("overlay").hidden = true; };
@@ -361,23 +461,68 @@ $("fCancel").onclick = closeForm;
 $("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeForm(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeForm(); });
 
+// Показывать/скрывать чеклист при смене категории
+$("fTitle").addEventListener("change", () => {
+  if ($("fTitle").value !== "Магазин") formChecklist = [];
+  updateChecklistSection();
+});
+
+// Добавление пункта
+$("fClAdd").onclick = () => {
+  const input = $("fClInput");
+  const text = input.value.trim();
+  if (!text) return;
+  formChecklist.push({ text, checked: false });
+  input.value = "";
+  updateChecklistSection();
+  input.focus();
+};
+$("fClInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("fClAdd").click(); }
+});
+
+// Переключение / удаление в форме
+$("fChecklist").addEventListener("click", (ev) => {
+  const idxEl = ev.target.closest("[data-idx]");
+  if (!idxEl) return;
+  const idx = Number(idxEl.dataset.idx);
+  if (ev.target.closest("[data-form-cl-remove]")) {
+    formChecklist.splice(idx, 1);
+    updateChecklistSection();
+    return;
+  }
+  if (ev.target.closest("[data-form-cl-toggle]")) {
+    formChecklist[idx].checked = !formChecklist[idx].checked;
+    updateChecklistSection();
+  }
+});
+
 $("fSave").onclick = async () => {
   const title = $("fTitle").value;
   const date = $("fDate").value;
   if (!date) { $("fError").textContent = "Выберите дату"; return; }
+
+  const payload = {
+    title,
+    description: $("fDesc").value.trim(),
+    date,
+  };
+  if (title === "Магазин") {
+    payload.checklist = formChecklist;
+  }
 
   $("fSave").disabled = true;
   try {
     if (editingEventId) {
       await api(`/events/${editingEventId}`, {
         method: "PUT",
-        body: JSON.stringify({ title, description: $("fDesc").value.trim(), date })
+        body: JSON.stringify(payload)
       });
       toast("Событие изменено");
     } else {
       await api("/events", {
         method: "POST",
-        body: JSON.stringify({ title, description: $("fDesc").value.trim(), date })
+        body: JSON.stringify(payload)
       });
     }
     tg.HapticFeedback?.notificationOccurred("success");

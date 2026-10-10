@@ -1,6 +1,7 @@
 import os
 import secrets
 import logging
+import json
 from libsql_client import create_client
 
 TURSO_URL = os.getenv("TURSO_URL")
@@ -41,10 +42,18 @@ async def init_db() -> None:
                     description TEXT NOT NULL DEFAULT '',
                     date        TEXT NOT NULL,
                     status      TEXT NOT NULL DEFAULT 'pending'
-                                CHECK (status IN ('pending', 'accepted', 'declined'))
+                                CHECK (status IN ('pending', 'accepted', 'declined')),
+                    checklist   TEXT NOT NULL DEFAULT '[]'
                 )
                 """
             )
+            # Для уже существующих БД: добавляем колонку, если её нет
+            try:
+                await client.execute(
+                    "ALTER TABLE events ADD COLUMN checklist TEXT NOT NULL DEFAULT '[]'"
+                )
+            except Exception:
+                pass  # колонка уже есть
             await client.execute("CREATE INDEX IF NOT EXISTS idx_events_created ON events (created_by)")
             await client.execute("CREATE INDEX IF NOT EXISTS idx_events_target ON events (target_user)")
     except Exception as e:
@@ -64,6 +73,14 @@ def _user_to_dict(r):
 def _event_to_dict(r):
     if not r:
         return None
+    checklist = []
+    if len(r) > 7 and r[7]:
+        try:
+            checklist = json.loads(r[7]) if isinstance(r[7], str) else (r[7] or [])
+        except (json.JSONDecodeError, TypeError):
+            checklist = []
+    if not isinstance(checklist, list):
+        checklist = []
     return {
         "id": r[0],
         "created_by": r[1],
@@ -72,6 +89,7 @@ def _event_to_dict(r):
         "description": r[4],
         "date": r[5],
         "status": r[6],
+        "checklist": checklist,
     }
 
 
@@ -128,19 +146,22 @@ async def link_partners(a: int, b: int) -> None:
         logging.error("Ошибка в link_partners: %s", e)
 
 
-async def create_event(created_by: int, target_user: int, title: str, description: str, date: str):
+async def create_event(created_by: int, target_user: int, title: str, description: str, date: str, checklist=None):
+    if checklist is None:
+        checklist = []
+    checklist_json = json.dumps(checklist, ensure_ascii=False)
     try:
         async with get_client() as client:
             rs = await client.execute(
-                "INSERT INTO events (created_by, target_user, title, description, date) "
-                "VALUES (?, ?, ?, ?, ?) RETURNING id, created_by, target_user, title, description, date, status",
-                (created_by, target_user, title, description, date),
+                "INSERT INTO events (created_by, target_user, title, description, date, checklist) "
+                "VALUES (?, ?, ?, ?, ?, ?) RETURNING id, created_by, target_user, title, description, date, status, checklist",
+                (created_by, target_user, title, description, date, checklist_json),
             )
             if rs.rows:
                 return _event_to_dict(rs.rows[0])
             last_id = rs.last_insert_rowid
             rs_sel = await client.execute(
-                "SELECT id, created_by, target_user, title, description, date, status FROM events WHERE id = ?",
+                "SELECT id, created_by, target_user, title, description, date, status, checklist FROM events WHERE id = ?",
                 (last_id,),
             )
             return _event_to_dict(rs_sel.rows[0])
@@ -153,7 +174,7 @@ async def list_events(user_id: int):
     try:
         async with get_client() as client:
             rs = await client.execute(
-                "SELECT id, created_by, target_user, title, description, date, status FROM events "
+                "SELECT id, created_by, target_user, title, description, date, status, checklist FROM events "
                 "WHERE created_by = ? OR target_user = ? ORDER BY date, id",
                 (user_id, user_id),
             )
@@ -167,7 +188,7 @@ async def get_event(event_id: int):
     try:
         async with get_client() as client:
             rs = await client.execute(
-                "SELECT id, created_by, target_user, title, description, date, status FROM events WHERE id = ?",
+                "SELECT id, created_by, target_user, title, description, date, status, checklist FROM events WHERE id = ?",
                 (event_id,),
             )
             if rs.rows:
@@ -186,16 +207,38 @@ async def set_status(event_id: int, status: str) -> None:
         raise
 
 
-async def update_event(event_id: int, title: str, description: str, date: str):
+async def update_event(event_id: int, title: str, description: str, date: str, checklist=None):
     try:
         async with get_client() as client:
-            await client.execute(
-                "UPDATE events SET title = ?, description = ?, date = ?, status = 'pending' WHERE id = ?",
-                (title, description, date, event_id),
-            )
+            if checklist is not None:
+                checklist_json = json.dumps(checklist, ensure_ascii=False)
+                await client.execute(
+                    "UPDATE events SET title = ?, description = ?, date = ?, checklist = ?, status = 'pending' WHERE id = ?",
+                    (title, description, date, checklist_json, event_id),
+                )
+            else:
+                await client.execute(
+                    "UPDATE events SET title = ?, description = ?, date = ?, status = 'pending' WHERE id = ?",
+                    (title, description, date, event_id),
+                )
             return await get_event(event_id)
     except Exception as e:
         logging.error("Ошибка в update_event: %s", e)
+        raise
+
+
+async def update_checklist(event_id: int, checklist: list) -> dict:
+    """Обновляет только чеклист, не сбрасывая статус."""
+    try:
+        checklist_json = json.dumps(checklist, ensure_ascii=False)
+        async with get_client() as client:
+            await client.execute(
+                "UPDATE events SET checklist = ? WHERE id = ?",
+                (checklist_json, event_id),
+            )
+            return await get_event(event_id)
+    except Exception as e:
+        logging.error("Ошибка в update_checklist: %s", e)
         raise
 
 
