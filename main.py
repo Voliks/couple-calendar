@@ -407,6 +407,17 @@ def normalize_items(raw) -> list:
     return result
 
 
+def _extract_idea_lines(description: str) -> list[str]:
+    out = []
+    for line in (description or "").splitlines():
+        s = line.strip()
+        if s.startswith("• "):
+            t = s[2:].strip()
+            if t:
+                out.append(t)
+    return out
+
+
 def parse_event_payload(body: dict) -> dict:
     description = str(body.get("description", "")).strip()
     date = str(body.get("date", ""))
@@ -465,6 +476,25 @@ def event_to_dict(e: dict, uid: int) -> dict:
     reactions = e.get("reactions", {}) or {}
     my_reaction = reactions.get(uid, "")
     partner_reaction = reactions.get(partner_id, "")
+    idea_responses = e.get("idea_responses", {}) or {}
+
+    idea_lines = _extract_idea_lines(e["description"]) if e["category"] == "sex" else []
+    ideas_out = []
+    for i, text in enumerate(idea_lines):
+        r = idea_responses.get(i) or {}
+        ideas_out.append({
+            "idx": i,
+            "text": text,
+            "status": r.get("status", ""),
+            "by": r.get("user_id"),
+        })
+
+    can_respond_ideas = (
+        not is_creator
+        and e["status"] == "pending"
+        and len(ideas_out) > 0
+    )
+
     return {
         "id": e["id"],
         "title": e["title"],
@@ -486,6 +516,8 @@ def event_to_dict(e: dict, uid: int) -> dict:
         ),
         "is_creator": is_creator,
         "checklist": e["checklist"],
+        "ideas": ideas_out,
+        "can_respond_ideas": can_respond_ideas,
     }
 
 
@@ -698,6 +730,35 @@ async def api_respond(request: web.Request) -> web.Response:
         )
         event = await db.get_event(event["id"])
     return web.json_response(event_to_dict(event, tg_user.id))
+
+
+async def api_set_idea_response(request: web.Request) -> web.Response:
+    """Да/Нет по конкретной идее события категории sex."""
+    tg_user = authenticate(request, write=True)
+    event = await member_event(request, tg_user.id)
+    if event["category"] != "sex":
+        raise ApiError("Здесь нет отдельных идей")
+    if event["status"] != "pending":
+        raise ApiError("Общий ответ уже дан — изменить отдельные нельзя")
+    if event["target_user"] != tg_user.id:
+        raise ApiError("Отвечать по идеям может только приглашённый")
+
+    body = await read_json(request)
+    try:
+        idx = int(body.get("idx"))
+    except (TypeError, ValueError):
+        raise ApiError("Некорректный idx")
+    status = str(body.get("status") or "")
+    if status not in ("accepted", "declined"):
+        raise ApiError("Некорректный статус")
+
+    idea_lines = _extract_idea_lines(event["description"])
+    if not (0 <= idx < len(idea_lines)):
+        raise ApiError("Идея не найдена", 404)
+
+    await db.set_idea_response(event["id"], idx, status, tg_user.id)
+    updated = await db.get_event(event["id"])
+    return web.json_response(event_to_dict(updated, tg_user.id))
 
 
 async def api_set_reaction(request: web.Request) -> web.Response:
@@ -977,6 +1038,7 @@ async def main() -> None:
     app.router.add_put("/api/events/{id}", api_update_event)
     app.router.add_delete("/api/events/{id}", api_delete_event)
     app.router.add_post("/api/events/{id}/respond", api_respond)
+    app.router.add_post("/api/events/{id}/idea", api_set_idea_response)
     app.router.add_post("/api/events/{id}/reaction", api_set_reaction)
     app.router.add_post("/api/events/{id}/comment", api_set_decline_comment)
     app.router.add_post("/api/events/{id}/items", api_add_item)
