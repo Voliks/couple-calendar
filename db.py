@@ -424,6 +424,21 @@ async def _m12_todo_remind_before() -> None:
     await _add_column("events", "remind_before", "INTEGER NOT NULL DEFAULT 0")
 
 
+async def _m13_idea_responses() -> None:
+    await _exec(
+        """
+        CREATE TABLE IF NOT EXISTS idea_responses (
+            event_id  INTEGER NOT NULL,
+            idea_idx  INTEGER NOT NULL,
+            status    TEXT NOT NULL,
+            user_id   INTEGER NOT NULL,
+            ts        INTEGER NOT NULL,
+            PRIMARY KEY (event_id, idea_idx)
+        )
+        """
+    )
+
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -437,6 +452,7 @@ MIGRATIONS = [
     (10, _m10_two_comments),
     (11, _m11_reactions_table),
     (12, _m12_todo_remind_before),
+    (13, _m13_idea_responses),
 ]
 
 
@@ -551,6 +567,7 @@ async def unlink_partners(user_id: int) -> int | None:
             (f"DELETE FROM checklist_items WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM reminders WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM reactions WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
+            (f"DELETE FROM idea_responses WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM events WHERE {pair}", pargs),
             ("UPDATE users SET partner_id = NULL, invite_expires = 0 WHERE telegram_id IN (?, ?)",
              (user_id, p)),
@@ -588,6 +605,7 @@ def _event(r) -> dict | None:
         "decline_comment_target": r[15] or "",
         "remind_before": r[16] or 0,
         "reactions": {},
+        "idea_responses": {},
         "checklist": [],
     }
 
@@ -615,6 +633,16 @@ async def _attach_items(events: list[dict]) -> list[dict]:
         by_id = {e["id"]: e for e in events}
         for event_id, user_id, emoji in rs.rows:
             by_id[event_id]["reactions"][user_id] = emoji
+
+        rs2 = await _exec(
+            f"SELECT event_id, idea_idx, status, user_id, ts FROM idea_responses "
+            f"WHERE event_id IN ({marks})",
+            tuple(ids),
+        )
+        for event_id, idx, status, uid, ts in rs2.rows:
+            by_id[event_id]["idea_responses"][idx] = {
+                "status": status, "user_id": uid, "ts": ts,
+            }
 
     return events
 
@@ -681,6 +709,7 @@ async def update_event(event_id, title, description, date, event_time, category,
     ]
     if reset_status:
         stmts.append(("DELETE FROM reminders WHERE event_id = ?", (event_id,)))
+        stmts.append(("DELETE FROM idea_responses WHERE event_id = ?", (event_id,)))
     if category != "shop":
         stmts.append(("DELETE FROM checklist_items WHERE event_id = ?", (event_id,)))
     await _batch(stmts)
@@ -693,6 +722,7 @@ async def delete_event(event_id: int) -> None:
             ("DELETE FROM checklist_items WHERE event_id = ?", (event_id,)),
             ("DELETE FROM reminders WHERE event_id = ?", (event_id,)),
             ("DELETE FROM reactions WHERE event_id = ?", (event_id,)),
+            ("DELETE FROM idea_responses WHERE event_id = ?", (event_id,)),
             ("DELETE FROM events WHERE id = ?", (event_id,)),
         ]
     )
@@ -739,6 +769,30 @@ async def get_event_reactions(event_id: int) -> dict[int, str]:
         "SELECT user_id, emoji FROM reactions WHERE event_id = ?", (event_id,)
     )
     return {r[0]: r[1] for r in rs.rows}
+
+
+async def set_idea_response(event_id: int, idea_idx: int, status: str, user_id: int) -> None:
+    if status not in ("accepted", "declined"):
+        raise ValueError("bad status")
+    await _exec(
+        "INSERT INTO idea_responses (event_id, idea_idx, status, user_id, ts) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(event_id, idea_idx) DO UPDATE SET "
+        "status = excluded.status, user_id = excluded.user_id, ts = excluded.ts",
+        (event_id, idea_idx, status, user_id, int(time.time())),
+    )
+
+
+async def get_idea_responses(event_id: int) -> dict[int, dict]:
+    rs = await _exec(
+        "SELECT idea_idx, status, user_id, ts FROM idea_responses WHERE event_id = ?",
+        (event_id,),
+    )
+    return {r[0]: {"status": r[1], "user_id": r[2], "ts": r[3]} for r in rs.rows}
+
+
+async def clear_idea_responses(event_id: int) -> None:
+    await _exec("DELETE FROM idea_responses WHERE event_id = ?", (event_id,))
 
 
 async def set_decline_comment(event_id: int, comment: str) -> None:
@@ -929,10 +983,12 @@ async def purge_old_todos(date_before: str) -> int:
              "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
             ("DELETE FROM reactions WHERE event_id IN "
              "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
+            ("DELETE FROM idea_responses WHERE event_id IN "
+             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
             ("DELETE FROM events WHERE category = 'todo' AND date < ?", (date_before,)),
         ]
     )
-    return rs[3].affected
+    return rs[4].affected
 
 
 async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
