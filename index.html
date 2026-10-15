@@ -235,6 +235,22 @@
     flex-wrap: wrap; justify-content: center; max-width: 92vw; animation: up .15s ease-out; }
   .reaction-picker button { font-size: 26px; padding: 4px 6px; border-radius: 10px; line-height: 1; }
   .reaction-picker button:active { background: var(--bg2); }
+
+  /* Идеи внутри карточки (секс) */
+  .ideas-list-card { margin-top: 10px; display: flex; flex-direction: column; gap: 4px;
+    background: rgba(0,0,0,.03); border-radius: 10px; padding: 6px 10px; }
+  .idea-line { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  .idea-line .idea-badge { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
+  .idea-line .idea-text { flex: 1; word-break: break-word; font-size: 14px; }
+  .idea-line .idea-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .idea-line .idea-yes,
+  .idea-line .idea-no {
+    padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; color: #fff;
+  }
+  .idea-line .idea-yes { background: rgb(var(--accepted)); }
+  .idea-line .idea-no  { background: rgb(var(--declined)); }
+  .idea-line .idea-yes:disabled,
+  .idea-line .idea-no:disabled { opacity: .5; }
 </style>
 </head>
 <body>
@@ -659,6 +675,25 @@ function reactionHtml(e) {
   return `<div class="reaction-row">${parts.join("")}</div>`;
 }
 
+function ideasHtml(e) {
+  if (e.category !== "sex") return "";
+  if (!e.ideas || !e.ideas.length) return "";
+  const rows = e.ideas.map(it => {
+    const st = it.status;
+    const badge = st === "accepted" ? "✅" : st === "declined" ? "❌" : "⏳";
+    const buttons = (e.can_respond_ideas && st !== "accepted" && st !== "declined")
+      ? `<button type="button" class="idea-yes" data-idea-yes="${it.idx}" aria-label="Да">Да</button>
+         <button type="button" class="idea-no"  data-idea-no="${it.idx}"  aria-label="Нет">Нет</button>`
+      : "";
+    return `<div class="idea-line" data-idea-idx="${it.idx}">
+      <span class="idea-badge">${badge}</span>
+      <span class="idea-text">${esc(it.text)}</span>
+      <span class="idea-actions">${buttons}</span>
+    </div>`;
+  }).join("");
+  return `<div class="ideas-list-card">${rows}</div>`;
+}
+
 function declineCommentHtml(e) {
   if (e.category === "shop" || e.category === "todo") return "";
   if (e.status !== "declined") return "";
@@ -683,6 +718,7 @@ function cardHtml(e) {
   const sk = statusKey(e);
   const isShop = e.category === "shop";
   const isTodo = e.category === "todo";
+  const isSex  = e.category === "sex";
   const remindText = (isTodo && e.remind_before && e.time)
     ? ` · 🔔 за ${humanizeMinutes(e.remind_before)}`
     : "";
@@ -706,6 +742,7 @@ function cardHtml(e) {
     </div>
     ${isShop ? checklistHtml(e) : (e.description ? `<p>${esc(e.description)}</p>` : "")}
     ${isShop && e.description ? `<p>${esc(e.description)}</p>` : ""}
+    ${ideasHtml(e)}
     ${reactionHtml(e)}
     ${declineCommentHtml(e)}
     <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span>${statusLabel}</div>
@@ -913,6 +950,26 @@ $("list").addEventListener("click", async (ev) => {
   const eventId = card.dataset.id;
   const event = findEvent(eventId);
   if (!event) return;
+
+  // Идеи: Да/Нет по конкретной идее
+  const ideaYes = ev.target.closest("[data-idea-yes]");
+  const ideaNo  = ev.target.closest("[data-idea-no]");
+  if (ideaYes || ideaNo) {
+    const btn = ideaYes || ideaNo;
+    const idx = Number(btn.dataset.ideaYes ?? btn.dataset.ideaNo);
+    const status = ideaYes ? "accepted" : "declined";
+    const line = ev.target.closest(".idea-line");
+    if (line) line.querySelectorAll("button").forEach(b => (b.disabled = true));
+    try {
+      const updated = await api(`/events/${eventId}/idea`, { method: "POST", body: { idx, status } });
+      replaceEvent(updated);
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (err) {
+      toast(err.message);
+      await load(true);
+    }
+    return;
+  }
 
   if (ev.target.closest("[data-reaction-open]") || ev.target.closest("[data-reaction-toggle]")) {
     if (event.category === "shop" || event.category === "todo") return;
