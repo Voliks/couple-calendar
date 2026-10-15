@@ -478,20 +478,32 @@ def event_to_dict(e: dict, uid: int) -> dict:
     partner_reaction = reactions.get(partner_id, "")
     idea_responses = e.get("idea_responses", {}) or {}
 
+    overall = e["status"]  # 'pending' | 'accepted' | 'declined'
+
     idea_lines = _extract_idea_lines(e["description"]) if e["category"] == "sex" else []
     ideas_out = []
     for i, text in enumerate(idea_lines):
         r = idea_responses.get(i) or {}
+        own = r.get("status", "")  # '' | 'accepted' | 'declined'
+        if own:
+            effective = own
+        elif overall == "accepted":
+            effective = "accepted"
+        elif overall == "declined":
+            effective = "declined"
+        else:
+            effective = ""
         ideas_out.append({
             "idx": i,
             "text": text,
-            "status": r.get("status", ""),
+            "status": own,
+            "effective": effective,
             "by": r.get("user_id"),
         })
 
     can_respond_ideas = (
         not is_creator
-        and e["status"] == "pending"
+        and overall == "pending"
         and len(ideas_out) > 0
     )
 
@@ -733,7 +745,6 @@ async def api_respond(request: web.Request) -> web.Response:
 
 
 async def api_set_idea_response(request: web.Request) -> web.Response:
-    """Да/Нет по конкретной идее события категории sex."""
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     if event["category"] != "sex":
