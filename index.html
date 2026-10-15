@@ -679,9 +679,10 @@ function ideasHtml(e) {
   if (e.category !== "sex") return "";
   if (!e.ideas || !e.ideas.length) return "";
   const rows = e.ideas.map(it => {
-    const st = it.status;
-    const badge = st === "accepted" ? "✅" : st === "declined" ? "❌" : "⏳";
-    const buttons = (e.can_respond_ideas && st !== "accepted" && st !== "declined")
+    const eff = it.effective || "";
+    const badge = eff === "accepted" ? "✅" : eff === "declined" ? "❌" : "⏳";
+    const canPress = e.can_respond_ideas && !it.status;
+    const buttons = canPress
       ? `<button type="button" class="idea-yes" data-idea-yes="${it.idx}" aria-label="Да">Да</button>
          <button type="button" class="idea-no"  data-idea-no="${it.idx}"  aria-label="Нет">Нет</button>`
       : "";
@@ -718,7 +719,6 @@ function cardHtml(e) {
   const sk = statusKey(e);
   const isShop = e.category === "shop";
   const isTodo = e.category === "todo";
-  const isSex  = e.category === "sex";
   const remindText = (isTodo && e.remind_before && e.time)
     ? ` · 🔔 за ${humanizeMinutes(e.remind_before)}`
     : "";
@@ -951,7 +951,6 @@ $("list").addEventListener("click", async (ev) => {
   const event = findEvent(eventId);
   if (!event) return;
 
-  // Идеи: Да/Нет по конкретной идее
   const ideaYes = ev.target.closest("[data-idea-yes]");
   const ideaNo  = ev.target.closest("[data-idea-no]");
   if (ideaYes || ideaNo) {
