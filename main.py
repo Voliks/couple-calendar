@@ -45,6 +45,7 @@ CATEGORY_TITLES = {
     "sex": "Секс",
     "shop": "Магазин",
     "todo": "Дела",
+    "personal": "Личное",
 }
 
 CATEGORY_ICONS = {
@@ -52,6 +53,7 @@ CATEGORY_ICONS = {
     "sex": "🔥",
     "shop": "🛒",
     "todo": "📌",
+    "personal": "📝",
 }
 
 SEX_IDEA_CATEGORIES = {
@@ -76,7 +78,7 @@ ALLOWED_ORIGINS = {_origin(WEBAPP_URL)} | {
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
-CATEGORIES = {"rest", "sex", "shop", "todo"}
+CATEGORIES = {"rest", "sex", "shop", "todo", "personal"}
 INIT_DATA_MAX_AGE = 24 * 3600
 
 RATE_LIMIT = 40
@@ -144,6 +146,12 @@ def fmt_date(s: str) -> str:
         return date_cls.fromisoformat(s).strftime("%d.%m.%Y")
     except ValueError:
         return s
+
+
+def fmt_range(date_start: str, date_end: str) -> str:
+    if not date_end or date_end == date_start:
+        return fmt_date(date_start)
+    return f"{fmt_date(date_start)} – {fmt_date(date_end)}"
 
 
 def title_part(title: str) -> str:
@@ -239,7 +247,8 @@ async def cmd_unlink(message: Message):
         await message.answer("У вас нет партнёра — отвязывать нечего.")
         return
     await message.answer(
-        "Отвязать партнёра? Все общие события будут удалены безвозвратно.",
+        "Отвязать партнёра? Все общие события будут удалены безвозвратно. "
+        "Личные (приватные) события останутся у вас.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -286,7 +295,7 @@ async def event_inline_action(call: CallbackQuery):
         await call.answer("Отвечать может только приглашённый", show_alert=True)
         return
 
-    if event["category"] in ("shop", "todo"):
+    if event["category"] in ("shop", "todo", "personal"):
         await call.answer("Это не требует ответа", show_alert=True)
         return
 
@@ -307,7 +316,8 @@ async def event_inline_action(call: CallbackQuery):
     who = call.from_user.first_name
     notify(
         event["created_by"],
-        f"{icon} {who} ответил(а) на событие {fmt_date(event['date'])}{title_part(event['title'])}.",
+        f"{icon} {who} ответил(а) на событие "
+        f"{fmt_range(event['date'], event.get('date_end', ''))}{title_part(event['title'])}.",
     )
 
     try:
@@ -418,12 +428,24 @@ def _extract_idea_lines(description: str) -> list[str]:
     return out
 
 
+def _valid_date(s: str) -> bool:
+    if not DATE_RE.match(s):
+        return False
+    try:
+        year = date_cls.fromisoformat(s).year
+    except ValueError:
+        return False
+    return 2000 <= year <= 2100
+
+
 def parse_event_payload(body: dict) -> dict:
     description = str(body.get("description", "")).strip()
     date = str(body.get("date", ""))
+    date_end = str(body.get("date_end") or "").strip()
     event_time = str(body.get("time") or "").strip()
     category = str(body.get("category", "rest"))
     color = str(body.get("color", "")).strip()
+    visibility = str(body.get("visibility") or "shared").strip()
 
     try:
         remind_before = int(body.get("remind_before", 0))
@@ -434,27 +456,46 @@ def parse_event_payload(body: dict) -> dict:
         raise ApiError("Неизвестная категория")
     if len(description) > 2000:
         raise ApiError("Слишком длинный текст")
-    if not DATE_RE.match(date):
+    if not _valid_date(date):
         raise ApiError("Некорректная дата")
-    try:
-        year = date_cls.fromisoformat(date).year
-    except ValueError:
-        raise ApiError("Некорректная дата")
-    if not 2000 <= year <= 2100:
-        raise ApiError("Некорректная дата")
+    if date_end:
+        if not _valid_date(date_end):
+            raise ApiError("Некорректная дата окончания")
+        if date_end < date:
+            raise ApiError("Дата окончания раньше даты начала")
+        # ограничение: не больше ~366 дней, чтобы не улететь в бесконечный диапазон
+        try:
+            span = (date_cls.fromisoformat(date_end) - date_cls.fromisoformat(date)).days
+        except ValueError:
+            raise ApiError("Некорректная дата окончания")
+        if span > 366:
+            raise ApiError("Слишком длинный диапазон (максимум 366 дней)")
     if event_time and not TIME_RE.match(event_time):
         raise ApiError("Некорректное время")
 
-    if category == "todo":
+    if category == "personal":
+        if color not in db.TODO_COLORS:
+            raise ApiError("Выберите цвет для личного события")
+        if remind_before not in ALLOWED_REMIND_BEFORE:
+            raise ApiError("Недопустимое время напоминания")
+        if remind_before and not event_time:
+            raise ApiError("Напоминание возможно только если указано время")
+        if visibility not in ("shared", "private"):
+            raise ApiError("Некорректная видимость")
+    elif category == "todo":
         if color not in db.TODO_COLORS:
             raise ApiError("Выберите цвет для дела")
         if remind_before not in ALLOWED_REMIND_BEFORE:
             raise ApiError("Недопустимое время напоминания")
         if remind_before and not event_time:
             raise ApiError("Напоминание возможно только если указано время")
+        visibility = "shared"
+        date_end = ""
     else:
         color = ""
         remind_before = 0
+        visibility = "shared"
+        date_end = ""
 
     title = CATEGORY_TITLES.get(category, "Событие")
 
@@ -462,10 +503,12 @@ def parse_event_payload(body: dict) -> dict:
         "title": title,
         "description": description,
         "date": date,
+        "date_end": date_end,
         "time": event_time,
         "category": category,
         "color": color,
         "remind_before": remind_before,
+        "visibility": visibility,
         "items": normalize_items(body.get("checklist")) if category == "shop" else [],
     }
 
@@ -479,6 +522,8 @@ def event_to_dict(e: dict, uid: int) -> dict:
     idea_responses = e.get("idea_responses", {}) or {}
 
     overall = e["status"]
+    visibility = e.get("visibility", "shared")
+    date_end = e.get("date_end") or e["date"]
 
     idea_lines = _extract_idea_lines(e["description"]) if e["category"] == "sex" else []
     ideas_out = []
@@ -507,16 +552,21 @@ def event_to_dict(e: dict, uid: int) -> dict:
         and len(ideas_out) > 0
     )
 
+    can_edit = is_creator or e["category"] in ("todo",)
+
     return {
         "id": e["id"],
         "title": e["title"],
         "description": e["description"],
         "date": e["date"],
+        "date_end": date_end,
         "time": e["time"],
         "category": e["category"],
         "status": e["status"],
         "color": e.get("color", ""),
         "remind_before": e.get("remind_before", 0),
+        "visibility": visibility,
+        "is_private": visibility == "private",
         "reaction_mine": my_reaction,
         "reaction_partner": partner_reaction,
         "decline_comment_creator": e.get("decline_comment_creator", ""),
@@ -527,6 +577,7 @@ def event_to_dict(e: dict, uid: int) -> dict:
             else e.get("decline_comment_target", "")
         ),
         "is_creator": is_creator,
+        "can_edit": can_edit,
         "checklist": e["checklist"],
         "ideas": ideas_out,
         "can_respond_ideas": can_respond_ideas,
@@ -574,7 +625,8 @@ async def api_state(request: web.Request) -> web.Response:
         link = ""
     else:
         user = await db.ensure_invite(user)
-        events = []
+        # без партнёра пользователь всё равно должен видеть свои личные события
+        events = await db.list_events_range(tg_user.id, start, end)
         link = invite_link(user["invite_code"])
 
     try:
@@ -615,25 +667,49 @@ async def api_state(request: web.Request) -> web.Response:
 async def api_create_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     user = await db.get_or_create_user(tg_user.id)
-    if not user["partner_id"]:
+
+    # personal можно создавать и без партнёра (это личные заметки)
+    data = parse_event_payload(await read_json(request))
+    if data["category"] != "personal" and not user["partner_id"]:
         raise ApiError("Сначала свяжитесь с партнёром", 409)
 
-    data = parse_event_payload(await read_json(request))
     if await db.count_events_created(tg_user.id) >= db.MAX_EVENTS_PER_USER:
         raise ApiError("Достигнут лимит событий", 409)
 
+    # target_user: для private personal — автор; иначе партнёр
+    is_private_personal = data["category"] == "personal" and data["visibility"] == "private"
+    if is_private_personal:
+        target_user = tg_user.id
+    elif data["category"] == "personal":
+        # shared personal
+        target_user = user["partner_id"] or tg_user.id
+    else:
+        target_user = user["partner_id"]
+
     event = await db.create_event(
-        tg_user.id, user["partner_id"], data["title"], data["description"],
+        tg_user.id, target_user, data["title"], data["description"],
         data["date"], data["time"], data["category"], data["items"],
         color=data["color"], remind_before=data["remind_before"],
+        date_end=data["date_end"], visibility=data["visibility"],
     )
 
     if data["category"] == "shop":
         notify(
             user["partner_id"],
-            f"🛒 Партнёр добавил список покупок на {fmt_date(data['date'])}. "
+            f"🛒 Партнёр добавил список покупок на "
+            f"{fmt_range(data['date'], data['date_end'])}. "
             "Откройте календарь, чтобы посмотреть.",
         )
+    elif data["category"] == "personal":
+        if data["visibility"] == "shared" and user["partner_id"]:
+            at = f" в {data['time']}" if data["time"] else ""
+            notify(
+                user["partner_id"],
+                f"📝 Партнёр добавил общее личное дело на "
+                f"{fmt_range(data['date'], data['date_end'])}{at}. "
+                "Откройте календарь, чтобы посмотреть.",
+            )
+        # private — никому не сообщаем
     elif data["category"] == "todo":
         icon = CATEGORY_ICONS.get("todo", "📌")
         at = f" в {data['time']}" if data["time"] else ""
@@ -642,14 +718,14 @@ async def api_create_event(request: web.Request) -> web.Response:
             extra = f" (напомню за {_humanize_minutes(data['remind_before'])})"
         notify(
             user["partner_id"],
-            f"{icon} Новое дело на {fmt_date(data['date'])}{at}.{extra} "
+            f"{icon} Новое дело на {fmt_range(data['date'], data['date_end'])}{at}.{extra} "
             "Откройте календарь, чтобы посмотреть.",
         )
     else:
         icon = CATEGORY_ICONS.get(data["category"], "➕")
         notify(
             user["partner_id"],
-            f"{icon} Новое событие на {fmt_date(data['date'])}"
+            f"{icon} Новое событие на {fmt_range(data['date'], data['date_end'])}"
             f"{(' в ' + data['time']) if data['time'] else ''}. "
             "Ответьте прямо здесь или откройте календарь.",
             reply_markup=event_reply_keyboard(event["id"]),
@@ -659,49 +735,87 @@ async def api_create_event(request: web.Request) -> web.Response:
 
 async def api_update_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
+    user = await db.get_or_create_user(tg_user.id)
     event = await member_event(request, tg_user.id)
-    if event["category"] != "todo" and event["created_by"] != tg_user.id:
+
+    if event["category"] == "personal" and event["created_by"] != tg_user.id:
+        raise ApiError("Редактировать личное событие может только автор", 403)
+    if event["category"] != "todo" and event["category"] != "personal" and event["created_by"] != tg_user.id:
         raise ApiError("Редактировать событие может только его автор", 403)
 
     data = parse_event_payload(await read_json(request))
+
     identity_changed = (
-        data["title"], data["category"], data["date"], data["time"]
-    ) != (event["title"], event["category"], event["date"], event["time"])
-    changed = identity_changed or data["description"] != event["description"] \
+        data["date"], data["date_end"], data["time"], data["category"]
+    ) != (event["date"], event.get("date_end") or "", event["time"], event["category"])
+    visibility_changed = data["visibility"] != event.get("visibility", "shared")
+    changed = identity_changed or visibility_changed \
+              or data["description"] != event["description"] \
               or data["color"] != event.get("color", "") \
-              or data["remind_before"] != (event.get("remind_before") or 0)
+              or data["remind_before"] != (event.get("remind_before") or 0) \
+              or data["title"] != event["title"]
     if not changed:
         return web.json_response(event_to_dict(event, tg_user.id))
 
-    reset = identity_changed and data["category"] not in ("shop", "todo")
+    reset = identity_changed and data["category"] not in ("shop", "todo", "personal")
     updated = await db.update_event(
         event["id"], data["title"], data["description"], data["date"],
         data["time"], data["category"], reset_status=reset,
         color=data["color"], remind_before=data["remind_before"],
+        date_end=data["date_end"], visibility=data["visibility"],
     )
+
+    # Смена target_user при изменении видимости personal
+    if data["category"] == "personal" and visibility_changed:
+        partner_id = user["partner_id"]
+        if data["visibility"] == "private":
+            await db.set_target_user(event["id"], tg_user.id)
+        else:
+            await db.set_target_user(event["id"], partner_id or tg_user.id)
+        # уведомление партнёру
+        if partner_id:
+            if data["visibility"] == "shared":
+                notify(
+                    partner_id,
+                    f"📝 Партнёр сделал личное дело общим: "
+                    f"{fmt_range(data['date'], data['date_end'])}{title_part(data['title'])}.",
+                )
+            else:
+                notify(
+                    partner_id,
+                    f"📝 Партнёр скрыл личное дело: "
+                    f"{fmt_range(data['date'], data['date_end'])}{title_part(data['title'])}.",
+                )
+
     if data["category"] == "shop":
         notify(
             event["target_user"],
-            f"✏️ Список покупок на {fmt_date(data['date'])} изменён.",
+            f"✏️ Список покупок на {fmt_range(data['date'], data['date_end'])} изменён.",
         )
     elif data["category"] == "todo":
         notify(
             event["target_user"],
-            f"📌 Дело на {fmt_date(data['date'])} изменено.",
+            f"📌 Дело на {fmt_range(data['date'], data['date_end'])} изменено.",
         )
-    else:
+    elif data["category"] != "personal":
         suffix = " Оно снова ждёт вашего ответа." if identity_changed else ""
         notify(
             event["target_user"],
-            f"✏️ Событие на {fmt_date(data['date'])}{title_part(data['title'])} изменено.{suffix}",
+            f"✏️ Событие на {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])} изменено.{suffix}",
         )
+    # для personal при visibility_changed уведомления уже отправлены выше
+
+    updated = await db.get_event(event["id"])
     return web.json_response(event_to_dict(updated, tg_user.id))
 
 
 async def api_delete_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
-    if event["category"] != "todo" and event["created_by"] != tg_user.id:
+
+    if event["category"] == "personal" and event["created_by"] != tg_user.id:
+        raise ApiError("Удалять личное событие может только автор", 403)
+    if event["category"] not in ("todo", "personal") and event["created_by"] != tg_user.id:
         raise ApiError("Удалить событие может только его автор. Вы можете отказаться от него.", 403)
 
     await db.delete_event(event["id"])
@@ -713,7 +827,7 @@ async def api_respond(request: web.Request) -> web.Response:
     event = await member_event(request, tg_user.id)
     body = await read_json(request)
 
-    if event["category"] in ("shop", "todo"):
+    if event["category"] in ("shop", "todo", "personal"):
         raise ApiError("Это не требует ответа")
 
     status = body.get("status")
@@ -738,7 +852,7 @@ async def api_respond(request: web.Request) -> web.Response:
         notify(
             event["created_by"],
             f"{icon} {tg_user.first_name} {what} событие на "
-            f"{fmt_date(event['date'])}{title_part(event['title'])}.{extra}",
+            f"{fmt_range(event['date'], event.get('date_end', ''))}{title_part(event['title'])}.{extra}",
         )
         event = await db.get_event(event["id"])
     return web.json_response(event_to_dict(event, tg_user.id))
@@ -778,7 +892,7 @@ async def api_set_reaction(request: web.Request) -> web.Response:
     body = await read_json(request)
     emoji = str(body.get("emoji") or "").strip()
 
-    if event["category"] in ("shop", "todo"):
+    if event["category"] in ("shop", "todo", "personal"):
         raise ApiError("Здесь реакция не нужна")
     if event["status"] != "accepted":
         raise ApiError("Реакция доступна только для принятого события")
@@ -793,7 +907,7 @@ async def api_set_reaction(request: web.Request) -> web.Response:
 async def api_set_decline_comment(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
-    if event["category"] in ("shop", "todo"):
+    if event["category"] in ("shop", "todo", "personal"):
         raise ApiError("Здесь комментарий не нужен")
     if event["status"] != "declined":
         raise ApiError("Комментарий доступен только для отклонённого события")
@@ -811,12 +925,12 @@ async def api_set_decline_comment(request: web.Request) -> web.Response:
         if comment:
             body_text = (
                 f"💬 {tg_user.first_name} оставил(а) комментарий к событию "
-                f"на {fmt_date(event['date'])}{at}{title_part(event['title'])}:\n\n{comment}"
+                f"на {fmt_range(event['date'], event.get('date_end', ''))}{at}{title_part(event['title'])}:\n\n{comment}"
             )
         else:
             body_text = (
                 f"💬 {tg_user.first_name} удалил(а) свой комментарий к событию "
-                f"на {fmt_date(event['date'])}{at}{title_part(event['title'])}."
+                f"на {fmt_range(event['date'], event.get('date_end', ''))}{at}{title_part(event['title'])}."
             )
         notify(event["created_by"], body_text)
 
@@ -911,6 +1025,7 @@ async def api_delete_sex_idea(request: web.Request) -> web.Response:
 
 
 async def api_archive(request: web.Request) -> web.Response:
+    authenticate(request)
     try:
         items = await db.get_archived_ideas()
     except Exception:
@@ -932,6 +1047,7 @@ async def api_archived_todos(request: web.Request) -> web.Response:
         "title": e["title"],
         "description": e["description"],
         "date": e["date"],
+        "date_end": e.get("date_end") or e["date"],
         "time": e["time"],
         "category": e["category"],
         "status": e["status"],
@@ -964,7 +1080,7 @@ async def send_due_reminders() -> None:
         tz = get_zone(c["tz"]) or timezone.utc
         local_now = now_utc.astimezone(tz)
 
-        if c["category"] == "todo" and c["time"] and c.get("remind_before"):
+        if c["category"] in ("todo", "personal") and c["time"] and c.get("remind_before"):
             try:
                 hh, mm = c["time"].split(":")
                 event_dt_local = datetime.fromisoformat(
@@ -977,29 +1093,38 @@ async def send_due_reminders() -> None:
                 continue
             if not await db.mark_reminded(c["event_id"], c["user_id"]):
                 continue
+            prefix = "📝" if c["category"] == "personal" else "📌"
             await safe_send(
                 c["user_id"],
-                f"📌 Напоминание: {c['title']} в {c['time']} "
+                f"{prefix} Напоминание: {c['title']} в {c['time']} "
                 f"(через {_humanize_minutes(c['remind_before'])}).",
             )
             continue
 
+        # Обычное напоминание: в день начала (для multi-day — тоже в день начала)
         if local_now.strftime("%Y-%m-%d") != c["date"] or local_now.hour < REMINDER_HOUR:
             continue
         if not await db.mark_reminded(c["event_id"], c["user_id"]):
             continue
         at = f" в {c['time']}" if c["time"] else ""
+        rng = fmt_range(c["date"], c.get("date_end", ""))
         if c["category"] == "todo":
             await safe_send(
                 c["user_id"],
                 f"📌 Сегодня дело{at}{title_part(c['title'])}. "
                 "Откройте календарь, чтобы посмотреть.",
             )
+        elif c["category"] == "personal":
+            await safe_send(
+                c["user_id"],
+                f"📝 Сегодня личное дело{at}{title_part(c['title'])}. "
+                "Откройте календарь, чтобы посмотреть.",
+            )
         else:
             await safe_send(
                 c["user_id"],
-                f"⏰ Сегодня у вас запланировано событие{at}{title_part(c['title'])}. "
-                "Откройте календарь, чтобы посмотреть детали.",
+                f"⏰ Сегодня у вас запланировано событие{at}{title_part(c['title'])} "
+                f"(на {rng}). Откройте календарь, чтобы посмотреть детали.",
             )
 
 
