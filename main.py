@@ -467,7 +467,6 @@ def parse_event_payload(body: dict) -> dict:
         if remind_before and not event_time:
             raise ApiError("Напоминание возможно только если указано время")
         if category == "personal":
-            # Личные записи не поддерживают напоминания (пока)
             remind_before = 0
     else:
         color = ""
@@ -488,7 +487,6 @@ def parse_event_payload(body: dict) -> dict:
 
 
 def parse_bulk_personal_payload(body: dict) -> dict:
-    """Валидирует тело запроса на создание N личных записей."""
     dates_raw = body.get("dates")
     if not isinstance(dates_raw, list) or not dates_raw:
         raise ApiError("Выберите хотя бы один день")
@@ -571,6 +569,7 @@ def event_to_dict(e: dict, uid: int) -> dict:
         "category": e["category"],
         "status": e["status"],
         "visibility": visibility,
+        "group_key": e.get("group_key", "") or "",
         "color": e.get("color", ""),
         "remind_before": e.get("remind_before", 0),
         "reaction_mine": my_reaction,
@@ -677,8 +676,6 @@ async def api_create_event(request: web.Request) -> web.Response:
     data = parse_event_payload(await read_json(request))
 
     if data["category"] == "personal":
-        # Одиночное личное событие создаётся тем же bulk-эндпоинтом, но защитимся:
-        # если пришло именно сюда — оборачиваем в список из одной даты.
         ids = await db.create_personal_events(
             tg_user.id, [data["date"]], data["title"],
             data["description"], data["color"],
@@ -768,7 +765,6 @@ async def api_update_event(request: web.Request) -> web.Response:
 
     data = parse_event_payload(await read_json(request))
 
-    # Для личных/private не разрешаем менять категорию на другую.
     if (is_private or is_personal) and data["category"] != event["category"]:
         raise ApiError("Нельзя изменить тип личной записи")
 
@@ -820,12 +816,21 @@ async def api_delete_event(request: web.Request) -> web.Response:
     if is_private or is_personal:
         if event["created_by"] != tg_user.id:
             raise ApiError("Удалить личную запись может только её автор", 403)
-    else:
-        if event["category"] != "todo" and event["created_by"] != tg_user.id:
-            raise ApiError("Удалить событие может только его автор. Вы можете отказаться от него.", 403)
+
+        # Если у события есть group_key — удаляем все записи из этой группы.
+        group_key = event.get("group_key", "") or ""
+        if group_key:
+            n = await db.delete_group(group_key, tg_user.id)
+            return web.json_response({"status": "deleted", "count": n})
+
+        await db.delete_event(event["id"])
+        return web.json_response({"status": "deleted", "count": 1})
+
+    if event["category"] != "todo" and event["created_by"] != tg_user.id:
+        raise ApiError("Удалить событие может только его автор. Вы можете отказаться от него.", 403)
 
     await db.delete_event(event["id"])
-    return web.json_response({"status": "deleted"})
+    return web.json_response({"status": "deleted", "count": 1})
 
 
 async def api_respond(request: web.Request) -> web.Response:
