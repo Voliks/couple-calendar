@@ -128,25 +128,4 @@ function openCommentDialog(initial, onConfirm) {
   setTimeout(() => ta.focus(), 50);
 }
 
-async function uploadPhoto(file) {
-  // Проверяем размер (максимум 10 МБ)
-  if (file.size > 10 * 1024 * 1024) {
-    throw new HttpError("Файл слишком большой (макс. 10 МБ)", 400);
-  }
-
-  const formData = new FormData();
-  formData.append("photo", file, "photo.jpg");
-
-  const res = await fetch(API_BASE + "/api/upload-photo", {
-    method: "POST",
-    headers: { "X-Init-Data": tg.initData || "" },
-    body: formData,
-  });
-  
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new HttpError(data.error || `Ошибка сервера (${res.status})`, res.status);
-  }
-  return await res.json();
-}
 let etag = null, etagKey = "";
