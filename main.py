@@ -1181,10 +1181,20 @@ async def api_upload_photo(request: web.Request) -> web.Response:
     if not user["partner_id"]:
         raise ApiError("Сначала свяжитесь с партнёром", 409)
 
-    reader = await request.multipart()
-    field = await reader.next()
-    if not field or field.name != "photo":
-        raise ApiError("Файл не найден", 400)
+    try:
+        reader = await request.multipart()
+        field = await reader.next()
+        if not field or field.name != "photo":
+            raise ApiError("Файл не найден в запросе", 400)
+        
+        file_bytes = await field.read()
+        if len(file_bytes) == 0:
+            raise ApiError("Файл пустой", 400)
+            
+        b64_image = base64.b64encode(file_bytes).decode('utf-8')
+    except Exception as e:
+        logging.exception("Ошибка чтения файла")
+        raise ApiError(f"Не удалось прочитать файл: {str(e)}", 400)
     
     file_bytes = await field.read()
     b64_image = base64.b64encode(file_bytes).decode('utf-8')
