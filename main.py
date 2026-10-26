@@ -1220,27 +1220,44 @@ async def api_upload_photo(request: web.Request) -> web.Response:
         "Content-Type": "application/json"
     }
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post("https://open.bigmodel.cn/api/paas/v4/chat/completions", json=payload, headers=headers) as resp:
-                if resp.status != 200:
-                    err = await resp.text()
-                    logging.error(f"GLM API error: {err}")
-                    raise ApiError("Не удалось распознать фото", 500)
-                
-                data = await resp.json()
-                answer_text = data["choices"][0]["message"]["content"]
-                
-                import re, json
-                match = re.search(r'\[.*\]', answer_text, re.DOTALL)
-                if not match:
-                    raise ApiError("Не удалось разобрать ответ нейросети", 500)
-                
-                events = json.loads(match.group(0))
-
-    except Exception as e:
-        logging.exception("Ошибка при запросе к API")
-        raise ApiError(f"Ошибка API: {str(e)}", 500)
+    events = []
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post("https://open.bigmodel.cn/api/paas/v4/chat/completions", json=payload, headers=headers) as resp:
+                    data = await resp.json()
+                    
+                    # Обработка ошибки перегрузки (код 1305)
+                    if resp.status != 200:
+                        err_code = data.get("error", {}).get("code")
+                        if err_code == "1305":
+                            if attempt < max_retries - 1:
+                                logging.warning(f"Модель перегружена, попытка {attempt + 1}. Ждем 5 секунд...")
+                                await asyncio.sleep(5)
+                                continue
+                            else:
+                                raise ApiError("Модель сейчас перегружена. Попробуйте через минуту.", 503)
+                        
+                        logging.error(f"GLM API error: {data}")
+                        raise ApiError("Не удалось распознать фото", 500)
+                    
+                    # Если всё ок, парсим ответ
+                    answer_text = data["choices"][0]["message"]["content"]
+                    import re, json
+                    match = re.search(r'\[.*\]', answer_text, re.DOTALL)
+                    if not match:
+                        raise ApiError("Не удалось разобрать ответ нейросети", 500)
+                    
+                    events = json.loads(match.group(0))
+                    break  # Выходим из цикла, так как получили успешный ответ
+                    
+        except aiohttp.ClientError as e:
+            if attempt < max_retries - 1:
+                await asyncio.sleep(5)
+                continue
+            raise ApiError(f"Ошибка сети: {str(e)}", 500)
 
     added_count = 0
     for ev in events:
