@@ -22,7 +22,6 @@ DB_PATH = os.getenv("DB_PATH", "calendar.db")
 INVITE_TTL = 7 * 24 * 3600
 MAX_ITEMS_PER_EVENT = 50
 MAX_EVENTS_PER_USER = 10000
-MAX_BULK_DATES = 60
 
 ARCHIVE_KEY = "_архив"
 CUSTOM_ARCHIVE_TITLE = "Свои идеи"
@@ -445,21 +444,6 @@ async def _m14_checklist_position() -> None:
     await _exec("UPDATE checklist_items SET position = id WHERE position = 0")
 
 
-async def _m15_visibility() -> None:
-    await _add_column("events", "visibility", "TEXT NOT NULL DEFAULT 'pair'")
-    await _exec(
-        "CREATE INDEX IF NOT EXISTS idx_events_visibility "
-        "ON events (created_by, visibility, date)"
-    )
-
-
-async def _m16_group_key() -> None:
-    await _add_column("events", "group_key", "TEXT")
-    await _exec(
-        "CREATE INDEX IF NOT EXISTS idx_events_group_key ON events (group_key)"
-    )
-
-
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -475,8 +459,6 @@ MIGRATIONS = [
     (12, _m12_todo_remind_before),
     (13, _m13_idea_responses),
     (14, _m14_checklist_position),
-    (15, _m15_visibility),
-    (16, _m16_group_key),
 ]
 
 
@@ -584,10 +566,7 @@ async def unlink_partners(user_id: int) -> int | None:
     if not user or user["partner_id"] is None:
         return None
     p = user["partner_id"]
-    pair = (
-        "((created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)) "
-        "AND visibility = 'pair'"
-    )
+    pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
     pargs = (user_id, p, p, user_id)
     await _batch(
         [
@@ -606,7 +585,7 @@ async def unlink_partners(user_id: int) -> int | None:
 EVENT_COLS = (
     "id, created_by, target_user, title, description, date, time, category, status, "
     "color, priority, reaction, reaction_by, decline_comment, "
-    "decline_comment_creator, decline_comment_target, remind_before, visibility, group_key"
+    "decline_comment_creator, decline_comment_target, remind_before"
 )
 
 
@@ -631,8 +610,6 @@ def _event(r) -> dict | None:
         "decline_comment_creator": r[14] or "",
         "decline_comment_target": r[15] or "",
         "remind_before": r[16] or 0,
-        "visibility": r[17] or "pair",
-        "group_key": r[18] or "",
         "reactions": {},
         "idea_responses": {},
         "checklist": [],
@@ -682,16 +659,14 @@ async def count_events_created(user_id: int) -> int:
 
 
 async def create_event(created_by, target_user, title, description, date, event_time, category,
-                       items=None, color: str = "", remind_before: int = 0,
-                       visibility: str = "pair", group_key: str = ""):
-    initial_status = "accepted" if category in ("shop", "todo", "personal") else "pending"
+                       items=None, color: str = "", remind_before: int = 0):
+    initial_status = "accepted" if category in ("shop", "todo") else "pending"
     rs = await _exec(
         "INSERT INTO events "
-        "(created_by, target_user, title, description, date, time, category, status, "
-        "color, remind_before, visibility, group_key) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(created_by, target_user, title, description, date, time, category, status, color, remind_before) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (created_by, target_user, title, description, date, event_time, category, initial_status,
-         color, remind_before, visibility, group_key),
+         color, remind_before),
     )
     event_id = rs.last_id
     if items and category == "shop":
@@ -707,41 +682,12 @@ async def create_event(created_by, target_user, title, description, date, event_
     return await get_event(event_id)
 
 
-async def create_personal_events(created_by: int, dates: list[str], title: str,
-                                 description: str, color: str) -> list[int]:
-    """Создаёт N личных событий (по одному на каждую дату) в одной транзакции.
-    Все они получают одинаковый group_key, чтобы удаляться вместе."""
-    if not dates:
-        return []
-    dates = dates[:MAX_BULK_DATES]
-    group_key = secrets.token_urlsafe(12)
-    stmts = [
-        (
-            "INSERT INTO events "
-            "(created_by, target_user, title, description, date, time, category, status, "
-            "color, remind_before, visibility, group_key) "
-            "VALUES (?, ?, ?, ?, ?, '', 'personal', 'accepted', ?, 0, 'private', ?)",
-            (created_by, created_by, title, description, d, color, group_key),
-        )
-        for d in dates
-    ]
-    await _batch(stmts)
-    rs = await _exec(
-        "SELECT id FROM events WHERE group_key = ? ORDER BY date, id",
-        (group_key,),
-    )
-    return [r[0] for r in rs.rows]
-
-
 async def list_events_range(user_id: int, start: str, end: str) -> list[dict]:
     rs = await _exec(
         f"SELECT {EVENT_COLS} FROM events "
-        "WHERE ("
-        "  ((created_by = ? OR target_user = ?) AND visibility = 'pair') "
-        "  OR (created_by = ? AND visibility = 'private')"
-        ") AND date >= ? AND date < ? "
+        "WHERE (created_by = ? OR target_user = ?) AND date >= ? AND date < ? "
         "ORDER BY date, time, id",
-        (user_id, user_id, user_id, start, end),
+        (user_id, user_id, start, end),
     )
     return await _attach_items([_event(r) for r in rs.rows])
 
@@ -787,31 +733,6 @@ async def delete_event(event_id: int) -> None:
             ("DELETE FROM events WHERE id = ?", (event_id,)),
         ]
     )
-
-
-async def delete_group(group_key: str, created_by: int) -> int:
-    """Удаляет все события из группы (created_by) — только личные/private."""
-    if not group_key:
-        return 0
-    rs = await _exec(
-        "SELECT id FROM events WHERE group_key = ? AND created_by = ? "
-        "AND visibility = 'private'",
-        (group_key, created_by),
-    )
-    ids = [r[0] for r in rs.rows]
-    if not ids:
-        return 0
-    marks = ",".join("?" * len(ids))
-    await _batch(
-        [
-            (f"DELETE FROM checklist_items WHERE event_id IN ({marks})", tuple(ids)),
-            (f"DELETE FROM reminders WHERE event_id IN ({marks})", tuple(ids)),
-            (f"DELETE FROM reactions WHERE event_id IN ({marks})", tuple(ids)),
-            (f"DELETE FROM idea_responses WHERE event_id IN ({marks})", tuple(ids)),
-            (f"DELETE FROM events WHERE id IN ({marks})", tuple(ids)),
-        ]
-    )
-    return len(ids)
 
 
 async def add_item(event_id: int, text: str) -> bool:
@@ -1054,7 +975,7 @@ async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
     rs = await _exec(
         "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz, e.category, e.remind_before "
         "FROM events e JOIN users u ON u.telegram_id IN (e.created_by, e.target_user) "
-        "WHERE e.status = 'accepted' AND e.visibility = 'pair' AND e.date BETWEEN ? AND ? "
+        "WHERE e.status = 'accepted' AND e.date BETWEEN ? AND ? "
         "AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.event_id = e.id AND r.user_id = u.telegram_id)",
         (date_from, date_to),
     )
@@ -1088,14 +1009,14 @@ async def purge_old_todos(date_before: str) -> int:
     rs = await _batch(
         [
             ("DELETE FROM checklist_items WHERE event_id IN "
-             "(SELECT id FROM events WHERE category IN ('todo','personal') AND date < ?)", (date_before,)),
+             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
             ("DELETE FROM reminders WHERE event_id IN "
-             "(SELECT id FROM events WHERE category IN ('todo','personal') AND date < ?)", (date_before,)),
+             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
             ("DELETE FROM reactions WHERE event_id IN "
-             "(SELECT id FROM events WHERE category IN ('todo','personal') AND date < ?)", (date_before,)),
+             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
             ("DELETE FROM idea_responses WHERE event_id IN "
-             "(SELECT id FROM events WHERE category IN ('todo','personal') AND date < ?)", (date_before,)),
-            ("DELETE FROM events WHERE category IN ('todo','personal') AND date < ?", (date_before,)),
+             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
+            ("DELETE FROM events WHERE category = 'todo' AND date < ?", (date_before,)),
         ]
     )
     return rs[4].affected
@@ -1106,16 +1027,15 @@ async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
     cutoff = (_d.today() - _td(days=31)).isoformat()
     rs = await _exec(
         f"SELECT {EVENT_COLS} FROM events "
-        "WHERE category IN ('todo','personal') AND date < ? "
-        "AND created_by = ? "
+        "WHERE category = 'todo' AND date < ? AND (created_by = ? OR target_user = ?) "
         "ORDER BY date DESC, id DESC LIMIT ?",
-        (cutoff, user_id, limit),
+        (cutoff, user_id, user_id, limit),
     )
     return [_event(r) for r in rs.rows]
 
 
 async def pair_stats(user_id: int, partner_id: int) -> dict:
-    pair = "((created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)) AND visibility = 'pair'"
+    pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
     pargs = (user_id, partner_id, partner_id, user_id)
 
     rs_total = await _exec(f"SELECT COUNT(*) FROM events WHERE {pair}", pargs)
