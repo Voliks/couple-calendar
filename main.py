@@ -1181,7 +1181,6 @@ async def api_upload_photo(request: web.Request) -> web.Response:
     if not user["partner_id"]:
         raise ApiError("Сначала свяжитесь с партнёром", 409)
 
-    # 1. Получаем файл из запроса
     reader = await request.multipart()
     field = await reader.next()
     if not field or field.name != "photo":
@@ -1190,7 +1189,6 @@ async def api_upload_photo(request: web.Request) -> web.Response:
     file_bytes = await field.read()
     b64_image = base64.b64encode(file_bytes).decode('utf-8')
 
-    # 2. Отправляем в нейросеть (z.ai)
     api_key = os.getenv("ZHIPU_API_KEY")
     if not api_key:
         raise ApiError("Ошибка настройки сервера (нет ключа API)", 500)
@@ -1222,25 +1220,28 @@ async def api_upload_photo(request: web.Request) -> web.Response:
         "Content-Type": "application/json"
     }
 
-    async with aiohttp.ClientSession() as session:
-           async with aiohttp.ClientSession() as session:
-        async with session.post("https://open.bigmodel.cn/api/paas/v4/chat/completions", json=payload, headers=headers) as resp:
-            if resp.status != 200:
-                err = await resp.text()
-                logging.error(f"GLM API error: {err}")
-                raise ApiError("Не удалось распознать фото", 500)
-            
-            data = await resp.json()
-            answer_text = data["choices"][0]["message"]["content"]
-            
-            import re, json
-            match = re.search(r'\[.*\]', answer_text, re.DOTALL)
-            if not match:
-                raise ApiError("Не удалось разобрать ответ нейросети", 500)
-            
-            events = json.loads(match.group(0))
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post("https://open.bigmodel.cn/api/paas/v4/chat/completions", json=payload, headers=headers) as resp:
+                if resp.status != 200:
+                    err = await resp.text()
+                    logging.error(f"GLM API error: {err}")
+                    raise ApiError("Не удалось распознать фото", 500)
+                
+                data = await resp.json()
+                answer_text = data["choices"][0]["message"]["content"]
+                
+                import re, json
+                match = re.search(r'\[.*\]', answer_text, re.DOTALL)
+                if not match:
+                    raise ApiError("Не удалось разобрать ответ нейросети", 500)
+                
+                events = json.loads(match.group(0))
 
-    # 3. Сохраняем в базу
+    except Exception as e:
+        logging.exception("Ошибка при запросе к API")
+        raise ApiError(f"Ошибка API: {str(e)}", 500)
+
     added_count = 0
     for ev in events:
         title = ev.get("title", "Событие")[:50]
