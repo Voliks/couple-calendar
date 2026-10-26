@@ -1,0 +1,1620 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="api-base" content="https://couple-calendar-ycu9.onrender.com">
+<title>Календарь на двоих</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --bg2: var(--tg-theme-secondary-bg-color, #f2f2f7);
+    --text: var(--tg-theme-text-color, #111111);
+    --hint: var(--tg-theme-hint-color, #8a8a8e);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --pending: 245, 158, 11;
+    --accepted: 34, 197, 94;
+    --declined: 239, 68, 68;
+    --expired: 138, 138, 142;
+    --todo: 139, 92, 246;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { padding: 12px 14px calc(96px + env(safe-area-inset-bottom, 0px)); max-width: 560px; margin: 0 auto; }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  .loading { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 90px 16px 0; text-align: center; color: var(--hint); }
+  .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--bg2); border-top-color: var(--accent); animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+
+  .cal-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .cal-title { font-size: 20px; font-weight: 600; text-transform: capitalize; flex: 1; min-width: 0;
+    text-align: center; cursor: pointer; user-select: none; }
+  .nav { width: 40px; height: 40px; border-radius: 50%; font-size: 22px; color: var(--accent); flex-shrink: 0; }
+  .nav:active { background: var(--bg2); }
+  .today-btn { padding: 6px 10px; border-radius: 10px; background: var(--bg2); color: var(--accent);
+    font-weight: 600; font-size: 13px; flex-shrink: 0; }
+  .today-btn:active { background: rgba(36, 129, 204, .2); }
+
+  .weekdays, .grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+  .weekdays span { text-align: center; font-size: 12px; color: var(--hint); padding: 4px 0; }
+  .grid { gap: 2px; }
+  .day { position: relative; aspect-ratio: 1 / 1; max-height: 54px; border-radius: 12px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    border: 2px solid transparent; font-size: 16px; }
+  .day.today .num { color: var(--accent); font-weight: 700; }
+  .day.selected { border-color: var(--accent); background: var(--bg2); }
+
+  .day .todo-bar { position: absolute; top: 2px; left: 6px; right: 6px; height: 4px;
+    display: flex; gap: 1px; border-radius: 2px; overflow: hidden; }
+  .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
+
+  /* Точки статуса — квадратики */
+  .dots { display: flex; gap: 3px; height: 7px; }
+  .dot { width: 7px; height: 7px; border-radius: 2px; }
+  .dot.pending  { border: 2px solid rgb(var(--pending)); background: transparent; }
+  .dot.accepted { background: rgb(var(--accepted)); }
+  .dot.declined { background: rgb(var(--declined)); }
+  .dot.expired  { border: 2px solid rgb(var(--expired)); background: transparent; }
+
+  .list-title { margin: 20px 0 10px; font-size: 15px; font-weight: 600; color: var(--hint); }
+  .empty { padding: 28px 12px; text-align: center; color: var(--hint); }
+  .card { border-radius: 14px; padding: 12px 14px; margin-bottom: 10px;
+    border-left: 5px solid rgb(var(--c)); background: rgba(var(--c), .13); }
+  .card.pending  { --c: var(--pending); }
+  .card.accepted { --c: var(--accepted); }
+  .card.declined { --c: var(--declined); }
+  .card.expired  { --c: var(--expired); }
+  .card.todo     { --c: var(--todo); }
+  .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .card h3 { margin: 0; font-size: 17px; word-break: break-word; flex: 1; }
+  .card .tag { margin-top: 2px; font-size: 13px; color: var(--hint); }
+  .card-actions { display: flex; gap: 6px; }
+  .icon-btn { font-size: 16px; padding: 4px 6px; opacity: .7; border-radius: 6px; }
+  .icon-btn:hover { opacity: 1; background: rgba(0,0,0,.05); }
+  .card p { margin: 4px 0 0; color: var(--text); opacity: .8; white-space: pre-wrap; word-break: break-word; }
+  .meta { margin-top: 8px; font-size: 13px; color: var(--hint); display: flex; justify-content: space-between; gap: 8px; }
+  .meta b { color: rgb(var(--c)); font-weight: 600; }
+  .answer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+  .answer.one { grid-template-columns: 1fr; }
+  .answer button { padding: 13px 0; border-radius: 12px; font-weight: 600; font-size: 17px; color: #fff; }
+  .answer .yes { background: rgb(var(--accepted)); }
+  .answer .no { background: rgb(var(--declined)); }
+  .answer .soft { background: rgba(0,0,0,.07); color: var(--text); font-size: 15px; padding: 10px 0; }
+  .answer button:disabled { opacity: .5; }
+  .link-btn { display: block; margin: 24px auto 0; padding: 8px; color: var(--hint); font-size: 14px; text-decoration: underline; }
+
+  .stats { margin: 18px 0 4px; padding: 12px 14px; border-radius: 14px; background: var(--bg2); }
+  .stats-title { font-size: 13px; color: var(--hint); margin-bottom: 8px; }
+  .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stat-cell { text-align: center; padding: 8px 4px; border-radius: 10px; background: var(--bg); }
+  .stat-cell .num { font-size: 18px; font-weight: 700; }
+  .stat-cell .lbl { font-size: 11px; color: var(--hint); margin-top: 2px; }
+  .stat-cell.accepted .num { color: rgb(var(--accepted)); }
+  .stat-cell.declined .num { color: rgb(var(--declined)); }
+  .stat-cell.pending  .num { color: rgb(var(--pending)); }
+
+  .fab { position: fixed; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    width: 58px; height: 58px; border-radius: 50%; background: var(--accent); color: var(--accent-text);
+    font-size: 32px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.25);
+    transition: transform .18s ease, opacity .18s ease;
+    z-index: 5; }
+  .fab:active { transform: scale(.94); }
+  .fab.fab-hidden { transform: translateY(120px); opacity: 0; pointer-events: none; }
+  @media (prefers-reduced-motion: reduce) { .fab { transition: none; } }
+
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; z-index: 10; }
+  .sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
+    max-height: 92vh; overflow-y: auto;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px)); animation: up .18s ease-out; }
+  @keyframes up { from { transform: translateY(40px); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .sheet { animation: none; } }
+  .sheet h2 { margin: 0 0 14px; font-size: 19px; }
+  label { display: block; font-size: 13px; color: var(--hint); margin: 12px 0 4px; }
+  input, select, textarea { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid transparent;
+    background: var(--bg2); color: var(--text); font: inherit; }
+  textarea { resize: none; min-height: 80px; }
+  select:disabled { opacity: .5; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 0; }
+  .two > div { min-width: 0; }
+  input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
+  .row { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; margin-top: 18px; }
+  .btn { padding: 14px; border-radius: 12px; font-weight: 600; }
+  .btn.primary { background: var(--accent); color: var(--accent-text); }
+  .btn.ghost { background: var(--bg2); }
+  .btn:disabled { opacity: .5; }
+  .error { color: rgb(var(--declined)); font-size: 14px; margin-top: 10px; min-height: 1em; }
+  .hint { font-size: 13px; color: var(--hint); margin-top: 12px; }
+
+  .sex-ideas-buttons { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 6px; }
+  .sex-idea-trigger { padding: 12px 14px; border-radius: 12px; background: var(--bg2); font-size: 15px; font-weight: 500; text-align: left; border: 2px solid transparent; transition: all .15s; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .sex-idea-trigger:active { background: rgba(36, 129, 204, 0.2); }
+  .sex-idea-trigger .trg-count { font-size: 12px; color: var(--accent); font-weight: 700; }
+
+  .chosen-block { margin-top: 12px; padding: 10px 12px; border-radius: 12px;
+    background: rgba(36, 129, 204, .10); border: 1px solid rgba(36, 129, 204, .35); }
+  .chosen-title { font-size: 13px; color: var(--hint); margin-bottom: 8px; }
+  .chosen-chips { display: flex; flex-direction: column; gap: 6px; }
+  .chip { display: flex; align-items: flex-start; gap: 8px; width: 100%;
+    padding: 8px 10px; border-radius: 12px; background: var(--bg);
+    border: 1px solid rgba(36,129,204,.45); font-size: 14px; }
+  .chip .chip-text { flex: 1; word-break: break-word; white-space: normal; }
+  .chip .chip-x { font-size: 16px; opacity: .6; line-height: 1; padding: 0 4px;
+    border-radius: 50%; flex-shrink: 0; }
+  .chip .chip-x:hover { opacity: 1; background: rgba(0,0,0,.06); }
+
+  .todo-colors { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin-top: 6px; }
+  .todo-color { aspect-ratio: 1; border-radius: 50%; border: 3px solid transparent;
+    transition: transform .1s, border-color .15s; }
+  .todo-color:active { transform: scale(.9); }
+  .todo-color.selected { border-color: var(--text); }
+
+  .checklist { margin-top: 10px; }
+  .checklist-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06);
+    touch-action: pan-y; }
+  .checklist-item:last-child { border-bottom: 0; }
+  .checklist-item input[type="checkbox"] { width: 20px; height: 20px; accent-color: rgb(var(--accepted)); flex-shrink: 0; cursor: pointer; padding: 0; }
+  .checklist-item .cl-text { flex: 1; word-break: break-word; }
+  .checklist-item.checked .cl-text { text-decoration: line-through; opacity: .55; }
+  .checklist-item .cl-remove { font-size: 18px; opacity: .5; padding: 2px 8px; border-radius: 6px; }
+  .checklist-item .cl-remove:hover { opacity: 1; background: rgba(0,0,0,.05); }
+
+  .cl-drag { cursor: grab; opacity: .45; padding: 2px 4px; border-radius: 6px;
+    font-size: 18px; line-height: 1; user-select: none; flex-shrink: 0;
+    touch-action: none; letter-spacing: -3px; }
+  .cl-drag:active { cursor: grabbing; opacity: .9; }
+
+  .checklist-item.dragging { opacity: .4; background: rgba(36,129,204,.1); }
+
+  .cl-empty { padding: 8px 0; font-size: 14px; color: var(--hint); }
+  .cl-add-row { display: flex; gap: 8px; margin-top: 10px; }
+  .cl-add-row input { flex: 1; }
+  .cl-add-row button { padding: 0 14px; border-radius: 12px; background: var(--bg2); font-weight: 600; white-space: nowrap; }
+  .cl-add-row button:active { background: var(--accent); color: var(--accent-text); }
+  .card .checklist { background: rgba(0,0,0,.03); border-radius: 10px; padding: 4px 10px; }
+  .card .checklist-item .cl-text { font-size: 15px; }
+  .card .cl-add-row { margin-top: 8px; }
+  .card:has(.checklist) { padding-bottom: 24px; }
+
+  .welcome { text-align: center; padding: 60px 8px 0; }
+  .welcome h1 { font-size: 24px; margin: 0 0 10px; }
+  .welcome p { color: var(--hint); margin: 0 0 24px; }
+  .welcome .btn { display: block; width: 100%; margin-bottom: 10px; }
+
+  .toasts { position: fixed; left: 0; right: 0; top: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 30; pointer-events: none; }
+  .toast { background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: 90%; }
+
+  .ideas-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; z-index: 20; }
+  .ideas-sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
+    max-height: 85vh; display: flex; flex-direction: column;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px)); animation: up .18s ease-out; }
+
+  .ideas-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .ideas-head h3 { margin: 0; font-size: 18px; flex: 1; min-width: 0; word-break: break-word; }
+  .ideas-head .ideas-add-toggle { padding: 8px 12px; border-radius: 10px; background: var(--bg2);
+    font-weight: 600; font-size: 14px; color: var(--accent); flex-shrink: 0; }
+  .ideas-head .ideas-add-toggle:active { background: rgba(36, 129, 204, .2); }
+
+  .ideas-hint { font-size: 12px; color: var(--hint); margin-bottom: 8px; }
+
+  .idea-form { display: flex; gap: 8px; margin-bottom: 10px; }
+  .idea-form input { flex: 1; }
+  .idea-form button { padding: 0 16px; border-radius: 12px; background: var(--accent); color: var(--accent-text); font-weight: 600; white-space: nowrap; }
+
+  .ideas-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
+  .idea-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
+    border-radius: 12px; background: var(--bg2); font-size: 15px; text-align: left;
+    border: 2px solid transparent; transition: border-color .15s, background .15s; cursor: pointer; }
+  .idea-item .idea-check { width: 22px; height: 22px; flex-shrink: 0; border-radius: 6px;
+    border: 2px solid var(--hint); display: flex; align-items: center; justify-content: center;
+    font-size: 14px; color: transparent; }
+  .idea-item.selected { border-color: var(--accent); background: rgba(36, 129, 204, .12); }
+  .idea-item.selected .idea-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .idea-item .idea-text { flex: 1; word-break: break-word; }
+  .idea-item .idea-del { font-size: 16px; opacity: .5; padding: 0 4px; border-radius: 6px; line-height: 1; }
+  .idea-item .idea-del:hover { opacity: 1; background: rgba(0,0,0,.06); }
+
+  .ideas-done { width: 100%; margin-top: 12px; padding: 14px; border-radius: 12px;
+    background: var(--accent); color: var(--accent-text); font-weight: 600; font-size: 16px; }
+
+  .archive-item { padding: 10px 0; border-bottom: 1px solid rgba(0,0,0,.06); display: flex; gap: 10px; align-items: flex-start; }
+  .archive-item:last-child { border-bottom: 0; }
+  .archive-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
+  .archive-text { flex: 1; word-break: break-word; }
+  .archive-date { font-size: 12px; color: var(--hint); margin-top: 2px; }
+
+  .reaction-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .reaction-badge { font-size: 22px; padding: 4px 10px; border-radius: 999px;
+    background: var(--bg); border: 2px solid transparent; cursor: pointer; line-height: 1; }
+  .reaction-badge.mine { border-color: var(--accent); background: rgba(36,129,204,.12); }
+  .reaction-add { font-size: 13px; padding: 6px 10px; border-radius: 999px;
+    background: var(--bg2); color: var(--hint); font-weight: 600; }
+  .reaction-add:active { background: rgba(36,129,204,.2); color: var(--accent); }
+
+  .decline-comment { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px;
+    background: rgba(var(--declined), .12); color: var(--text); font-size: 14px;
+    white-space: pre-wrap; word-break: break-word; }
+  .comment-add { display: inline-block; margin-top: 8px; font-size: 13px; padding: 6px 10px;
+    border-radius: 999px; background: var(--bg2); color: var(--hint); font-weight: 600; }
+  .comment-add:active { background: rgba(36,129,204,.2); color: var(--accent); }
+
+  .reaction-picker { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%); z-index: 40; background: var(--bg); border-radius: 16px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.25); padding: 10px 12px; display: flex; gap: 4px;
+    flex-wrap: wrap; justify-content: center; max-width: 92vw; animation: up .15s ease-out; }
+  .reaction-picker button { font-size: 26px; padding: 4px 6px; border-radius: 10px; line-height: 1; }
+  .reaction-picker button:active { background: var(--bg2); }
+
+  .ideas-list-card { margin-top: 10px; display: flex; flex-direction: column; gap: 4px;
+    background: rgba(0,0,0,.03); border-radius: 10px; padding: 6px 10px; }
+  .idea-line { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  .idea-line .idea-badge { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
+  .idea-line .idea-text { flex: 1; word-break: break-word; font-size: 14px; }
+  .idea-line .idea-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .idea-line .idea-yes,
+  .idea-line .idea-no {
+    padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; color: #fff;
+  }
+  .idea-line .idea-yes { background: rgb(var(--accepted)); }
+  .idea-line .idea-no  { background: rgb(var(--declined)); }
+  .idea-line .idea-yes:disabled,
+  .idea-line .idea-no:disabled { opacity: .5; }
+</style>
+</head>
+<body>
+
+<section id="loading" class="loading" role="status">
+  <div class="spinner" id="loadingSpinner" aria-hidden="true"></div>
+  <p id="loadingHint">Подключаемся…</p>
+</section>
+
+<section id="welcome" class="welcome" hidden>
+  <h1>Календарь на двоих</h1>
+  <p>Чтобы начать, отправьте пригласительную ссылку второму человеку. Когда он откроет её в боте, вы будете связаны.</p>
+  <button class="btn primary" id="share">Отправить ссылку партнёру</button>
+  <button class="btn ghost" id="copy">Скопировать ссылку</button>
+</section>
+
+<main id="app" hidden>
+  <div class="cal-head">
+    <button class="nav" id="prev" aria-label="Предыдущий месяц">‹</button>
+    <div class="cal-title" id="title" role="button" tabindex="0" aria-label="Вернуться к текущему месяцу"></div>
+    <button class="nav" id="next" aria-label="Следующий месяц">›</button>
+    <button class="today-btn" id="todayBtn" aria-label="Сегодня">Сегодня</button>
+    <button class="today-btn" id="archiveBtn" aria-label="Архив дел">Архив</button>
+  </div>
+  <div class="weekdays" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
+  <div class="grid" id="grid"></div>
+
+  <div class="list-title" id="listTitle"></div>
+  <div id="list"></div>
+
+  <div id="statsBlock" class="stats" hidden>
+    <div class="stats-title">Статистика пары</div>
+    <div class="stats-grid" id="statsGrid"></div>
+  </div>
+
+  <button class="link-btn" id="unlink">Отвязать партнёра</button>
+  <button class="fab" id="add" aria-label="Добавить событие">+</button>
+</main>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <h2 id="sheetTitle">Новое событие</h2>
+
+    <div class="two">
+      <div>
+        <label for="fDate">Дата</label>
+        <input type="date" id="fDate">
+      </div>
+      <div>
+        <label for="fTime">Время</label>
+        <input type="time" id="fTime">
+      </div>
+    </div>
+
+    <label for="fCategory">Категория</label>
+    <select id="fCategory">
+      <option value="rest">Отдых</option>
+      <option value="sex">Секс</option>
+      <option value="shop">Магазин</option>
+      <option value="todo">Дела</option>
+    </select>
+
+    <div id="todoSection" hidden>
+      <label>Цвет</label>
+      <div class="todo-colors" id="todoColors"></div>
+      <label for="fRemindBefore">Напомнить за</label>
+      <select id="fRemindBefore">
+        <option value="0">Не напоминать</option>
+        <option value="5">5 минут</option>
+        <option value="15">15 минут</option>
+        <option value="30">30 минут</option>
+        <option value="60">1 час</option>
+        <option value="120">2 часа</option>
+        <option value="180">3 часа</option>
+        <option value="360">6 часов</option>
+        <option value="720">12 часов</option>
+        <option value="1440">1 день</option>
+        <option value="2880">2 дня</option>
+      </select>
+      <div class="hint" id="remindHint">Напоминание работает, только если указано время события.</div>
+    </div>
+
+    <div id="sexIdeasSection" hidden>
+      <label>Идеи (откройте категорию — можно выбрать несколько)</label>
+      <div class="sex-ideas-buttons">
+        <button type="button" class="sex-idea-trigger" data-title="🔥 Страстная ночь">
+          <span>🔥 Страстная ночь</span><span class="trg-count" data-count hidden></span>
+        </button>
+        <button type="button" class="sex-idea-trigger" data-title="🌹 Романтический вечер">
+          <span>🌹 Романтический вечер</span><span class="trg-count" data-count hidden></span>
+        </button>
+        <button type="button" class="sex-idea-trigger" data-title="✨ Эксперименты и фантазии">
+          <span>✨ Эксперименты и фантазии</span><span class="trg-count" data-count hidden></span>
+        </button>
+      </div>
+
+      <div id="chosenBlock" class="chosen-block" hidden>
+        <div class="chosen-title">Выбрано: <span id="chosenCount">0</span></div>
+        <div class="chosen-chips" id="chosenChips"></div>
+      </div>
+    </div>
+
+    <div id="checklistSection" hidden>
+      <label>Список покупок</label>
+      <div class="checklist" id="fChecklist"></div>
+      <div class="cl-add-row">
+        <input type="text" id="fClInput" placeholder="Добавить пункт..." maxlength="200" aria-label="Новый пункт списка">
+        <button type="button" id="fClAdd" aria-label="Добавить пункт">+</button>
+      </div>
+    </div>
+
+    <label for="fDesc">Описание (необязательно)</label>
+    <textarea id="fDesc" maxlength="2000"></textarea>
+
+    <div class="hint" id="fHint" hidden>Если изменить дату, время или категорию, партнёру придётся ответить заново.</div>
+
+    <div class="error" id="fError" role="alert"></div>
+    <div class="row">
+      <button class="btn ghost" id="fCancel">Отмена</button>
+      <button class="btn primary" id="fSave">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="ideas-overlay" id="ideasOverlay" hidden>
+  <div class="ideas-sheet" role="dialog" aria-modal="true">
+    <div class="ideas-head">
+      <h3 id="ideasModalTitle">Идеи</h3>
+      <button type="button" class="ideas-add-toggle" id="addIdeaToggle">+ Добавить</button>
+    </div>
+    <div class="ideas-hint">Отметьте одну или несколько идей — они появятся в блоке «Выбрано».</div>
+
+    <div class="idea-form" id="ideaForm" hidden>
+      <input type="text" id="newIdeaInput" placeholder="Текст новой идеи..." maxlength="300" aria-label="Новая идея">
+      <button type="button" id="addIdeaBtn">ОК</button>
+    </div>
+
+    <div class="ideas-list" id="ideasContainer"></div>
+
+    <button type="button" class="ideas-done" id="ideasDone">Готово</button>
+  </div>
+</div>
+
+<div class="overlay" id="archiveOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true">
+    <h2>Архив дел</h2>
+    <div id="archiveList"></div>
+    <div class="row">
+      <button class="btn ghost" id="archiveClose" style="grid-column: 1 / -1;">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script>
+const tg = window.Telegram?.WebApp || {
+  initData: "",
+  ready: () => {},
+  expand: () => {},
+  openTelegramLink: (url) => window.open(url, "_blank")
+};
+try { tg.ready(); tg.expand(); } catch (e) { console.log("Запуск вне Telegram"); }
+
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const CATEGORIES = {
+  rest: { label: "Отдых",   icon: "🌿" },
+  sex:  { label: "Секс",    icon: "🔥" },
+  shop: { label: "Магазин", icon: "🛒" },
+  todo: { label: "Дела",    icon: "📌" },
+};
+const STATUS_TEXT = {
+  pending: "⏳ Ждёт ответа", accepted: "✓ Принято", declined: "✕ Отклонено", expired: "Просрочено",
+};
+const MONTHS_FORMAT = new Intl.DateTimeFormat("ru", { month: "long", year: "numeric" });
+const DAY_FORMAT = new Intl.DateTimeFormat("ru", { day: "numeric", month: "long" });
+
+const pad = (n) => String(n).padStart(2, "0");
+const fmt = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
+const todayStr = () => { const t = new Date(); return fmt(t.getFullYear(), t.getMonth(), t.getDate()); };
+const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
+  return m ? `${parseInt(m[1],16)}, ${parseInt(m[2],16)}, ${parseInt(m[3],16)}` : "139, 92, 246";
+}
+function humanizeMinutes(m) {
+  if (m < 60) return `${m} мин`;
+  if (m < 1440) return `${m / 60} ч`;
+  return `${m / 1440} дн`;
+}
+
+let state = {
+  has_partner: false, invite_link: "", events: [], sex_ideas: [],
+  stats: null, todo_colors: [], allowed_reactions: [], allowed_remind_before: [],
+};
+let selected = todayStr();
+let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
+let editingEvent = null;
+let loaded = false;
+const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
+const monthCache = {};
+
+const API_BASE = (document.querySelector('meta[name="api-base"]')?.content || "").replace(/\/$/, "");
+
+class HttpError extends Error {
+  constructor(message, status) { super(message); this.status = status; }
+}
+
+async function request(path, { method = "GET", body, etag } = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60000);
+  try {
+    const headers = { "X-Init-Data": tg.initData || "", "X-TZ": TZ };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (etag) headers["If-None-Match"] = etag;
+    const res = await fetch(API_BASE + "/api" + path, {
+      method, headers, signal: ctrl.signal, cache: "no-store",
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 304) return { status: 304 };
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new HttpError(data.error || "Что-то пошло не так", res.status);
+    return { status: res.status, data, etag: res.headers.get("ETag") };
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(e.name === "AbortError" ? "Сервер не отвечает." : "Нет соединения с сервером.", 0);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+const api = async (path, opts) => (await request(path, opts)).data;
+
+function toast(text) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = text;
+  $("toasts").appendChild(el);
+  setTimeout(() => el.remove(), 2800);
+}
+
+function confirmDialog(message, onYes) {
+  try {
+    if (tg.showConfirm) { tg.showConfirm(message, (ok) => { if (ok) onYes(); }); return; }
+  } catch (e) {}
+  if (confirm(message)) onYes();
+}
+
+function openCommentDialog(initial, onConfirm) {
+  const overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.innerHTML = `
+    <div class="sheet" role="dialog" aria-modal="true">
+      <h2>Комментарий</h2>
+      <label for="commentText">Текст комментария</label>
+      <textarea id="commentText" maxlength="500" placeholder="Например: не смогу в этот день..."></textarea>
+      <div class="row">
+        <button class="btn ghost" id="commentCancel">Отмена</button>
+        <button class="btn primary" id="commentOk">Сохранить</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const ta = overlay.querySelector("#commentText");
+  ta.value = initial || "";
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector("#commentCancel").onclick = close;
+  overlay.querySelector("#commentOk").onclick = () => {
+    const comment = ta.value.trim().slice(0, 500);
+    close();
+    onConfirm(comment);
+  };
+  setTimeout(() => ta.focus(), 50);
+}
+
+let etag = null, etagKey = "";
+
+async function load(silent = false) {
+  const key = monthKey();
+  try {
+    const r = await request("/state?month=" + key, { etag: etagKey === key ? etag : null });
+    if (key !== monthKey()) return;
+    if (r.status === 304) return;
+    state = r.data; etag = r.etag; etagKey = key;
+    monthCache[key] = state.events;
+    render();
+  } catch (e) {
+    if (!loaded) throw e;
+    if (!silent) toast(e.message);
+  }
+}
+
+async function bootstrap() {
+  const hint = $("loadingHint");
+  const slow = setTimeout(() => { hint.textContent = "Сервер просыпается, это может занять до минуты…"; }, 5000);
+  for (;;) {
+    try { await load(); break; }
+    catch (e) {
+      if (e.status === 401) {
+        clearTimeout(slow);
+        $("loadingSpinner").hidden = true;
+        hint.textContent = "Откройте приложение через бота в Telegram.";
+        return;
+      }
+      hint.textContent = e.message + " Пробуем снова…";
+      await sleep(3000);
+    }
+  }
+  clearTimeout(slow);
+  loaded = true;
+  $("loading").hidden = true;
+  render();
+  startPolling();
+}
+
+function render() {
+  $("welcome").hidden = state.has_partner;
+  $("app").hidden = !state.has_partner;
+  if (state.has_partner) { renderCalendar(); renderList(); renderStats(); }
+}
+
+function renderStats() {
+  const block = $("statsBlock");
+  const grid = $("statsGrid");
+  const s = state.stats;
+  if (!s || (!s.total && !s.pending && !s.accepted && !s.declined)) {
+    block.hidden = true;
+    return;
+  }
+  block.hidden = false;
+  grid.innerHTML = `
+    <div class="stat-cell pending"><div class="num">${s.pending}</div><div class="lbl">Ждут</div></div>
+    <div class="stat-cell accepted"><div class="num">${s.accepted}</div><div class="lbl">Принято</div></div>
+    <div class="stat-cell declined"><div class="num">${s.declined}</div><div class="lbl">Отклонено</div></div>
+  `;
+}
+
+function statusKey(e) { return e.status === "pending" && e.date < todayStr() ? "expired" : e.status; }
+
+function renderCalendar() {
+  $("title").textContent = MONTHS_FORMAT.format(new Date(view.y, view.m, 1));
+
+  const byDay = {};
+  for (const e of state.events) (byDay[e.date] ||= []).push(e);
+
+  const offset = (new Date(view.y, view.m, 1).getDay() + 6) % 7;
+  const days = new Date(view.y, view.m + 1, 0).getDate();
+  const today = todayStr();
+  let html = "";
+  for (let i = 0; i < offset; i++) html += "<div></div>";
+  for (let d = 1; d <= days; d++) {
+    const date = fmt(view.y, view.m, d);
+    const list = byDay[date] || [];
+
+    const todos = list.filter(x => x.category === "todo").slice().sort((a, b) => a.id - b.id);
+    const todoBar = todos.length
+      ? `<span class="todo-bar" aria-hidden="true">${todos.map(t =>
+          `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
+      : "";
+
+    const nonTodos = list.filter(x => x.category !== "todo");
+    const st = new Set(nonTodos.map(statusKey));
+    const dots = ["pending", "accepted", "declined", "expired"]
+      .filter((s) => st.has(s)).map((s) => `<i class="dot ${s}"></i>`).join("");
+
+    const cls = ["day", date === today && "today", date === selected && "selected"].filter(Boolean).join(" ");
+    const label = DAY_FORMAT.format(new Date(view.y, view.m, d))
+      + (list.length ? `, событий: ${list.length}` : "");
+    html += `<button class="${cls}" data-date="${date}" aria-pressed="${date === selected}" aria-label="${esc(label)}">
+               ${todoBar}
+               <span class="num">${d}</span><span class="dots" aria-hidden="true">${dots}</span></button>`;
+  }
+  $("grid").innerHTML = html;
+}
+
+function checklistHtml(e) {
+  const items = (e.checklist || []).map((it) => `
+    <div class="checklist-item${it.checked ? " checked" : ""}" data-item="${it.id}">
+      <span class="cl-drag" data-cl-drag role="button" tabindex="0" aria-label="Перетащить">⋮⋮</span>
+      <input type="checkbox" ${it.checked ? "checked" : ""} data-cl-toggle aria-label="${esc(it.text)}">
+      <span class="cl-text">${esc(it.text)}</span>
+      <button type="button" class="cl-remove" data-cl-remove aria-label="Удалить пункт «${esc(it.text)}»">×</button>
+    </div>`).join("");
+  return `<div class="checklist">${items || '<div class="cl-empty">Список пока пуст</div>'}</div>
+    <div class="cl-add-row">
+      <input type="text" class="cl-input" maxlength="200" placeholder="Добавить пункт..." aria-label="Новый пункт списка">
+      <button type="button" data-cl-add aria-label="Добавить пункт">+</button>
+    </div>`;
+}
+
+function answerHtml(e, expired) {
+  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.is_creator) return "";
+  if (e.status === "pending") {
+    return expired ? "" : `<div class="answer">
+      <button class="yes" data-status="accepted">Да</button>
+      <button class="no" data-status="declined">Нет</button></div>`;
+  }
+  if (e.status === "accepted") {
+    return `<div class="answer one"><button class="soft" data-status="declined">Отказаться</button></div>`;
+  }
+  return `<div class="answer one"><button class="soft" data-status="accepted">Всё-таки принять</button></div>`;
+}
+
+function reactionHtml(e) {
+  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.status !== "accepted" && e.status !== "declined") return "";
+  const mine = e.reaction_mine || "";
+  const partner = e.reaction_partner || "";
+  const parts = [];
+  if (mine) {
+    parts.push(`<span class="reaction-badge mine" data-reaction-toggle title="Ваша реакция">${esc(mine)}</span>`);
+  }
+  if (partner) {
+    parts.push(`<span class="reaction-badge" title="Реакция партнёра">${esc(partner)}</span>`);
+  }
+  if (e.status !== "accepted") return parts.join("");
+  parts.push(`<button type="button" class="reaction-add" data-reaction-open aria-label="Поставить реакцию">😊+</button>`);
+  return `<div class="reaction-row">${parts.join("")}</div>`;
+}
+
+function ideasHtml(e) {
+  if (e.category !== "sex") return "";
+  if (!e.ideas || !e.ideas.length) return "";
+  const rows = e.ideas.map(it => {
+    const eff = it.effective || "";
+    const badge = eff === "accepted" ? "✅" : eff === "declined" ? "❌" : "⏳";
+    const canPress = e.can_respond_ideas && !it.status;
+    const buttons = canPress
+      ? `<button type="button" class="idea-yes" data-idea-yes="${it.idx}" aria-label="Да">Да</button>
+         <button type="button" class="idea-no"  data-idea-no="${it.idx}"  aria-label="Нет">Нет</button>`
+      : "";
+    return `<div class="idea-line" data-idea-idx="${it.idx}">
+      <span class="idea-badge">${badge}</span>
+      <span class="idea-text">${esc(it.text)}</span>
+      <span class="idea-actions">${buttons}</span>
+    </div>`;
+  }).join("");
+  return `<div class="ideas-list-card">${rows}</div>`;
+}
+
+function declineCommentHtml(e) {
+  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.status !== "declined") return "";
+
+  const cCreator = e.decline_comment_creator || "";
+  const cTarget  = e.decline_comment_target || "";
+  const mine = e.my_decline_comment || "";
+
+  const lines = [];
+  if (cCreator) lines.push(`<p class="decline-comment">💬 Автор: ${esc(cCreator)}</p>`);
+  if (cTarget)  lines.push(`<p class="decline-comment">💬 Партнёр: ${esc(cTarget)}</p>`);
+
+  const button = `<button type="button" class="comment-add" data-comment-open>${
+    mine ? "✏️ Изменить свой комментарий" : "💬 Оставить комментарий"
+  }</button>`;
+
+  return `${lines.join("")}${button}`;
+}
+
+function cardHtml(e) {
+  const cat = CATEGORIES[e.category] || CATEGORIES.rest;
+  const sk = statusKey(e);
+  const isShop = e.category === "shop";
+  const isTodo = e.category === "todo";
+  const remindText = (isTodo && e.remind_before && e.time)
+    ? ` · 🔔 за ${humanizeMinutes(e.remind_before)}`
+    : "";
+  const tag = `${cat.icon} ${cat.label}${e.time ? " · " + esc(e.time) : ""}${remindText}`;
+
+  const cardCls = isTodo ? "todo" : (isShop ? "accepted" : sk);
+  const cardStyle = isTodo && e.color ? ` style="--c: ${hexToRgb(e.color)};"` : "";
+
+  const actions = (e.is_creator || isTodo)
+    ? `<div class="card-actions">
+         <button class="icon-btn edit-btn" aria-label="Редактировать" title="Редактировать">✏️</button>
+         <button class="icon-btn delete-btn" aria-label="Удалить" title="Удалить">🗑️</button>
+       </div>` : "";
+
+  const statusLabel = (isShop || isTodo) ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
+
+  return `<article class="card ${cardCls}" data-id="${e.id}"${cardStyle}>
+    <div class="card-header">
+      <div style="flex:1;min-width:0"><h3>${esc(e.title)}</h3><div class="tag">${tag}</div></div>
+      ${actions}
+    </div>
+    ${isShop ? checklistHtml(e) : (e.description ? `<p>${esc(e.description)}</p>` : "")}
+    ${isShop && e.description ? `<p>${esc(e.description)}</p>` : ""}
+    ${ideasHtml(e)}
+    ${reactionHtml(e)}
+    ${declineCommentHtml(e)}
+    <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span>${statusLabel}</div>
+    ${answerHtml(e, sk === "expired")}
+  </article>`;
+}
+
+const sigs = new WeakMap();
+function reconcile(container, items) {
+  if (!items.length) { container.replaceChildren(); return false; }
+  [...container.children].forEach((c) => { if (!c.dataset.id) c.remove(); });
+  const existing = new Map([...container.children].map((c) => [c.dataset.id, c]));
+  let prev = null;
+  for (const it of items) {
+    let el = existing.get(it.id);
+    if (!el || sigs.get(el) !== it.html) {
+      const tpl = document.createElement("template");
+      tpl.innerHTML = it.html.trim();
+      const fresh = tpl.content.firstElementChild;
+      sigs.set(fresh, it.html);
+      if (el) {
+        const oldInput = el.querySelector(".cl-input");
+        const typed = oldInput ? oldInput.value : "";
+        const hadFocus = oldInput && oldInput === document.activeElement;
+        const sel = hadFocus ? [oldInput.selectionStart, oldInput.selectionEnd] : null;
+        el.replaceWith(fresh);
+        const newInput = fresh.querySelector(".cl-input");
+        if (newInput && typed) newInput.value = typed;
+        if (newInput && hadFocus) {
+          newInput.focus({ preventScroll: true });
+          try { newInput.setSelectionRange(sel[0], sel[1]); } catch (e) {}
+        }
+      }
+      el = fresh;
+    }
+    existing.delete(it.id);
+    const expected = prev ? prev.nextElementSibling : container.firstElementChild;
+    if (el !== expected) container.insertBefore(el, expected);
+    prev = el;
+  }
+  existing.forEach((el) => el.remove());
+  return true;
+}
+
+function renderList() {
+  $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
+  const items = state.events.filter((e) => e.date === selected)
+    .map((e) => ({ id: String(e.id), html: cardHtml(e) }));
+  if (!reconcile($("list"), items)) {
+    $("list").innerHTML = `<div class="empty">На этот день ничего нет. Нажмите «+», чтобы добавить событие.</div>`;
+  }
+}
+
+$("grid").addEventListener("click", (ev) => {
+  const btn = ev.target.closest(".day");
+  if (!btn) return;
+  selected = btn.dataset.date;
+  tg.HapticFeedback?.selectionChanged();
+  renderCalendar();
+  renderList();
+  $("grid").querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+});
+
+function shiftMonth(delta) {
+  const d = new Date(view.y, view.m + delta, 1);
+  view = { y: d.getFullYear(), m: d.getMonth() };
+  const t = new Date();
+  const sameAsToday = view.y === t.getFullYear() && view.m === t.getMonth();
+  selected = sameAsToday ? todayStr() : fmt(view.y, view.m, 1);
+  state.events = monthCache[monthKey()] || [];
+  renderCalendar();
+  renderList();
+  load();
+}
+$("prev").onclick = () => shiftMonth(-1);
+$("next").onclick = () => shiftMonth(1);
+
+function goToday() {
+  const t = new Date();
+  view = { y: t.getFullYear(), m: t.getMonth() };
+  selected = todayStr();
+  state.events = monthCache[monthKey()] || [];
+  renderCalendar();
+  renderList();
+  load();
+  tg.HapticFeedback?.selectionChanged();
+}
+$("todayBtn").onclick = goToday;
+
+(() => {
+  const title = $("title");
+  let timer = null;
+  const start = () => { timer = setTimeout(() => { timer = null; goToday(); }, 600); };
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  title.addEventListener("pointerdown", start);
+  title.addEventListener("pointerup", cancel);
+  title.addEventListener("pointercancel", cancel);
+  title.addEventListener("pointerleave", cancel);
+  title.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goToday(); } });
+})();
+
+function replaceEvent(updated) {
+  const i = state.events.findIndex((e) => e.id === updated.id);
+  if (i >= 0) state.events[i] = updated; else state.events.push(updated);
+  monthCache[monthKey()] = state.events;
+  etag = null;
+  renderCalendar();
+  renderList();
+}
+
+let pendingOps = 0;
+let opChain = Promise.resolve();
+function queueOp(fn) {
+  pendingOps++;
+  const run = opChain.then(fn);
+  opChain = run.catch(() => {}).then(() => { pendingOps--; });
+  return run;
+}
+const lastOp = () => pendingOps <= 1;
+
+function findEvent(id) { return state.events.find((e) => String(e.id) === String(id)); }
+
+function toggleItem(eventId, itemId, checked) {
+  const ev = findEvent(eventId);
+  const it = ev?.checklist.find((x) => String(x.id) === String(itemId));
+  if (!it) return;
+  it.checked = checked;
+  renderList();
+  queueOp(async () => {
+    try {
+      const updated = await api(`/events/${eventId}/items/${itemId}`, { method: "PUT", body: { checked } });
+      tg.HapticFeedback?.selectionChanged();
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) { toast(e.message); await load(); }
+  });
+}
+
+function removeItem(eventId, itemId) {
+  const ev = findEvent(eventId);
+  if (!ev) return;
+  ev.checklist = ev.checklist.filter((x) => String(x.id) !== String(itemId));
+  renderList();
+  queueOp(async () => {
+    try {
+      const updated = await api(`/events/${eventId}/items/${itemId}`, { method: "DELETE" });
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) { toast(e.message); await load(); }
+  });
+}
+
+function addItem(eventId, input) {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  queueOp(async () => {
+    try {
+      const updated = await api(`/events/${eventId}/items`, { method: "POST", body: { text } });
+      tg.HapticFeedback?.selectionChanged();
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) {
+      toast(e.message);
+      const again = [...document.querySelectorAll(".cl-input")].find((i) => i.closest(".card")?.dataset.id === String(eventId));
+      if (again && !again.value) again.value = text;
+    }
+  });
+}
+
+function moveItem(eventId, itemId, newPosition) {
+  const ev = findEvent(eventId);
+  if (!ev) return;
+  const idx = ev.checklist.findIndex(x => String(x.id) === String(itemId));
+  if (idx < 0) return;
+  newPosition = Math.max(0, Math.min(newPosition, ev.checklist.length - 1));
+  if (idx === newPosition) return;
+  const [moved] = ev.checklist.splice(idx, 1);
+  ev.checklist.splice(newPosition, 0, moved);
+  renderList();
+  tg.HapticFeedback?.selectionChanged();
+  queueOp(async () => {
+    try {
+      const updated = await api(
+        `/events/${eventId}/items/${itemId}/move`,
+        { method: "POST", body: { position: newPosition } }
+      );
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) { toast(e.message); await load(); }
+  });
+}
+
+// Drag & drop для ручки ⋮⋮
+let dragState = null;
+
+function onDragStart(ev) {
+  const handle = ev.target.closest("[data-cl-drag]");
+  if (!handle) return;
+  const item = handle.closest(".checklist-item");
+  const card = handle.closest(".card");
+  if (!item || !card) return;
+
+  ev.preventDefault();
+  const rect = item.getBoundingClientRect();
+  dragState = {
+    eventId: card.dataset.id,
+    itemId: item.dataset.item,
+    el: item,
+    pointerOffsetY: ev.clientY - rect.top,
+    pointerId: ev.pointerId,
+  };
+  item.classList.add("dragging");
+  try { handle.setPointerCapture(ev.pointerId); } catch (e) {}
+}
+
+function onDragMove(ev) {
+  if (!dragState) return;
+  ev.preventDefault();
+  const list = dragState.el.parentElement;
+  const items = [...list.querySelectorAll(".checklist-item")].filter(x => x !== dragState.el);
+  let closest = null;
+  let closestDist = Infinity;
+  for (const el of items) {
+    const rect = el.getBoundingClientRect();
+    const mid = rect.top + rect.height / 2;
+    const dist = Math.abs(ev.clientY - mid);
+    if (dist < closestDist) { closestDist = dist; closest = el; }
+  }
+  if (!closest) return;
+  const rect = closest.getBoundingClientRect();
+  const after = ev.clientY > rect.top + rect.height / 2;
+  if (after) {
+    list.insertBefore(dragState.el, closest.nextSibling);
+  } else {
+    list.insertBefore(dragState.el, closest);
+  }
+}
+
+function onDragEnd() {
+  if (!dragState) return;
+  const { eventId, itemId, el } = dragState;
+  el.classList.remove("dragging");
+  const list = el.parentElement;
+  const items = [...list.querySelectorAll(".checklist-item")];
+  const newPos = items.indexOf(el);
+  const idsNow = items.map(x => String(x.dataset.item));
+  dragState = null;
+
+  const ev = findEvent(eventId);
+  if (!ev) { renderList(); return; }
+  const oldOrder = ev.checklist.map(x => String(x.id));
+  if (idsNow.join(",") === oldOrder.join(",")) {
+    return;
+  }
+  moveItem(eventId, itemId, newPos);
+}
+
+$("list").addEventListener("pointerdown", onDragStart);
+$("list").addEventListener("pointermove", onDragMove);
+$("list").addEventListener("pointerup", onDragEnd);
+$("list").addEventListener("pointercancel", () => {
+  if (!dragState) return;
+  dragState.el.classList.remove("dragging");
+  dragState = null;
+  renderList();
+});
+
+let reactionPickerEl = null;
+function openReactionPicker(event) {
+  closeReactionPicker();
+  const list = (state.allowed_reactions && state.allowed_reactions.length)
+    ? state.allowed_reactions : ["❤️","🔥","😍","😂","👍","🎉","😮","🥰"];
+  const el = document.createElement("div");
+  el.className = "reaction-picker";
+  el.innerHTML = list.map(r => `<button type="button" data-r="${r}">${r}</button>`).join("")
+                + `<button type="button" data-r="" title="Убрать">✖️</button>`;
+  document.body.appendChild(el);
+  reactionPickerEl = el;
+  el.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const b = e.target.closest("[data-r]");
+    if (!b) return;
+    const emoji = b.dataset.r;
+    closeReactionPicker();
+    try {
+      const updated = await api(`/events/${event.id}/reaction`, { method: "POST", body: { emoji } });
+      replaceEvent(updated);
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (err) { toast(err.message); }
+  });
+  setTimeout(() => {
+    document.addEventListener("pointerdown", outsideCloseReaction, { once: true });
+  }, 0);
+}
+function outsideCloseReaction(e) {
+  if (reactionPickerEl && !reactionPickerEl.contains(e.target)) closeReactionPicker();
+}
+function closeReactionPicker() {
+  if (reactionPickerEl) { reactionPickerEl.remove(); reactionPickerEl = null; }
+}
+
+$("list").addEventListener("click", async (ev) => {
+  const card = ev.target.closest(".card");
+  if (!card) return;
+  const eventId = card.dataset.id;
+  const event = findEvent(eventId);
+  if (!event) return;
+
+  const ideaYes = ev.target.closest("[data-idea-yes]");
+  const ideaNo  = ev.target.closest("[data-idea-no]");
+  if (ideaYes || ideaNo) {
+    const btn = ideaYes || ideaNo;
+    const idx = Number(btn.dataset.ideaYes ?? btn.dataset.ideaNo);
+    const status = ideaYes ? "accepted" : "declined";
+    const line = ev.target.closest(".idea-line");
+    if (line) line.querySelectorAll("button").forEach(b => (b.disabled = true));
+    try {
+      const updated = await api(`/events/${eventId}/idea`, { method: "POST", body: { idx, status } });
+      replaceEvent(updated);
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (err) {
+      toast(err.message);
+      await load(true);
+    }
+    return;
+  }
+
+  if (ev.target.closest("[data-reaction-open]") || ev.target.closest("[data-reaction-toggle]")) {
+    if (event.category === "shop" || event.category === "todo") return;
+    if (event.status !== "accepted") return;
+    openReactionPicker(event);
+    return;
+  }
+
+  if (ev.target.closest("[data-comment-open]")) {
+    if (event.category === "shop" || event.category === "todo") return;
+    if (event.status !== "declined") return;
+    openCommentDialog(event.my_decline_comment || "", async (comment) => {
+      try {
+        const updated = await api(`/events/${eventId}/comment`, { method: "POST", body: { comment } });
+        replaceEvent(updated);
+        tg.HapticFeedback?.notificationOccurred("success");
+      } catch (err) { toast(err.message); }
+    });
+    return;
+  }
+
+  const toggle = ev.target.closest("[data-cl-toggle]");
+  if (toggle) { toggleItem(eventId, toggle.closest("[data-item]").dataset.item, toggle.checked); return; }
+
+  const remove = ev.target.closest("[data-cl-remove]");
+  if (remove) { removeItem(eventId, remove.closest("[data-item]").dataset.item); return; }
+
+  if (ev.target.closest("[data-cl-add]")) { addItem(eventId, card.querySelector(".cl-input")); return; }
+
+  const statusBtn = ev.target.closest("[data-status]");
+  if (statusBtn) {
+    const newStatus = statusBtn.dataset.status;
+    if (newStatus === "declined") {
+      openCommentDialog(event.my_decline_comment || "", async (comment) => {
+        try {
+          const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: "declined", comment } });
+          replaceEvent(updated);
+          tg.HapticFeedback?.notificationOccurred("success");
+        } catch (e) { toast(e.message); await load(); }
+      });
+      return;
+    }
+    statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    try {
+      const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: newStatus } });
+      replaceEvent(updated);
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (e) { toast(e.message); await load(); }
+    return;
+  }
+
+  if (ev.target.closest(".edit-btn")) { openForm(event); return; }
+
+  if (ev.target.closest(".delete-btn")) {
+    confirmDialog("Удалить это событие?", async () => {
+      try {
+        await api(`/events/${eventId}`, { method: "DELETE" });
+        tg.HapticFeedback?.notificationOccurred("success");
+        toast("Удалено");
+        etag = null;
+        await load();
+      } catch (e) { toast(e.message); }
+    });
+  }
+});
+
+$("list").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && ev.target.classList?.contains("cl-input")) {
+    ev.preventDefault();
+    addItem(ev.target.closest(".card").dataset.id, ev.target);
+  }
+});
+
+let formChecklist = [];
+let selectedIdeas = [];
+let currentCategoryTitle = "";
+let formColor = "";
+const todoColorsFallback = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
+
+function availableTodoColors() {
+  return (state.todo_colors && state.todo_colors.length) ? state.todo_colors : todoColorsFallback;
+}
+
+function updateRemindAvailability() {
+  const cat = $("fCategory").value;
+  const hasTime = !!$("fTime").value;
+  const isTodo = cat === "todo";
+  const sel = $("fRemindBefore");
+  if (!sel) return;
+  sel.disabled = !isTodo || !hasTime;
+  const hint = $("remindHint");
+  if (hint) hint.hidden = !isTodo || hasTime;
+  if (!hasTime) sel.value = "0";
+}
+
+function updateFormSections() {
+  const cat = $("fCategory").value;
+  const isShop = cat === "shop";
+  const isSex = cat === "sex";
+  const isTodo = cat === "todo";
+
+  $("checklistSection").hidden = !(isShop && !editingEvent);
+  $("sexIdeasSection").hidden = !isSex;
+  $("todoSection").hidden = !isTodo;
+
+  if (isShop && !editingEvent) renderFormChecklist();
+  if (isTodo) renderTodoSection();
+  updateRemindAvailability();
+
+  if (!isSex) {
+    selectedIdeas = [];
+    currentCategoryTitle = "";
+    renderChosen();
+  }
+}
+
+function renderTodoSection() {
+  const box = $("todoColors");
+  if (!box) return;
+  const colors = availableTodoColors();
+  box.innerHTML = colors.map(c =>
+    `<button type="button" class="todo-color${c === formColor ? " selected" : ""}"
+             data-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
+  ).join("");
+}
+
+$("todoColors").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-color]");
+  if (!b) return;
+  formColor = b.dataset.color;
+  renderTodoSection();
+  tg.HapticFeedback?.selectionChanged();
+});
+
+function renderFormChecklist() {
+  const box = $("fChecklist");
+  if (!box) return;
+  if (!formChecklist.length) {
+    box.innerHTML = `<div class="cl-empty">Список пока пуст</div>`;
+    return;
+  }
+  box.innerHTML = formChecklist.map((it, idx) => `
+    <div class="checklist-item${it.checked ? " checked" : ""}" data-idx="${idx}">
+      <input type="checkbox" ${it.checked ? "checked" : ""} data-form-cl-toggle aria-label="${esc(it.text)}">
+      <span class="cl-text">${esc(it.text)}</span>
+      <button type="button" class="cl-remove" data-form-cl-remove aria-label="Удалить пункт «${esc(it.text)}»">×</button>
+    </div>`).join("");
+}
+
+function openIdeasModal(title) {
+  currentCategoryTitle = title;
+  $("ideasModalTitle").textContent = title;
+  hideIdeaForm();
+  renderIdeas();
+  $("ideasOverlay").hidden = false;
+  document.body.style.overflow = "hidden";
+  tg.BackButton?.show();
+}
+
+function closeIdeasModal() {
+  $("ideasOverlay").hidden = true;
+  document.body.style.overflow = "";
+  hideIdeaForm();
+  if (!$("overlay").hidden) tg.BackButton?.show(); else tg.BackButton?.hide();
+}
+
+function showIdeaForm() {
+  $("ideaForm").hidden = false;
+  $("addIdeaToggle").hidden = true;
+  const inp = $("newIdeaInput");
+  inp.value = "";
+  setTimeout(() => inp.focus(), 50);
+}
+
+function hideIdeaForm() {
+  $("ideaForm").hidden = true;
+  $("addIdeaToggle").hidden = false;
+  $("newIdeaInput").value = "";
+}
+
+function renderIdeas() {
+  const listEl = $("ideasContainer");
+  const filtered = (state.sex_ideas || []).filter(i => i.category_title === currentCategoryTitle);
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="cl-empty">Пока нет идей. Добавьте первую!</div>`;
+    return;
+  }
+  listEl.innerHTML = filtered.map(i => {
+    const on = selectedIdeas.includes(i.text);
+    return `<div class="idea-item${on ? " selected" : ""}" data-idea-text="${esc(i.text)}" data-idea-id="${esc(i.id)}">
+      <span class="idea-check">✓</span>
+      <span class="idea-text">${esc(i.text)}</span>
+      <button type="button" class="idea-del" data-idea-del aria-label="Удалить">×</button>
+    </div>`;
+  }).join("");
+}
+
+function toggleIdea(text) {
+  const i = selectedIdeas.indexOf(text);
+  if (i >= 0) selectedIdeas.splice(i, 1);
+  else selectedIdeas.push(text);
+  renderIdeas();
+  renderChosen();
+  tg.HapticFeedback?.selectionChanged();
+}
+
+function renderChosen() {
+  const block = $("chosenBlock");
+  const chips = $("chosenChips");
+  const count = $("chosenCount");
+  if (!block || !chips || !count) return;
+  if (!selectedIdeas.length) {
+    block.hidden = true; chips.innerHTML = ""; count.textContent = "0";
+    updateTriggersCount();
+    return;
+  }
+  block.hidden = false;
+  count.textContent = String(selectedIdeas.length);
+  chips.innerHTML = selectedIdeas.map((t, idx) =>
+    `<span class="chip" data-idx="${idx}">
+       <span class="chip-text">${esc(t)}</span>
+       <button type="button" class="chip-x" data-chip-x aria-label="Убрать">×</button>
+     </span>`
+  ).join("");
+  updateTriggersCount();
+}
+
+function updateTriggersCount() {
+  document.querySelectorAll(".sex-idea-trigger").forEach(btn => {
+    const title = btn.dataset.title;
+    const n = selectedIdeas.filter(t => {
+      const idea = (state.sex_ideas || []).find(i => i.text === t);
+      return idea && idea.category_title === title;
+    }).length;
+    const badge = btn.querySelector("[data-count]");
+    if (!badge) return;
+    if (n > 0) { badge.textContent = n; badge.hidden = false; }
+    else { badge.textContent = ""; badge.hidden = true; }
+  });
+}
+
+document.querySelectorAll(".sex-idea-trigger").forEach((btn) => {
+  btn.onclick = () => {
+    openIdeasModal(btn.dataset.title);
+    tg.HapticFeedback?.selectionChanged();
+  };
+});
+
+$("ideasContainer").addEventListener("click", async (e) => {
+  const del = e.target.closest("[data-idea-del]");
+  if (del) {
+    const item = del.closest("[data-idea-text]");
+    const text = item.dataset.ideaText;
+    const idea = (state.sex_ideas || []).find(i => i.text === text);
+    if (!idea) return;
+    confirmDialog("Удалить эту идею? Она пропадёт у вас обоих.", async () => {
+      try {
+        const res = await api(`/sex-ideas/${idea.id}`, { method: "DELETE" });
+        state.sex_ideas = res.ideas;
+        selectedIdeas = selectedIdeas.filter(t => t !== text);
+        renderIdeas();
+        renderChosen();
+        tg.HapticFeedback?.notificationOccurred("success");
+      } catch (err) {
+        toast(err.message);
+      }
+    });
+    return;
+  }
+  const item = e.target.closest("[data-idea-text]");
+  if (item) toggleIdea(item.dataset.ideaText);
+});
+
+$("chosenChips").addEventListener("click", (e) => {
+  const x = e.target.closest("[data-chip-x]");
+  if (!x) return;
+  const idx = Number(x.closest(".chip").dataset.idx);
+  selectedIdeas.splice(idx, 1);
+  renderIdeas();
+  renderChosen();
+  tg.HapticFeedback?.selectionChanged();
+});
+
+$("addIdeaToggle").onclick = () => showIdeaForm();
+
+async function submitNewIdea() {
+  const input = $("newIdeaInput");
+  const text = input.value.trim();
+  if (!text || !currentCategoryTitle) return;
+  try {
+    const res = await api("/sex-ideas", { method: "POST", body: { category_title: currentCategoryTitle, text } });
+    state.sex_ideas = res.ideas;
+    if (!selectedIdeas.includes(text)) selectedIdeas.push(text);
+    hideIdeaForm();
+    renderIdeas();
+    renderChosen();
+    tg.HapticFeedback?.selectionChanged();
+  } catch (e) { toast(e.message); }
+}
+$("addIdeaBtn").onclick = submitNewIdea;
+$("newIdeaInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); submitNewIdea(); }
+  if (e.key === "Escape") { e.preventDefault(); hideIdeaForm(); }
+});
+
+$("ideasDone").onclick = () => closeIdeasModal();
+$("ideasOverlay").addEventListener("click", (e) => {
+  if (e.target === $("ideasOverlay")) closeIdeasModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("ideasOverlay").hidden && !$("ideaForm").hidden) { hideIdeaForm(); return; }
+  if (!$("ideasOverlay").hidden) closeIdeasModal();
+});
+
+function openForm(event = null) {
+  editingEvent = event;
+  $("sheetTitle").textContent = event ? "Редактировать событие" : "Новое событие";
+  $("fDate").value = event ? event.date : selected;
+  $("fTime").value = event ? event.time : "";
+  $("fCategory").value = event ? event.category : "rest";
+  $("fDesc").value = event ? event.description || "" : "";
+
+  selectedIdeas = [];
+  currentCategoryTitle = "";
+  renderChosen();
+
+  if (event && event.category === "todo") {
+    formColor = event.color || availableTodoColors()[6];
+    $("fRemindBefore").value = String(event.remind_before || 0);
+  } else {
+    formColor = availableTodoColors()[6];
+    $("fRemindBefore").value = "0";
+  }
+
+  $("fHint").hidden = !event || (event && (event.category === "shop" || event.category === "todo"));
+  $("fError").textContent = "";
+  formChecklist = [];
+  updateFormSections();
+  $("overlay").hidden = false;
+  tg.BackButton?.show();
+}
+
+function closeForm() {
+  $("overlay").hidden = true;
+  tg.BackButton?.hide();
+}
+
+$("add").onclick = () => openForm();
+$("fCancel").onclick = closeForm;
+$("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeForm(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("overlay").hidden) closeForm(); });
+try { tg.BackButton?.onClick(() => { if (!$("overlay").hidden) closeForm(); }); } catch (e) {}
+
+$("fCategory").addEventListener("change", () => {
+  if ($("fCategory").value !== "shop") formChecklist = [];
+  updateFormSections();
+});
+$("fTime").addEventListener("change", updateRemindAvailability);
+$("fTime").addEventListener("input", updateRemindAvailability);
+
+$("fClAdd").onclick = () => {
+  const input = $("fClInput");
+  const text = input.value.trim();
+  if (!text || formChecklist.length >= 50) return;
+  formChecklist.push({ text, checked: false });
+  input.value = "";
+  renderFormChecklist();
+  input.focus();
+};
+$("fClInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("fClAdd").click(); }
+});
+$("fChecklist").addEventListener("click", (ev) => {
+  const idxEl = ev.target.closest("[data-idx]");
+  if (!idxEl) return;
+  const idx = Number(idxEl.dataset.idx);
+
+  if (ev.target.closest("[data-form-cl-remove]")) {
+    formChecklist.splice(idx, 1);
+    renderFormChecklist();
+    return;
+  }
+  const toggle = ev.target.closest("[data-form-cl-toggle]");
+  if (toggle) {
+    formChecklist[idx].checked = toggle.checked;
+    renderFormChecklist();
+  }
+});
+
+$("fSave").onclick = async () => {
+  const category = $("fCategory").value;
+  const date = $("fDate").value;
+  if (!date) { $("fError").textContent = "Выберите дату"; return; }
+
+  const notes = $("fDesc").value.trim();
+  const ideasPart = category === "sex" && selectedIdeas.length
+    ? selectedIdeas.map(t => "• " + t).join("\n")
+    : "";
+  const description = [ideasPart, notes].filter(Boolean).join("\n\n");
+
+  const payload = {
+    category,
+    description,
+    date,
+    time: $("fTime").value,
+  };
+  if (category === "todo") {
+    if (!formColor) { $("fError").textContent = "Выберите цвет"; return; }
+    payload.color = formColor;
+    const rb = parseInt($("fRemindBefore").value, 10) || 0;
+    payload.remind_before = ($("fTime").value ? rb : 0);
+  }
+  if (!editingEvent && category === "shop") payload.checklist = formChecklist;
+
+  const btn = $("fSave");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Сохраняем…";
+  try {
+    if (editingEvent) {
+      await api(`/events/${editingEvent.id}`, { method: "PUT", body: payload });
+      toast("Событие изменено");
+    } else {
+      await api("/events", { method: "POST", body: payload });
+    }
+    tg.HapticFeedback?.notificationOccurred("success");
+    selected = date;
+    const d = parse(date);
+    view = { y: d.getFullYear(), m: d.getMonth() };
+    closeForm();
+    etag = null;
+    await load();
+  } catch (e) {
+    $("fError").textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+};
+
+$("archiveBtn").onclick = async () => {
+  try {
+    const r = await api("/todos/archive");
+    const items = r.items || [];
+    if (!items.length) {
+      $("archiveList").innerHTML = `<div class="cl-empty">Архив пуст</div>`;
+    } else {
+      $("archiveList").innerHTML = items.map(e => `
+        <div class="archive-item">
+          <span class="archive-dot" style="background:${esc(e.color || "#8b5cf6")}"></span>
+          <div class="archive-text">
+            <div>${esc(e.title)}${e.description ? ` — ${esc(e.description)}` : ""}</div>
+            <div class="archive-date">${esc(e.date)}${e.time ? " · " + esc(e.time) : ""}</div>
+          </div>
+        </div>
+      `).join("");
+    }
+    $("archiveOverlay").hidden = false;
+    tg.BackButton?.show();
+  } catch (e) { toast(e.message); }
+};
+$("archiveClose").onclick = () => {
+  $("archiveOverlay").hidden = true;
+  if (!$("overlay").hidden) tg.BackButton?.show(); else tg.BackButton?.hide();
+};
+$("archiveOverlay").addEventListener("click", (e) => {
+  if (e.target === $("archiveOverlay")) $("archiveClose").click();
+});
+
+$("share").onclick = () => {
+  const url = "https://t.me/share/url?url=" + encodeURIComponent(state.invite_link) +
+              "&text=" + encodeURIComponent("Давай вести общий календарь на двоих!");
+  tg.openTelegramLink(url);
+};
+$("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(state.invite_link); toast("Ссылка скопирована"); }
+  catch { toast(state.invite_link); }
+};
+$("unlink").onclick = () => {
+  confirmDialog("Отвязать партнёра? Все общие события будут удалены безвозвратно.", async () => {
+    try {
+      await api("/unlink", { method: "POST" });
+      toast("Партнёр отвязан");
+      for (const k of Object.keys(monthCache)) delete monthCache[k];
+      etag = null;
+      await load();
+    } catch (e) { toast(e.message); }
+  });
+};
+
+// Скрываем FAB при скролле вниз, показываем при скролле вверх
+(() => {
+  const fab = $("add");
+  let lastY = window.scrollY;
+  let ticking = false;
+  const THRESHOLD = 8;
+
+  function onScroll() {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const y = window.scrollY;
+      const diff = y - lastY;
+      if (y < 40) {
+        fab.classList.remove("fab-hidden");
+      } else if (diff > THRESHOLD) {
+        fab.classList.add("fab-hidden");
+      } else if (diff < -THRESHOLD) {
+        fab.classList.remove("fab-hidden");
+      }
+      lastY = y;
+      ticking = false;
+    });
+  }
+
+  window.addEventListener("scroll", onScroll, { passive: true });
+
+  const observer = new MutationObserver(() => {
+    const anyOpen = !$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden;
+    if (anyOpen) fab.classList.remove("fab-hidden");
+  });
+  ["overlay", "ideasOverlay", "archiveOverlay"].forEach(id => {
+    observer.observe($(id), { attributes: true, attributeFilter: ["hidden"] });
+  });
+})();
+
+function startPolling() {
+  const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
+    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl && !dragState;
+  setInterval(() => { if (canPoll()) load(true); }, 15000);
+  document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
+}
+bootstrap();
+</script>
+</body>
+</html>
