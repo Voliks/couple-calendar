@@ -351,7 +351,7 @@ async def handle_calendar_photo(message: Message):
     """
     
     payload = {
-        "model": "glm-4.6v-flash",
+        "model": "glm-4v-flash",
         "messages": [
             {
                 "role": "user",
