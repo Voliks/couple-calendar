@@ -19,6 +19,7 @@
     --declined: 239, 68, 68;
     --expired: 138, 138, 142;
     --todo: 139, 92, 246;
+    --personal: 100, 116, 139;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--text);
@@ -47,15 +48,25 @@
   .grid { gap: 2px; }
   .day { position: relative; aspect-ratio: 1 / 1; max-height: 54px; border-radius: 12px;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-    border: 2px solid transparent; font-size: 16px; }
+    border: 2px solid transparent; font-size: 16px;
+    user-select: none; -webkit-user-select: none; touch-action: manipulation; }
   .day.today .num { color: var(--accent); font-weight: 700; }
   .day.selected { border-color: var(--accent); background: var(--bg2); }
 
-  .day .todo-bar { position: absolute; top: 2px; left: 6px; right: 6px; height: 4px;
-    display: flex; gap: 1px; border-radius: 2px; overflow: hidden; }
-  .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
+  /* Заливка дня личным цветом (если в этот день есть личные записи) */
+  .day.has-personal { background: rgba(var(--personal), .15); }
+  .day.has-personal.selected { background: rgba(var(--personal), .22); border-color: var(--accent); }
+  .day.personal-dot::before {
+    content: ""; position: absolute; left: 4px; right: 4px; bottom: 3px; height: 3px;
+    border-radius: 2px; background: var(--personal-fill, rgb(var(--personal)));
+  }
 
-  /* Точки статуса — квадратики */
+  /* Мультивыделение дней */
+  .day.multi-selected { border-color: rgb(var(--personal)); background: rgba(var(--personal), .25); }
+  .day.multi-selected .num { color: var(--text); font-weight: 700; }
+  body.multi-select-mode { cursor: crosshair; }
+  body.multi-select-mode .day { cursor: crosshair; }
+
   .dots { display: flex; gap: 3px; height: 7px; }
   .dot { width: 7px; height: 7px; border-radius: 2px; }
   .dot.pending  { border: 2px solid rgb(var(--pending)); background: transparent; }
@@ -72,6 +83,7 @@
   .card.declined { --c: var(--declined); }
   .card.expired  { --c: var(--expired); }
   .card.todo     { --c: var(--todo); }
+  .card.personal { --c: var(--personal); }
   .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
   .card h3 { margin: 0; font-size: 17px; word-break: break-word; flex: 1; }
   .card .tag { margin-top: 2px; font-size: 13px; color: var(--hint); }
@@ -109,6 +121,16 @@
   .fab.fab-hidden { transform: translateY(120px); opacity: 0; pointer-events: none; }
   @media (prefers-reduced-motion: reduce) { .fab { transition: none; } }
 
+  /* Плашка мультивыделения */
+  .multi-hint { position: fixed; left: 14px; right: 14px; bottom: calc(90px + env(safe-area-inset-bottom, 0px));
+    background: rgb(var(--personal)); color: #fff; padding: 10px 14px; border-radius: 12px;
+    display: flex; align-items: center; gap: 10px; z-index: 6; font-size: 14px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+  .multi-hint span { flex: 1; }
+  .multi-hint button { padding: 6px 10px; border-radius: 8px; font-weight: 600; color: #fff;
+    background: rgba(255,255,255,.2); }
+  .multi-hint button:active { background: rgba(255,255,255,.35); }
+
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; z-index: 10; }
   .sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
     max-height: 92vh; overflow-y: auto;
@@ -131,6 +153,10 @@
   .btn:disabled { opacity: .5; }
   .error { color: rgb(var(--declined)); font-size: 14px; margin-top: 10px; min-height: 1em; }
   .hint { font-size: 13px; color: var(--hint); margin-top: 12px; }
+
+  .bulk-dates-note { padding: 10px 12px; border-radius: 12px; background: rgba(var(--personal), .12);
+    color: var(--text); font-size: 14px; margin-top: 6px; }
+  .bulk-dates-list { margin-top: 6px; font-size: 13px; color: var(--hint); max-height: 120px; overflow-y: auto; }
 
   .sex-ideas-buttons { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 6px; }
   .sex-idea-trigger { padding: 12px 14px; border-radius: 12px; background: var(--bg2); font-size: 15px; font-weight: 500; text-align: left; border: 2px solid transparent; transition: all .15s; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
@@ -314,11 +340,22 @@
   <button class="fab" id="add" aria-label="Добавить событие">+</button>
 </main>
 
+<div class="multi-hint" id="multiHint" hidden>
+  <span id="multiHintText">Выбрано дней: 0</span>
+  <button type="button" id="multiCancel">Отмена</button>
+  <button type="button" id="multiCreate">Создать</button>
+</div>
+
 <div class="overlay" id="overlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <h2 id="sheetTitle">Новое событие</h2>
 
-    <div class="two">
+    <div id="bulkDatesBox" class="bulk-dates-note" hidden>
+      <div><b>Личная запись на несколько дней</b></div>
+      <div class="bulk-dates-list" id="bulkDatesList"></div>
+    </div>
+
+    <div class="two" id="dateTimeRow">
       <div>
         <label for="fDate">Дата</label>
         <input type="date" id="fDate">
@@ -335,6 +372,7 @@
       <option value="sex">Секс</option>
       <option value="shop">Магазин</option>
       <option value="todo">Дела</option>
+      <option value="personal">Личное (только для меня)</option>
     </select>
 
     <div id="todoSection" hidden>
@@ -355,6 +393,12 @@
         <option value="2880">2 дня</option>
       </select>
       <div class="hint" id="remindHint">Напоминание работает, только если указано время события.</div>
+    </div>
+
+    <div id="personalSection" hidden>
+      <label>Цвет</label>
+      <div class="todo-colors" id="personalColors"></div>
+      <div class="hint">Личные записи видны только вам.</div>
     </div>
 
     <div id="sexIdeasSection" hidden>
@@ -443,16 +487,18 @@ const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const CATEGORIES = {
-  rest: { label: "Отдых",   icon: "🌿" },
-  sex:  { label: "Секс",    icon: "🔥" },
-  shop: { label: "Магазин", icon: "🛒" },
-  todo: { label: "Дела",    icon: "📌" },
+  rest:     { label: "Отдых",   icon: "🌿" },
+  sex:      { label: "Секс",    icon: "🔥" },
+  shop:     { label: "Магазин", icon: "🛒" },
+  todo:     { label: "Дела",    icon: "📌" },
+  personal: { label: "Личное",  icon: "🔒" },
 };
 const STATUS_TEXT = {
   pending: "⏳ Ждёт ответа", accepted: "✓ Принято", declined: "✕ Отклонено", expired: "Просрочено",
 };
 const MONTHS_FORMAT = new Intl.DateTimeFormat("ru", { month: "long", year: "numeric" });
 const DAY_FORMAT = new Intl.DateTimeFormat("ru", { day: "numeric", month: "long" });
+const DAY_SHORT = new Intl.DateTimeFormat("ru", { day: "numeric", month: "short" });
 
 const pad = (n) => String(n).padStart(2, "0");
 const fmt = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
@@ -480,6 +526,15 @@ let editingEvent = null;
 let loaded = false;
 const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
 const monthCache = {};
+
+// Мультивыделение дней
+let multiSelect = {
+  active: false,
+  days: new Set(),
+  startDate: null,
+  drag: false,
+  pointerId: null,
+};
 
 const API_BASE = (document.querySelector('meta[name="api-base"]')?.content || "").replace(/\/$/, "");
 
@@ -633,25 +688,59 @@ function renderCalendar() {
     const date = fmt(view.y, view.m, d);
     const list = byDay[date] || [];
 
+    const personals = list.filter(x => x.category === "personal");
+    const hasPersonal = personals.length > 0;
+    let personalStyle = "";
+    if (hasPersonal) {
+      // Берём цвет первой личной записи (если несколько — первая)
+      const col = personals[0].color || "#64748b";
+      personalStyle = `--personal-fill:${esc(col)};`;
+    }
+
     const todos = list.filter(x => x.category === "todo").slice().sort((a, b) => a.id - b.id);
     const todoBar = todos.length
       ? `<span class="todo-bar" aria-hidden="true">${todos.map(t =>
           `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
       : "";
 
-    const nonTodos = list.filter(x => x.category !== "todo");
+    const nonTodos = list.filter(x => x.category !== "todo" && x.category !== "personal");
     const st = new Set(nonTodos.map(statusKey));
     const dots = ["pending", "accepted", "declined", "expired"]
       .filter((s) => st.has(s)).map((s) => `<i class="dot ${s}"></i>`).join("");
 
-    const cls = ["day", date === today && "today", date === selected && "selected"].filter(Boolean).join(" ");
+    const ms = multiSelect.days.has(date);
+    const cls = [
+      "day",
+      date === today && "today",
+      date === selected && "selected",
+      hasPersonal && "has-personal",
+      hasPersonal && "personal-dot",
+      ms && "multi-selected",
+    ].filter(Boolean).join(" ");
+
     const label = DAY_FORMAT.format(new Date(view.y, view.m, d))
       + (list.length ? `, событий: ${list.length}` : "");
-    html += `<button class="${cls}" data-date="${date}" aria-pressed="${date === selected}" aria-label="${esc(label)}">
+
+    html += `<button class="${cls}" data-date="${date}" style="--c:var(--personal);${personalStyle}" aria-pressed="${date === selected}" aria-label="${esc(label)}">
                ${todoBar}
                <span class="num">${d}</span><span class="dots" aria-hidden="true">${dots}</span></button>`;
   }
   $("grid").innerHTML = html;
+
+  // Обновляем плашку
+  updateMultiHint();
+}
+
+function updateMultiHint() {
+  const box = $("multiHint");
+  if (multiSelect.days.size === 0) {
+    box.hidden = true;
+    document.body.classList.remove("multi-select-mode");
+    return;
+  }
+  box.hidden = false;
+  document.body.classList.add("multi-select-mode");
+  $("multiHintText").textContent = `Выбрано дней: ${multiSelect.days.size}`;
 }
 
 function checklistHtml(e) {
@@ -670,7 +759,8 @@ function checklistHtml(e) {
 }
 
 function answerHtml(e, expired) {
-  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
+  if (e.visibility === "private") return "";
   if (e.is_creator) return "";
   if (e.status === "pending") {
     return expired ? "" : `<div class="answer">
@@ -684,7 +774,8 @@ function answerHtml(e, expired) {
 }
 
 function reactionHtml(e) {
-  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
+  if (e.visibility === "private") return "";
   if (e.status !== "accepted" && e.status !== "declined") return "";
   const mine = e.reaction_mine || "";
   const partner = e.reaction_partner || "";
@@ -702,6 +793,7 @@ function reactionHtml(e) {
 
 function ideasHtml(e) {
   if (e.category !== "sex") return "";
+  if (e.visibility === "private") return "";
   if (!e.ideas || !e.ideas.length) return "";
   const rows = e.ideas.map(it => {
     const eff = it.effective || "";
@@ -721,7 +813,8 @@ function ideasHtml(e) {
 }
 
 function declineCommentHtml(e) {
-  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
+  if (e.visibility === "private") return "";
   if (e.status !== "declined") return "";
 
   const cCreator = e.decline_comment_creator || "";
@@ -744,21 +837,29 @@ function cardHtml(e) {
   const sk = statusKey(e);
   const isShop = e.category === "shop";
   const isTodo = e.category === "todo";
+  const isPersonal = e.category === "personal";
+  const isPrivate = e.visibility === "private";
   const remindText = (isTodo && e.remind_before && e.time)
     ? ` · 🔔 за ${humanizeMinutes(e.remind_before)}`
     : "";
   const tag = `${cat.icon} ${cat.label}${e.time ? " · " + esc(e.time) : ""}${remindText}`;
 
-  const cardCls = isTodo ? "todo" : (isShop ? "accepted" : sk);
-  const cardStyle = isTodo && e.color ? ` style="--c: ${hexToRgb(e.color)};"` : "";
+  const cardCls = isPersonal ? "personal" : (isTodo ? "todo" : (isShop ? "accepted" : sk));
+  let cardStyle = "";
+  if (isPersonal && e.color) cardStyle = ` style="--c: ${hexToRgb(e.color)};"`;
+  else if (isTodo && e.color) cardStyle = ` style="--c: ${hexToRgb(e.color)};"`;
 
-  const actions = (e.is_creator || isTodo)
+  const actions = (e.is_creator || isTodo || isPersonal)
     ? `<div class="card-actions">
          <button class="icon-btn edit-btn" aria-label="Редактировать" title="Редактировать">✏️</button>
          <button class="icon-btn delete-btn" aria-label="Удалить" title="Удалить">🗑️</button>
        </div>` : "";
 
-  const statusLabel = (isShop || isTodo) ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
+  const statusLabel = (isShop || isTodo || isPersonal || isPrivate) ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
+
+  const authorLine = isPrivate
+    ? "🔒 Только для вас"
+    : (e.is_creator ? "От вас" : "От партнёра");
 
   return `<article class="card ${cardCls}" data-id="${e.id}"${cardStyle}>
     <div class="card-header">
@@ -770,7 +871,7 @@ function cardHtml(e) {
     ${ideasHtml(e)}
     ${reactionHtml(e)}
     ${declineCommentHtml(e)}
-    <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span>${statusLabel}</div>
+    <div class="meta"><span>${authorLine}</span>${statusLabel}</div>
     ${answerHtml(e, sk === "expired")}
   </article>`;
 }
@@ -821,15 +922,128 @@ function renderList() {
   }
 }
 
-$("grid").addEventListener("click", (ev) => {
-  const btn = ev.target.closest(".day");
-  if (!btn) return;
-  selected = btn.dataset.date;
-  tg.HapticFeedback?.selectionChanged();
+// ---- Мультивыделение дней: pointerdown + pointermove по сетке ----
+function dateFromEl(el) {
+  if (!el) return null;
+  return el.dataset?.date || null;
+}
+
+function clearMultiSelect() {
+  multiSelect.active = false;
+  multiSelect.days.clear();
+  multiSelect.startDate = null;
+  multiSelect.drag = false;
+  multiSelect.pointerId = null;
+  updateMultiHint();
   renderCalendar();
-  renderList();
-  $("grid").querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+}
+
+function setMultiDay(date, on) {
+  if (on) multiSelect.days.add(date);
+  else multiSelect.days.delete(date);
+}
+
+$("grid").addEventListener("pointerdown", (ev) => {
+  const dayEl = ev.target.closest(".day");
+  if (!dayEl) return;
+
+  // Если это не мультивыделение — обычный клик (выбор дня).
+  // Мультивыделение включается, если пользователь зажал и начал вести.
+  const date = dateFromEl(dayEl);
+  if (!date) return;
+
+  multiSelect.active = true;
+  multiSelect.startDate = date;
+  multiSelect.days.clear();
+  multiSelect.days.add(date);
+  multiSelect.drag = false;
+  multiSelect.pointerId = ev.pointerId;
+
+  // НЕ preventDefault, иначе сломается обычный клик
 });
+
+$("grid").addEventListener("pointermove", (ev) => {
+  if (!multiSelect.active || ev.pointerId !== multiSelect.pointerId) return;
+  if (!ev.buttons && ev.pointerType === "mouse") return; // кнопка отпущена
+  const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest(".day");
+  const date = dateFromEl(el);
+  if (!date) return;
+
+  if (!multiSelect.drag && date !== multiSelect.startDate) {
+    multiSelect.drag = true;
+    // Показываем выделение, пока пользователь ведёт
+    renderCalendar();
+  }
+  if (multiSelect.drag) {
+    ev.preventDefault();
+    // "Кисть": выделяем диапазон между началом и текущей датой
+    const a = parse(multiSelect.startDate);
+    const b = parse(date);
+    const [lo, hi] = a <= b ? [a, b] : [b, a];
+    multiSelect.days.clear();
+    const cur = new Date(lo);
+    while (cur <= hi) {
+      multiSelect.days.add(fmt(cur.getFullYear(), cur.getMonth(), cur.getDate()));
+      cur.setDate(cur.getDate() + 1);
+    }
+    updateMultiHint();
+    renderCalendar();
+  }
+});
+
+$("grid").addEventListener("pointerup", (ev) => {
+  if (!multiSelect.active || ev.pointerId !== multiSelect.pointerId) return;
+  const wasDrag = multiSelect.drag;
+  multiSelect.active = false;
+  multiSelect.pointerId = null;
+
+  if (wasDrag) {
+    multiSelect.drag = false;
+    // Оставляем выделение, открываем форму создания личных записей
+    if (multiSelect.days.size > 0) {
+      openPersonalBulkForm();
+    }
+    return;
+  }
+
+  // Обычный клик по дню
+  const date = multiSelect.startDate;
+  multiSelect.days.clear();
+  multiSelect.startDate = null;
+  updateMultiHint();
+  if (date) {
+    selected = date;
+    tg.HapticFeedback?.selectionChanged();
+    renderCalendar();
+    renderList();
+  }
+});
+
+$("grid").addEventListener("pointercancel", () => {
+  if (multiSelect.drag) {
+    multiSelect.days.clear();
+  }
+  multiSelect.active = false;
+  multiSelect.drag = false;
+  multiSelect.pointerId = null;
+  updateMultiHint();
+  renderCalendar();
+});
+
+$("multiCancel").onclick = () => {
+  clearMultiSelect();
+};
+$("multiCreate").onclick = () => {
+  if (multiSelect.days.size > 0) openPersonalBulkForm();
+};
+
+function openPersonalBulkForm() {
+  const dates = [...multiSelect.days].sort();
+  if (!dates.length) return;
+
+  // Открываем форму, но с "bulk-датами"
+  openForm(null, { bulkDates: dates, forceCategory: "personal" });
+}
 
 function shiftMonth(delta) {
   const d = new Date(view.y, view.m + delta, 1);
@@ -968,6 +1182,7 @@ function onDragStart(ev) {
   if (!item || !card) return;
 
   ev.preventDefault();
+  ev.stopPropagation();
   const rect = item.getBoundingClientRect();
   dragState = {
     eventId: card.dataset.id,
@@ -1073,8 +1288,6 @@ $("list").addEventListener("click", async (ev) => {
   const event = findEvent(eventId);
   if (!event) return;
 
-  // Клик по любому месту ряда (кроме ручки, кнопки удаления и самого чекбокса)
-  // — переключает состояние пункта
   const row = ev.target.closest("[data-cl-row]");
   if (row) {
     const clickedDrag = ev.target.closest("[data-cl-drag]");
@@ -1109,14 +1322,16 @@ $("list").addEventListener("click", async (ev) => {
   }
 
   if (ev.target.closest("[data-reaction-open]") || ev.target.closest("[data-reaction-toggle]")) {
-    if (event.category === "shop" || event.category === "todo") return;
+    if (event.category === "shop" || event.category === "todo" || event.category === "personal") return;
+    if (event.visibility === "private") return;
     if (event.status !== "accepted") return;
     openReactionPicker(event);
     return;
   }
 
   if (ev.target.closest("[data-comment-open]")) {
-    if (event.category === "shop" || event.category === "todo") return;
+    if (event.category === "shop" || event.category === "todo" || event.category === "personal") return;
+    if (event.visibility === "private") return;
     if (event.status !== "declined") return;
     openCommentDialog(event.my_decline_comment || "", async (comment) => {
       try {
@@ -1190,6 +1405,8 @@ let formChecklist = [];
 let selectedIdeas = [];
 let currentCategoryTitle = "";
 let formColor = "";
+let formPersonalColor = "";
+let formBulkDates = null;
 const todoColorsFallback = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
 
 function availableTodoColors() {
@@ -1213,13 +1430,25 @@ function updateFormSections() {
   const isShop = cat === "shop";
   const isSex = cat === "sex";
   const isTodo = cat === "todo";
+  const isPersonal = cat === "personal";
+  const isBulk = !!formBulkDates && isPersonal;
 
   $("checklistSection").hidden = !(isShop && !editingEvent);
   $("sexIdeasSection").hidden = !isSex;
   $("todoSection").hidden = !isTodo;
+  $("personalSection").hidden = !isPersonal;
+  $("bulkDatesBox").hidden = !isBulk;
+
+  // При мультивыделении скрываем поля даты/времени
+  $("dateTimeRow").hidden = isBulk;
+  if (isBulk) {
+    $("bulkDatesList").textContent = formBulkDates
+      .map(d => DAY_SHORT.format(parse(d))).join(", ");
+  }
 
   if (isShop && !editingEvent) renderFormChecklist();
   if (isTodo) renderTodoSection();
+  if (isPersonal) renderPersonalColors();
   updateRemindAvailability();
 
   if (!isSex) {
@@ -1239,11 +1468,30 @@ function renderTodoSection() {
   ).join("");
 }
 
+function renderPersonalColors() {
+  const box = $("personalColors");
+  if (!box) return;
+  const colors = availableTodoColors();
+  const active = formPersonalColor || colors[5];
+  box.innerHTML = colors.map(c =>
+    `<button type="button" class="todo-color${c === active ? " selected" : ""}"
+             data-personal-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
+  ).join("");
+}
+
 $("todoColors").addEventListener("click", (e) => {
   const b = e.target.closest("[data-color]");
   if (!b) return;
   formColor = b.dataset.color;
   renderTodoSection();
+  tg.HapticFeedback?.selectionChanged();
+});
+
+$("personalColors").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-personal-color]");
+  if (!b) return;
+  formPersonalColor = b.dataset.personalColor;
+  renderPersonalColors();
   tg.HapticFeedback?.selectionChanged();
 });
 
@@ -1428,12 +1676,24 @@ document.addEventListener("keydown", (e) => {
   if (!$("ideasOverlay").hidden) closeIdeasModal();
 });
 
-function openForm(event = null) {
+function openForm(event = null, opts = {}) {
   editingEvent = event;
-  $("sheetTitle").textContent = event ? "Редактировать событие" : "Новое событие";
-  $("fDate").value = event ? event.date : selected;
-  $("fTime").value = event ? event.time : "";
-  $("fCategory").value = event ? event.category : "rest";
+  formBulkDates = opts.bulkDates || null;
+
+  const initialCat = opts.forceCategory || (event ? event.category : "rest");
+  $("sheetTitle").textContent = formBulkDates
+    ? "Новая личная запись"
+    : (event ? "Редактировать событие" : "Новое событие");
+
+  if (formBulkDates) {
+    $("fDate").value = formBulkDates[0];
+    $("fTime").value = "";
+  } else {
+    $("fDate").value = event ? event.date : selected;
+    $("fTime").value = event ? event.time : "";
+  }
+
+  $("fCategory").value = initialCat;
   $("fDesc").value = event ? event.description || "" : "";
 
   selectedIdeas = [];
@@ -1448,7 +1708,13 @@ function openForm(event = null) {
     $("fRemindBefore").value = "0";
   }
 
-  $("fHint").hidden = !event || (event && (event.category === "shop" || event.category === "todo"));
+  if (event && event.category === "personal") {
+    formPersonalColor = event.color || availableTodoColors()[5];
+  } else {
+    formPersonalColor = availableTodoColors()[5];
+  }
+
+  $("fHint").hidden = true;
   $("fError").textContent = "";
   formChecklist = [];
   updateFormSections();
@@ -1459,6 +1725,8 @@ function openForm(event = null) {
 function closeForm() {
   $("overlay").hidden = true;
   tg.BackButton?.hide();
+  // Очищаем мультивыделение после закрытия формы
+  if (multiSelect.days.size) clearMultiSelect();
 }
 
 $("add").onclick = () => openForm();
@@ -1469,6 +1737,10 @@ try { tg.BackButton?.onClick(() => { if (!$("overlay").hidden) closeForm(); }); 
 
 $("fCategory").addEventListener("change", () => {
   if ($("fCategory").value !== "shop") formChecklist = [];
+  // Если сменили с personal на что-то другое в bulk-режиме — сбрасываем bulk
+  if (formBulkDates && $("fCategory").value !== "personal") {
+    formBulkDates = null;
+  }
   updateFormSections();
 });
 $("fTime").addEventListener("change", updateRemindAvailability);
@@ -1505,6 +1777,36 @@ $("fChecklist").addEventListener("click", (ev) => {
 
 $("fSave").onclick = async () => {
   const category = $("fCategory").value;
+
+  // Bulk-режим: личные записи на несколько дней
+  if (formBulkDates && category === "personal") {
+    if (!formPersonalColor) { $("fError").textContent = "Выберите цвет"; return; }
+    const payload = {
+      dates: formBulkDates,
+      description: $("fDesc").value.trim(),
+      color: formPersonalColor,
+    };
+    const btn = $("fSave");
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Сохраняем…";
+    try {
+      await api("/events/bulk", { method: "POST", body: payload });
+      tg.HapticFeedback?.notificationOccurred("success");
+      toast(`Создано ${formBulkDates.length} записей`);
+      formBulkDates = null;
+      closeForm();
+      etag = null;
+      await load();
+    } catch (e) {
+      $("fError").textContent = e.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+    return;
+  }
+
   const date = $("fDate").value;
   if (!date) { $("fError").textContent = "Выберите дату"; return; }
 
@@ -1525,6 +1827,10 @@ $("fSave").onclick = async () => {
     payload.color = formColor;
     const rb = parseInt($("fRemindBefore").value, 10) || 0;
     payload.remind_before = ($("fTime").value ? rb : 0);
+  }
+  if (category === "personal") {
+    if (!formPersonalColor) { $("fError").textContent = "Выберите цвет"; return; }
+    payload.color = formPersonalColor;
   }
   if (!editingEvent && category === "shop") payload.checklist = formChecklist;
 
@@ -1593,7 +1899,7 @@ $("copy").onclick = async () => {
   catch { toast(state.invite_link); }
 };
 $("unlink").onclick = () => {
-  confirmDialog("Отвязать партнёра? Все общие события будут удалены безвозвратно.", async () => {
+  confirmDialog("Отвязать партнёра? Все общие события будут удалены безвозвратно. Личные записи останутся у вас.", async () => {
     try {
       await api("/unlink", { method: "POST" });
       toast("Партнёр отвязан");
@@ -1604,7 +1910,6 @@ $("unlink").onclick = () => {
   });
 };
 
-// Скрываем FAB при скролле вниз, показываем при скролле вверх
 (() => {
   const fab = $("add");
   let lastY = window.scrollY;
@@ -1642,7 +1947,8 @@ $("unlink").onclick = () => {
 
 function startPolling() {
   const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
-    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl && !dragState;
+    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl && !dragState
+    && multiSelect.days.size === 0;
   setInterval(() => { if (canPoll()) load(true); }, 15000);
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
