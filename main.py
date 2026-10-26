@@ -224,15 +224,16 @@ async def handle_voice_message(message: Message):
         Сегодня {today}. Пользователь сказал: "{text}"
         Твоя задача — извлечь событие для календаря. Выбери категорию из: rest, sex, shop, todo, personal.
         
-        ВАЖНО: Если пользователь упоминает день недели (например, "в субботу"), вычисли БЛИЖАЙШИЙ БУДУЩИЙ день недели (не прошедший!). 
-        Если пользователь говорит "ближайший список" или "в текущий список", оставь в поле "date" строку "nearest".
-        Если пользователь говорит "на сегодня", используй {today}. Если дата не указана, используй {today}.
-        
+        Если пользователь упоминает "ближайший список" или "текущий список", оставь в поле "date" строку "nearest".
         Если категория shop, выдели продукты в массив "items".
         
-        Верни СТРОГО JSON без лишнего текста. Примеры:
-        {{"category": "shop", "date": "nearest", "title": "Список покупок", "items": ["хлеб"]}}
-        {{"category": "shop", "date": "2026-11-15", "title": "Список покупок", "items": ["молоко"]}}
+        Верни СТРОГО JSON без лишнего текста:
+        {{
+          "category": "shop", 
+          "date": "{today}", 
+          "title": "Список покупок", 
+          "items": ["хлеб"]
+        }}
         """
         
         payload = {
@@ -256,6 +257,38 @@ async def handle_voice_message(message: Message):
                 data = await resp.json()
                 answer = data["choices"][0]["message"]["content"]
                 ev = json.loads(answer)
+                
+                # --- ЖЕЛЕЗОБЕТОННЫЙ РАСЧЕТ ДНЕЙ НЕДЕЛИ ---
+                import re
+                from datetime import timedelta
+                days_map = {
+                    "понедельник": 0, "понедельникам": 0, "понедельника": 0,
+                    "вторник": 1, "вторникам": 1, "вторника": 1,
+                    "среда": 2, "среду": 2, "средам": 2, "среды": 2,
+                    "четверг": 3, "четвергам": 3, "четверга": 3,
+                    "пятница": 4, "пятницу": 4, "пятницам": 4, "пятницы": 4,
+                    "суббота": 5, "субботу": 5, "субботам": 5, "субботы": 5,
+                    "воскресенье": 6, "воскресеньям": 6, "воскресенья": 6
+                }
+                
+                # Ищем день недели в том, что сказал пользователь
+                lower_text = text.lower()
+                for day_name, day_num in days_map.items():
+                    if re.search(r'\b' + day_name + r'\b', lower_text):
+                        current_dt = datetime.now(timezone.utc)
+                        current_weekday = current_dt.weekday() # 0 = Пн, 6 = Вс
+                        
+                        # Считаем, сколько дней осталось до нужного дня
+                        days_ahead = day_num - current_weekday
+                        # Если день уже прошел на этой неделе, берем следующий
+                        if days_ahead <= 0: 
+                            days_ahead += 7
+                            
+                        target_date = (current_dt + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+                        ev["date"] = target_date  # Принудительно ставим правильную дату!
+                        break
+                # ------------------------------------------
+                
                 
         # Сохраняем в базу
         user = await db.get_or_create_user(message.from_user.id)
