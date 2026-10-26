@@ -1097,7 +1097,8 @@ async def purge_old_todos(date_before: str) -> int:
              "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
             ("DELETE FROM idea_responses WHERE event_id IN "
              "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
-            ("DELETE FROM events WHERE category = 'todo' AND date < ?", (date_before,)),
+            ("DELETE FROM events WHERE category = 'todo' "
+             "AND COALESCE(NULLIF(date_end, ''), date) < ?", (date_before,)),
         ]
     )
     return rs[4].affected
@@ -1108,7 +1109,8 @@ async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
     cutoff = (_d.today() - _td(days=31)).isoformat()
     rs = await _exec(
         f"SELECT {EVENT_COLS} FROM events "
-        "WHERE category = 'todo' AND date < ? AND (created_by = ? OR target_user = ?) "
+        "WHERE category = 'todo' AND COALESCE(NULLIF(date_end, ''), date) < ? "
+        "AND (created_by = ? OR target_user = ?) "
         "ORDER BY date DESC, id DESC LIMIT ?",
         (cutoff, user_id, user_id, limit),
     )
