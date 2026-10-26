@@ -795,3 +795,834 @@ function reconcile(container, items) {
         if (newInput && hadFocus) {
           newInput.focus({ preventScroll: true });
           try { newInput.setSelectionRange(sel[0], sel[1]); } catch (e) {}
+        }
+      }
+      el = fresh;
+    }
+    existing.delete(it.id);
+    const expected = prev ? prev.nextElementSibling : container.firstElementChild;
+    if (el !== expected) container.insertBefore(el, expected);
+    prev = el;
+  }
+  existing.forEach((el) => el.remove());
+  return true;
+}
+
+function renderList() {
+  $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
+  const items = state.events.filter((e) => e.date === selected)
+    .map((e) => ({ id: String(e.id), html: cardHtml(e) }));
+  if (!reconcile($("list"), items)) {
+    $("list").innerHTML = `<div class="empty">На этот день ничего нет. Нажмите «+», чтобы добавить событие.</div>`;
+  }
+}
+
+$("grid").addEventListener("click", (ev) => {
+  const btn = ev.target.closest(".day");
+  if (!btn) return;
+  selected = btn.dataset.date;
+  tg.HapticFeedback?.selectionChanged();
+  renderCalendar();
+  renderList();
+  $("grid").querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+});
+
+function shiftMonth(delta) {
+  const d = new Date(view.y, view.m + delta, 1);
+  view = { y: d.getFullYear(), m: d.getMonth() };
+  const t = new Date();
+  const sameAsToday = view.y === t.getFullYear() && view.m === t.getMonth();
+  selected = sameAsToday ? todayStr() : fmt(view.y, view.m, 1);
+  state.events = monthCache[monthKey()] || [];
+  renderCalendar();
+  renderList();
+  load();
+}
+$("prev").onclick = () => shiftMonth(-1);
+$("next").onclick = () => shiftMonth(1);
+
+function goToday() {
+  const t = new Date();
+  view = { y: t.getFullYear(), m: t.getMonth() };
+  selected = todayStr();
+  state.events = monthCache[monthKey()] || [];
+  renderCalendar();
+  renderList();
+  load();
+  tg.HapticFeedback?.selectionChanged();
+}
+$("todayBtn").onclick = goToday;
+
+(() => {
+  const title = $("title");
+  let timer = null;
+  const start = () => { timer = setTimeout(() => { timer = null; goToday(); }, 600); };
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  title.addEventListener("pointerdown", start);
+  title.addEventListener("pointerup", cancel);
+  title.addEventListener("pointercancel", cancel);
+  title.addEventListener("pointerleave", cancel);
+  title.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goToday(); } });
+})();
+
+function replaceEvent(updated) {
+  const i = state.events.findIndex((e) => e.id === updated.id);
+  if (i >= 0) state.events[i] = updated; else state.events.push(updated);
+  monthCache[monthKey()] = state.events;
+  etag = null;
+  renderCalendar();
+  renderList();
+}
+
+let pendingOps = 0;
+let opChain = Promise.resolve();
+function queueOp(fn) {
+  pendingOps++;
+  const run = opChain.then(fn);
+  opChain = run.catch(() => {}).then(() => { pendingOps--; });
+  return run;
+}
+const lastOp = () => pendingOps <= 1;
+
+function findEvent(id) { return state.events.find((e) => String(e.id) === String(id)); }
+
+function toggleItem(eventId, itemId, checked) {
+  const ev = findEvent(eventId);
+  const it = ev?.checklist.find((x) => String(x.id) === String(itemId));
+  if (!it) return;
+  it.checked = checked;
+  renderList();
+  queueOp(async () => {
+    try {
+      const updated = await api(`/events/${eventId}/items/${itemId}`, { method: "PUT", body: { checked } });
+      tg.HapticFeedback?.selectionChanged();
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) { toast(e.message); await load(); }
+  });
+}
+
+function removeItem(eventId, itemId) {
+  const ev = findEvent(eventId);
+  if (!ev) return;
+  ev.checklist = ev.checklist.filter((x) => String(x.id) !== String(itemId));
+  renderList();
+  queueOp(async () => {
+    try {
+      const updated = await api(`/events/${eventId}/items/${itemId}`, { method: "DELETE" });
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) { toast(e.message); await load(); }
+  });
+}
+
+function addItem(eventId, input) {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  queueOp(async () => {
+    try {
+      const updated = await api(`/events/${eventId}/items`, { method: "POST", body: { text } });
+      tg.HapticFeedback?.selectionChanged();
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) {
+      toast(e.message);
+      const again = [...document.querySelectorAll(".cl-input")].find((i) => i.closest(".card")?.dataset.id === String(eventId));
+      if (again && !again.value) again.value = text;
+    }
+  });
+}
+
+function moveItem(eventId, itemId, newPosition) {
+  const ev = findEvent(eventId);
+  if (!ev) return;
+  const idx = ev.checklist.findIndex(x => String(x.id) === String(itemId));
+  if (idx < 0) return;
+  newPosition = Math.max(0, Math.min(newPosition, ev.checklist.length - 1));
+  if (idx === newPosition) return;
+  const [moved] = ev.checklist.splice(idx, 1);
+  ev.checklist.splice(newPosition, 0, moved);
+  renderList();
+  tg.HapticFeedback?.selectionChanged();
+  queueOp(async () => {
+    try {
+      const updated = await api(
+        `/events/${eventId}/items/${itemId}/move`,
+        { method: "POST", body: { position: newPosition } }
+      );
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) { toast(e.message); await load(); }
+  });
+}
+
+let dragState = null;
+
+function onDragStart(ev) {
+  const handle = ev.target.closest("[data-cl-drag]");
+  if (!handle) return;
+  const item = handle.closest(".checklist-item");
+  const card = handle.closest(".card");
+  if (!item || !card) return;
+
+  ev.preventDefault();
+  const rect = item.getBoundingClientRect();
+  dragState = {
+    eventId: card.dataset.id,
+    itemId: item.dataset.item,
+    el: item,
+    pointerOffsetY: ev.clientY - rect.top,
+    pointerId: ev.pointerId,
+  };
+  item.classList.add("dragging");
+  try { handle.setPointerCapture(ev.pointerId); } catch (e) {}
+}
+
+function onDragMove(ev) {
+  if (!dragState) return;
+  ev.preventDefault();
+  const list = dragState.el.parentElement;
+  const items = [...list.querySelectorAll(".checklist-item")].filter(x => x !== dragState.el);
+  let closest = null;
+  let closestDist = Infinity;
+  for (const el of items) {
+    const rect = el.getBoundingClientRect();
+    const mid = rect.top + rect.height / 2;
+    const dist = Math.abs(ev.clientY - mid);
+    if (dist < closestDist) { closestDist = dist; closest = el; }
+  }
+  if (!closest) return;
+  const rect = closest.getBoundingClientRect();
+  const after = ev.clientY > rect.top + rect.height / 2;
+  if (after) {
+    list.insertBefore(dragState.el, closest.nextSibling);
+  } else {
+    list.insertBefore(dragState.el, closest);
+  }
+}
+
+function onDragEnd() {
+  if (!dragState) return;
+  const { eventId, itemId, el } = dragState;
+  el.classList.remove("dragging");
+  const list = el.parentElement;
+  const items = [...list.querySelectorAll(".checklist-item")];
+  const newPos = items.indexOf(el);
+  const idsNow = items.map(x => String(x.dataset.item));
+  dragState = null;
+
+  const ev = findEvent(eventId);
+  if (!ev) { renderList(); return; }
+  const oldOrder = ev.checklist.map(x => String(x.id));
+  if (idsNow.join(",") === oldOrder.join(",")) {
+    return;
+  }
+  moveItem(eventId, itemId, newPos);
+}
+
+$("list").addEventListener("pointerdown", onDragStart);
+$("list").addEventListener("pointermove", onDragMove);
+$("list").addEventListener("pointerup", onDragEnd);
+$("list").addEventListener("pointercancel", () => {
+  if (!dragState) return;
+  dragState.el.classList.remove("dragging");
+  dragState = null;
+  renderList();
+});
+
+let reactionPickerEl = null;
+function openReactionPicker(event) {
+  closeReactionPicker();
+  const list = (state.allowed_reactions && state.allowed_reactions.length)
+    ? state.allowed_reactions : ["❤️","🔥","😍","😂","👍","🎉","😮","🥰"];
+  const el = document.createElement("div");
+  el.className = "reaction-picker";
+  el.innerHTML = list.map(r => `<button type="button" data-r="${r}">${r}</button>`).join("")
+                + `<button type="button" data-r="" title="Убрать">✖️</button>`;
+  document.body.appendChild(el);
+  reactionPickerEl = el;
+  el.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const b = e.target.closest("[data-r]");
+    if (!b) return;
+    const emoji = b.dataset.r;
+    closeReactionPicker();
+    try {
+      const updated = await api(`/events/${event.id}/reaction`, { method: "POST", body: { emoji } });
+      replaceEvent(updated);
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (err) { toast(err.message); }
+  });
+  setTimeout(() => {
+    document.addEventListener("pointerdown", outsideCloseReaction, { once: true });
+  }, 0);
+}
+function outsideCloseReaction(e) {
+  if (reactionPickerEl && !reactionPickerEl.contains(e.target)) closeReactionPicker();
+}
+function closeReactionPicker() {
+  if (reactionPickerEl) { reactionPickerEl.remove(); reactionPickerEl = null; }
+}
+
+$("list").addEventListener("click", async (ev) => {
+  const card = ev.target.closest(".card");
+  if (!card) return;
+  const eventId = card.dataset.id;
+  const event = findEvent(eventId);
+  if (!event) return;
+
+  const ideaYes = ev.target.closest("[data-idea-yes]");
+  const ideaNo  = ev.target.closest("[data-idea-no]");
+  if (ideaYes || ideaNo) {
+    const btn = ideaYes || ideaNo;
+    const idx = Number(btn.dataset.ideaYes ?? btn.dataset.ideaNo);
+    const status = ideaYes ? "accepted" : "declined";
+    const line = ev.target.closest(".idea-line");
+    if (line) line.querySelectorAll("button").forEach(b => (b.disabled = true));
+    try {
+      const updated = await api(`/events/${eventId}/idea`, { method: "POST", body: { idx, status } });
+      replaceEvent(updated);
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (err) {
+      toast(err.message);
+      await load(true);
+    }
+    return;
+  }
+
+  if (ev.target.closest("[data-reaction-open]") || ev.target.closest("[data-reaction-toggle]")) {
+    if (event.category === "shop" || event.category === "todo") return;
+    if (event.status !== "accepted") return;
+    openReactionPicker(event);
+    return;
+  }
+
+  if (ev.target.closest("[data-comment-open]")) {
+    if (event.category === "shop" || event.category === "todo") return;
+    if (event.status !== "declined") return;
+    openCommentDialog(event.my_decline_comment || "", async (comment) => {
+      try {
+        const updated = await api(`/events/${eventId}/comment`, { method: "POST", body: { comment } });
+        replaceEvent(updated);
+        tg.HapticFeedback?.notificationOccurred("success");
+      } catch (err) { toast(err.message); }
+    });
+    return;
+  }
+
+  const toggle = ev.target.closest("[data-cl-toggle]");
+  if (toggle) { toggleItem(eventId, toggle.closest("[data-item]").dataset.item, toggle.checked); return; }
+
+  const remove = ev.target.closest("[data-cl-remove]");
+  if (remove) { removeItem(eventId, remove.closest("[data-item]").dataset.item); return; }
+
+  if (ev.target.closest("[data-cl-add]")) { addItem(eventId, card.querySelector(".cl-input")); return; }
+
+  const statusBtn = ev.target.closest("[data-status]");
+  if (statusBtn) {
+    const newStatus = statusBtn.dataset.status;
+    if (newStatus === "declined") {
+      openCommentDialog(event.my_decline_comment || "", async (comment) => {
+        try {
+          const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: "declined", comment } });
+          replaceEvent(updated);
+          tg.HapticFeedback?.notificationOccurred("success");
+        } catch (e) { toast(e.message); await load(); }
+      });
+      return;
+    }
+    statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    try {
+      const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: newStatus } });
+      replaceEvent(updated);
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (e) { toast(e.message); await load(); }
+    return;
+  }
+
+  if (ev.target.closest(".edit-btn")) { openForm(event); return; }
+
+  if (ev.target.closest(".delete-btn")) {
+    confirmDialog("Удалить это событие?", async () => {
+      try {
+        await api(`/events/${eventId}`, { method: "DELETE" });
+        tg.HapticFeedback?.notificationOccurred("success");
+        toast("Удалено");
+        etag = null;
+        await load();
+      } catch (e) { toast(e.message); }
+    });
+  }
+});
+
+$("list").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && ev.target.classList?.contains("cl-input")) {
+    ev.preventDefault();
+    addItem(ev.target.closest(".card").dataset.id, ev.target);
+  }
+});
+
+let formChecklist = [];
+let selectedIdeas = [];
+let currentCategoryTitle = "";
+let formColor = "";
+const todoColorsFallback = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
+
+function availableTodoColors() {
+  return (state.todo_colors && state.todo_colors.length) ? state.todo_colors : todoColorsFallback;
+}
+
+function updateRemindAvailability() {
+  const cat = $("fCategory").value;
+  const hasTime = !!$("fTime").value;
+  const isTodo = cat === "todo";
+  const sel = $("fRemindBefore");
+  if (!sel) return;
+  sel.disabled = !isTodo || !hasTime;
+  const hint = $("remindHint");
+  if (hint) hint.hidden = !isTodo || hasTime;
+  if (!hasTime) sel.value = "0";
+}
+
+function updateFormSections() {
+  const cat = $("fCategory").value;
+  const isShop = cat === "shop";
+  const isSex = cat === "sex";
+  const isTodo = cat === "todo";
+
+  $("checklistSection").hidden = !(isShop && !editingEvent);
+  $("sexIdeasSection").hidden = !isSex;
+  $("todoSection").hidden = !isTodo;
+
+  if (isShop && !editingEvent) renderFormChecklist();
+  if (isTodo) renderTodoSection();
+  updateRemindAvailability();
+
+  if (!isSex) {
+    selectedIdeas = [];
+    currentCategoryTitle = "";
+    renderChosen();
+  }
+}
+
+function renderTodoSection() {
+  const box = $("todoColors");
+  if (!box) return;
+  const colors = availableTodoColors();
+  box.innerHTML = colors.map(c =>
+    `<button type="button" class="todo-color${c === formColor ? " selected" : ""}"
+             data-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
+  ).join("");
+}
+
+$("todoColors").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-color]");
+  if (!b) return;
+  formColor = b.dataset.color;
+  renderTodoSection();
+  tg.HapticFeedback?.selectionChanged();
+});
+
+function renderFormChecklist() {
+  const box = $("fChecklist");
+  if (!box) return;
+  if (!formChecklist.length) {
+    box.innerHTML = `<div class="cl-empty">Список пока пуст</div>`;
+    return;
+  }
+  box.innerHTML = formChecklist.map((it, idx) => `
+    <div class="checklist-item${it.checked ? " checked" : ""}" data-idx="${idx}">
+      <input type="checkbox" ${it.checked ? "checked" : ""} data-form-cl-toggle aria-label="${esc(it.text)}">
+      <span class="cl-text">${esc(it.text)}</span>
+      <button type="button" class="cl-remove" data-form-cl-remove aria-label="Удалить пункт «${esc(it.text)}»">×</button>
+    </div>`).join("");
+}
+
+function openIdeasModal(title) {
+  currentCategoryTitle = title;
+  $("ideasModalTitle").textContent = title;
+  hideIdeaForm();
+  renderIdeas();
+  $("ideasOverlay").hidden = false;
+  document.body.style.overflow = "hidden";
+  tg.BackButton?.show();
+}
+
+function closeIdeasModal() {
+  $("ideasOverlay").hidden = true;
+  document.body.style.overflow = "";
+  hideIdeaForm();
+  if (!$("overlay").hidden) tg.BackButton?.show(); else tg.BackButton?.hide();
+}
+
+function showIdeaForm() {
+  $("ideaForm").hidden = false;
+  $("addIdeaToggle").hidden = true;
+  const inp = $("newIdeaInput");
+  inp.value = "";
+  setTimeout(() => inp.focus(), 50);
+}
+
+function hideIdeaForm() {
+  $("ideaForm").hidden = true;
+  $("addIdeaToggle").hidden = false;
+  $("newIdeaInput").value = "";
+}
+
+function renderIdeas() {
+  const listEl = $("ideasContainer");
+  const filtered = (state.sex_ideas || []).filter(i => i.category_title === currentCategoryTitle);
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="cl-empty">Пока нет идей. Добавьте первую!</div>`;
+    return;
+  }
+  listEl.innerHTML = filtered.map(i => {
+    const on = selectedIdeas.includes(i.text);
+    return `<div class="idea-item${on ? " selected" : ""}" data-idea-text="${esc(i.text)}" data-idea-id="${esc(i.id)}">
+      <span class="idea-check">✓</span>
+      <span class="idea-text">${esc(i.text)}</span>
+      <button type="button" class="idea-del" data-idea-del aria-label="Удалить">×</button>
+    </div>`;
+  }).join("");
+}
+
+function toggleIdea(text) {
+  const i = selectedIdeas.indexOf(text);
+  if (i >= 0) selectedIdeas.splice(i, 1);
+  else selectedIdeas.push(text);
+  renderIdeas();
+  renderChosen();
+  tg.HapticFeedback?.selectionChanged();
+}
+
+function renderChosen() {
+  const block = $("chosenBlock");
+  const chips = $("chosenChips");
+  const count = $("chosenCount");
+  if (!block || !chips || !count) return;
+  if (!selectedIdeas.length) {
+    block.hidden = true; chips.innerHTML = ""; count.textContent = "0";
+    updateTriggersCount();
+    return;
+  }
+  block.hidden = false;
+  count.textContent = String(selectedIdeas.length);
+  chips.innerHTML = selectedIdeas.map((t, idx) =>
+    `<span class="chip" data-idx="${idx}">
+       <span class="chip-text">${esc(t)}</span>
+       <button type="button" class="chip-x" data-chip-x aria-label="Убрать">×</button>
+     </span>`
+  ).join("");
+  updateTriggersCount();
+}
+
+function updateTriggersCount() {
+  document.querySelectorAll(".sex-idea-trigger").forEach(btn => {
+    const title = btn.dataset.title;
+    const n = selectedIdeas.filter(t => {
+      const idea = (state.sex_ideas || []).find(i => i.text === t);
+      return idea && idea.category_title === title;
+    }).length;
+    const badge = btn.querySelector("[data-count]");
+    if (!badge) return;
+    if (n > 0) { badge.textContent = n; badge.hidden = false; }
+    else { badge.textContent = ""; badge.hidden = true; }
+  });
+}
+
+document.querySelectorAll(".sex-idea-trigger").forEach((btn) => {
+  btn.onclick = () => {
+    openIdeasModal(btn.dataset.title);
+    tg.HapticFeedback?.selectionChanged();
+  };
+});
+
+$("ideasContainer").addEventListener("click", async (e) => {
+  const del = e.target.closest("[data-idea-del]");
+  if (del) {
+    const item = del.closest("[data-idea-text]");
+    const text = item.dataset.ideaText;
+    const idea = (state.sex_ideas || []).find(i => i.text === text);
+    if (!idea) return;
+    confirmDialog("Удалить эту идею? Она пропадёт у вас обоих.", async () => {
+      try {
+        const res = await api(`/sex-ideas/${idea.id}`, { method: "DELETE" });
+        state.sex_ideas = res.ideas;
+        selectedIdeas = selectedIdeas.filter(t => t !== text);
+        renderIdeas();
+        renderChosen();
+        tg.HapticFeedback?.notificationOccurred("success");
+      } catch (err) {
+        toast(err.message);
+      }
+    });
+    return;
+  }
+  const item = e.target.closest("[data-idea-text]");
+  if (item) toggleIdea(item.dataset.ideaText);
+});
+
+$("chosenChips").addEventListener("click", (e) => {
+  const x = e.target.closest("[data-chip-x]");
+  if (!x) return;
+  const idx = Number(x.closest(".chip").dataset.idx);
+  selectedIdeas.splice(idx, 1);
+  renderIdeas();
+  renderChosen();
+  tg.HapticFeedback?.selectionChanged();
+});
+
+$("addIdeaToggle").onclick = () => showIdeaForm();
+
+async function submitNewIdea() {
+  const input = $("newIdeaInput");
+  const text = input.value.trim();
+  if (!text || !currentCategoryTitle) return;
+  try {
+    const res = await api("/sex-ideas", { method: "POST", body: { category_title: currentCategoryTitle, text } });
+    state.sex_ideas = res.ideas;
+    if (!selectedIdeas.includes(text)) selectedIdeas.push(text);
+    hideIdeaForm();
+    renderIdeas();
+    renderChosen();
+    tg.HapticFeedback?.selectionChanged();
+  } catch (e) { toast(e.message); }
+}
+$("addIdeaBtn").onclick = submitNewIdea;
+$("newIdeaInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); submitNewIdea(); }
+  if (e.key === "Escape") { e.preventDefault(); hideIdeaForm(); }
+});
+
+$("ideasDone").onclick = () => closeIdeasModal();
+$("ideasOverlay").addEventListener("click", (e) => {
+  if (e.target === $("ideasOverlay")) closeIdeasModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("ideasOverlay").hidden && !$("ideaForm").hidden) { hideIdeaForm(); return; }
+  if (!$("ideasOverlay").hidden) closeIdeasModal();
+});
+
+function openForm(event = null) {
+  editingEvent = event;
+  $("sheetTitle").textContent = event ? "Редактировать событие" : "Новое событие";
+  $("fDate").value = event ? event.date : selected;
+  $("fTime").value = event ? event.time : "";
+  $("fCategory").value = event ? event.category : "rest";
+  $("fDesc").value = event ? event.description || "" : "";
+
+  selectedIdeas = [];
+  currentCategoryTitle = "";
+  renderChosen();
+
+  if (event && event.category === "todo") {
+    formColor = event.color || availableTodoColors()[6];
+    $("fRemindBefore").value = String(event.remind_before || 0);
+  } else {
+    formColor = availableTodoColors()[6];
+    $("fRemindBefore").value = "0";
+  }
+
+  $("fHint").hidden = !event || (event && (event.category === "shop" || event.category === "todo"));
+  $("fError").textContent = "";
+  formChecklist = [];
+  updateFormSections();
+  $("overlay").hidden = false;
+  tg.BackButton?.show();
+}
+
+function closeForm() {
+  $("overlay").hidden = true;
+  tg.BackButton?.hide();
+}
+
+$("add").onclick = () => openForm();
+$("fCancel").onclick = closeForm;
+$("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeForm(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("overlay").hidden) closeForm(); });
+try { tg.BackButton?.onClick(() => { if (!$("overlay").hidden) closeForm(); }); } catch (e) {}
+
+$("fCategory").addEventListener("change", () => {
+  if ($("fCategory").value !== "shop") formChecklist = [];
+  updateFormSections();
+});
+$("fTime").addEventListener("change", updateRemindAvailability);
+$("fTime").addEventListener("input", updateRemindAvailability);
+
+$("fClAdd").onclick = () => {
+  const input = $("fClInput");
+  const text = input.value.trim();
+  if (!text || formChecklist.length >= 50) return;
+  formChecklist.push({ text, checked: false });
+  input.value = "";
+  renderFormChecklist();
+  input.focus();
+};
+$("fClInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("fClAdd").click(); }
+});
+$("fChecklist").addEventListener("click", (ev) => {
+  const idxEl = ev.target.closest("[data-idx]");
+  if (!idxEl) return;
+  const idx = Number(idxEl.dataset.idx);
+
+  if (ev.target.closest("[data-form-cl-remove]")) {
+    formChecklist.splice(idx, 1);
+    renderFormChecklist();
+    return;
+  }
+  const toggle = ev.target.closest("[data-form-cl-toggle]");
+  if (toggle) {
+    formChecklist[idx].checked = toggle.checked;
+    renderFormChecklist();
+  }
+});
+
+$("fSave").onclick = async () => {
+  const category = $("fCategory").value;
+  const date = $("fDate").value;
+  if (!date) { $("fError").textContent = "Выберите дату"; return; }
+
+  const notes = $("fDesc").value.trim();
+  const ideasPart = category === "sex" && selectedIdeas.length
+    ? selectedIdeas.map(t => "• " + t).join("\n")
+    : "";
+  const description = [ideasPart, notes].filter(Boolean).join("\n\n");
+
+  const payload = {
+    category,
+    description,
+    date,
+    time: $("fTime").value,
+  };
+  if (category === "todo") {
+    if (!formColor) { $("fError").textContent = "Выберите цвет"; return; }
+    payload.color = formColor;
+    const rb = parseInt($("fRemindBefore").value, 10) || 0;
+    payload.remind_before = ($("fTime").value ? rb : 0);
+  }
+  if (!editingEvent && category === "shop") payload.checklist = formChecklist;
+
+  const btn = $("fSave");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Сохраняем…";
+  try {
+    if (editingEvent) {
+      await api(`/events/${editingEvent.id}`, { method: "PUT", body: payload });
+      toast("Событие изменено");
+    } else {
+      await api("/events", { method: "POST", body: payload });
+    }
+    tg.HapticFeedback?.notificationOccurred("success");
+    selected = date;
+    const d = parse(date);
+    view = { y: d.getFullYear(), m: d.getMonth() };
+    closeForm();
+    etag = null;
+    await load();
+  } catch (e) {
+    $("fError").textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+};
+
+$("archiveBtn").onclick = async () => {
+  try {
+    const r = await api("/todos/archive");
+    const items = r.items || [];
+    if (!items.length) {
+      $("archiveList").innerHTML = `<div class="cl-empty">Архив пуст</div>`;
+    } else {
+      const allowedColors = state.todo_colors && state.todo_colors.length ? state.todo_colors : ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
+      $("archiveList").innerHTML = items.map(e => {
+        const safeArchiveColor = allowedColors.includes(e.color) ? e.color : "#8b5cf6";
+        return `
+          <div class="archive-item">
+            <span class="archive-dot" style="background:${esc(safeArchiveColor)}"></span>
+            <div class="archive-text">
+              <div>${esc(e.title)}${e.description ? ` — ${esc(e.description)}` : ""}</div>
+              <div class="archive-date">${esc(e.date)}${e.time ? " · " + esc(e.time) : ""}</div>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+    $("archiveOverlay").hidden = false;
+    tg.BackButton?.show();
+  } catch (e) { toast(e.message); }
+};
+$("archiveClose").onclick = () => {
+  $("archiveOverlay").hidden = true;
+  if (!$("overlay").hidden) tg.BackButton?.show(); else tg.BackButton?.hide();
+};
+$("archiveOverlay").addEventListener("click", (e) => {
+  if (e.target === $("archiveOverlay")) $("archiveClose").click();
+});
+
+$("share").onclick = () => {
+  const url = "https://t.me/share/url?url=" + encodeURIComponent(state.invite_link) +
+              "&text=" + encodeURIComponent("Давай вести общий календарь на двоих!");
+  tg.openTelegramLink(url);
+};
+$("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(state.invite_link); toast("Ссылка скопирована"); }
+  catch { toast(state.invite_link); }
+};
+$("unlink").onclick = () => {
+  confirmDialog("Отвязать партнёра? Все общие события будут удалены безвозвратно.", async () => {
+    try {
+      await api("/unlink", { method: "POST" });
+      toast("Партнёр отвязан");
+      for (const k of Object.keys(monthCache)) delete monthCache[k];
+      etag = null;
+      await load();
+    } catch (e) { toast(e.message); }
+  });
+};
+
+(() => {
+  const fab = $("add");
+  let lastY = window.scrollY;
+  let ticking = false;
+  const THRESHOLD = 8;
+
+  function onScroll() {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const y = window.scrollY;
+      const diff = y - lastY;
+      if (y < 40) {
+        fab.classList.remove("fab-hidden");
+      } else if (diff > THRESHOLD) {
+        fab.classList.add("fab-hidden");
+      } else if (diff < -THRESHOLD) {
+        fab.classList.remove("fab-hidden");
+      }
+      lastY = y;
+      ticking = false;
+    });
+  }
+
+  window.addEventListener("scroll", onScroll, { passive: true });
+
+  const observer = new MutationObserver(() => {
+    const anyOpen = !$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden;
+    if (anyOpen) fab.classList.remove("fab-hidden");
+  });
+  ["overlay", "ideasOverlay", "archiveOverlay"].forEach(id => {
+    observer.observe($(id), { attributes: true, attributeFilter: ["hidden"] });
+  });
+})();
+
+function startPolling() {
+  const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
+    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl && !dragState;
+  setInterval(() => { if (canPoll()) load(true); }, 15000);
+  document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
+}
+bootstrap();
+</script>
+</body>
+</html>
