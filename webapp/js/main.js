@@ -153,7 +153,46 @@ function startPolling() {
   setInterval(() => { if (canPoll()) load(true); }, 15000);
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
-$("scanBtn").onclick = () => $("photoInput").click();
+$("scanBtn").onclick = () => {
+  // Если Telegram WebApp доступен, показываем нативный попап
+  if (tg.showPopup) {
+    tg.showPopup({
+      title: "Добавить фото",
+      message: "Выберите источник",
+      buttons: [
+        { id: "camera", type: "default", text: "📷 Камера" },
+        { id: "gallery", type: "default", text: "🖼 Галерея" },
+        { id: "cancel", type: "cancel", text: "Отмена" }
+      ]
+    }, (buttonId) => {
+      if (buttonId === "camera") {
+        openFileInput(true);  // true = камера
+      } else if (buttonId === "gallery") {
+        openFileInput(false); // false = галерея
+      }
+    });
+  } else {
+    // Fallback для обычного браузера
+    openFileInput(false);
+  }
+};
+
+function openFileInput(useCamera) {
+  const input = $("photoInput");
+  if (!input) return;
+  
+  // Сбрасываем предыдущий файл
+  input.value = "";
+  
+  // Настраиваем input под камеру или галерею
+  if (useCamera) {
+    input.setAttribute("capture", "environment");
+  } else {
+    input.removeAttribute("capture");
+  }
+  
+  input.click();
+}
 
 $("photoInput").onchange = async (e) => {
   const file = e.target.files[0];
@@ -167,7 +206,7 @@ $("photoInput").onchange = async (e) => {
   try {
     const res = await uploadPhoto(file);
     toast(`Готово! Добавлено ${res.added} событий`);
-    await load(); // Обновляем календарь
+    await load();
   } catch (err) {
     toast(err.message);
   } finally {
