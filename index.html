@@ -55,6 +55,7 @@
     display: flex; gap: 1px; border-radius: 2px; overflow: hidden; }
   .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
 
+  /* Точки статуса — квадратики */
   .dots { display: flex; gap: 3px; height: 7px; }
   .dot { width: 7px; height: 7px; border-radius: 2px; }
   .dot.pending  { border: 2px solid rgb(var(--pending)); background: transparent; }
@@ -155,13 +156,23 @@
   .todo-color.selected { border-color: var(--text); }
 
   .checklist { margin-top: 10px; }
-  .checklist-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06);
-    touch-action: pan-y; }
+  .checklist-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 4px; margin: 0 -4px;
+    border-bottom: 1px solid rgba(0,0,0,.06);
+    border-radius: 8px;
+    touch-action: pan-y;
+    cursor: pointer;
+    transition: background-color .12s ease;
+  }
   .checklist-item:last-child { border-bottom: 0; }
-  .checklist-item input[type="checkbox"] { width: 20px; height: 20px; accent-color: rgb(var(--accepted)); flex-shrink: 0; cursor: pointer; padding: 0; }
+  .checklist-item:hover { background: rgba(0,0,0,.035); }
+  .checklist-item:active { background: rgba(0,0,0,.07); }
+  .checklist-item input[type="checkbox"] { width: 20px; height: 20px; accent-color: rgb(var(--accepted)); flex-shrink: 0; padding: 0; pointer-events: none; }
   .checklist-item .cl-text { flex: 1; word-break: break-word; }
   .checklist-item.checked .cl-text { text-decoration: line-through; opacity: .55; }
-  .checklist-item .cl-remove { font-size: 18px; opacity: .5; padding: 2px 8px; border-radius: 6px; }
+  .checklist-item .cl-remove { font-size: 18px; opacity: .5; padding: 2px 8px; border-radius: 6px;
+    pointer-events: auto; flex-shrink: 0; }
   .checklist-item .cl-remove:hover { opacity: 1; background: rgba(0,0,0,.05); }
 
   .cl-drag { cursor: grab; opacity: .45; padding: 2px 4px; border-radius: 6px;
@@ -470,8 +481,7 @@ let loaded = false;
 const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
 const monthCache = {};
 
-const metaBase = document.querySelector('meta[name="api-base"]')?.content || "";
-const API_BASE = metaBase ? metaBase.replace(/\/$/, "") : window.location.origin;
+const API_BASE = (document.querySelector('meta[name="api-base"]')?.content || "").replace(/\/$/, "");
 
 class HttpError extends Error {
   constructor(message, status) { super(message); this.status = status; }
@@ -623,13 +633,10 @@ function renderCalendar() {
     const date = fmt(view.y, view.m, d);
     const list = byDay[date] || [];
 
-    const allowedColors = state.todo_colors && state.todo_colors.length ? state.todo_colors : ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
     const todos = list.filter(x => x.category === "todo").slice().sort((a, b) => a.id - b.id);
     const todoBar = todos.length
-      ? `<span class="todo-bar" aria-hidden="true">${todos.map(t => {
-          const sc = allowedColors.includes(t.color) ? t.color : "#8b5cf6";
-          return `<i style="background:${esc(sc)}"></i>`;
-        }).join("")}</span>`
+      ? `<span class="todo-bar" aria-hidden="true">${todos.map(t =>
+          `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
       : "";
 
     const nonTodos = list.filter(x => x.category !== "todo");
@@ -649,7 +656,7 @@ function renderCalendar() {
 
 function checklistHtml(e) {
   const items = (e.checklist || []).map((it) => `
-    <div class="checklist-item${it.checked ? " checked" : ""}" data-item="${it.id}">
+    <div class="checklist-item${it.checked ? " checked" : ""}" data-item="${it.id}" data-cl-row role="button" tabindex="0">
       <span class="cl-drag" data-cl-drag role="button" tabindex="0" aria-label="Перетащить">⋮⋮</span>
       <input type="checkbox" ${it.checked ? "checked" : ""} data-cl-toggle aria-label="${esc(it.text)}">
       <span class="cl-text">${esc(it.text)}</span>
@@ -743,10 +750,7 @@ function cardHtml(e) {
   const tag = `${cat.icon} ${cat.label}${e.time ? " · " + esc(e.time) : ""}${remindText}`;
 
   const cardCls = isTodo ? "todo" : (isShop ? "accepted" : sk);
-  
-  const allowedColors = state.todo_colors && state.todo_colors.length ? state.todo_colors : ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
-  const safeColor = allowedColors.includes(e.color) ? e.color : "#8b5cf6";
-  const cardStyle = isTodo ? ` style="--c: ${hexToRgb(safeColor)};"` : "";
+  const cardStyle = isTodo && e.color ? ` style="--c: ${hexToRgb(e.color)};"` : "";
 
   const actions = (e.is_creator || isTodo)
     ? `<div class="card-actions">
@@ -953,6 +957,7 @@ function moveItem(eventId, itemId, newPosition) {
   });
 }
 
+// Drag & drop для ручки ⋮⋮
 let dragState = null;
 
 function onDragStart(ev) {
@@ -1068,6 +1073,22 @@ $("list").addEventListener("click", async (ev) => {
   const event = findEvent(eventId);
   if (!event) return;
 
+  // Клик по любому месту ряда (кроме ручки, кнопки удаления и самого чекбокса)
+  // — переключает состояние пункта
+  const row = ev.target.closest("[data-cl-row]");
+  if (row) {
+    const clickedDrag = ev.target.closest("[data-cl-drag]");
+    const clickedRemove = ev.target.closest("[data-cl-remove]");
+    if (!clickedDrag && !clickedRemove) {
+      const cb = row.querySelector("[data-cl-toggle]");
+      const itemId = row.dataset.item;
+      const newChecked = !(cb && cb.checked);
+      if (cb) cb.checked = newChecked;
+      toggleItem(eventId, itemId, newChecked);
+      return;
+    }
+  }
+
   const ideaYes = ev.target.closest("[data-idea-yes]");
   const ideaNo  = ev.target.closest("[data-idea-no]");
   if (ideaYes || ideaNo) {
@@ -1106,9 +1127,6 @@ $("list").addEventListener("click", async (ev) => {
     });
     return;
   }
-
-  const toggle = ev.target.closest("[data-cl-toggle]");
-  if (toggle) { toggleItem(eventId, toggle.closest("[data-item]").dataset.item, toggle.checked); return; }
 
   const remove = ev.target.closest("[data-cl-remove]");
   if (remove) { removeItem(eventId, remove.closest("[data-item]").dataset.item); return; }
@@ -1156,6 +1174,15 @@ $("list").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && ev.target.classList?.contains("cl-input")) {
     ev.preventDefault();
     addItem(ev.target.closest(".card").dataset.id, ev.target);
+  }
+  if ((ev.key === "Enter" || ev.key === " ") && ev.target.matches?.("[data-cl-row]")) {
+    ev.preventDefault();
+    const row = ev.target;
+    const card = row.closest(".card");
+    const cb = row.querySelector("[data-cl-toggle]");
+    const newChecked = !(cb && cb.checked);
+    if (cb) cb.checked = newChecked;
+    toggleItem(card.dataset.id, row.dataset.item, newChecked);
   }
 });
 
@@ -1534,19 +1561,15 @@ $("archiveBtn").onclick = async () => {
     if (!items.length) {
       $("archiveList").innerHTML = `<div class="cl-empty">Архив пуст</div>`;
     } else {
-      const allowedColors = state.todo_colors && state.todo_colors.length ? state.todo_colors : ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
-      $("archiveList").innerHTML = items.map(e => {
-        const safeArchiveColor = allowedColors.includes(e.color) ? e.color : "#8b5cf6";
-        return `
-          <div class="archive-item">
-            <span class="archive-dot" style="background:${esc(safeArchiveColor)}"></span>
-            <div class="archive-text">
-              <div>${esc(e.title)}${e.description ? ` — ${esc(e.description)}` : ""}</div>
-              <div class="archive-date">${esc(e.date)}${e.time ? " · " + esc(e.time) : ""}</div>
-            </div>
+      $("archiveList").innerHTML = items.map(e => `
+        <div class="archive-item">
+          <span class="archive-dot" style="background:${esc(e.color || "#8b5cf6")}"></span>
+          <div class="archive-text">
+            <div>${esc(e.title)}${e.description ? ` — ${esc(e.description)}` : ""}</div>
+            <div class="archive-date">${esc(e.date)}${e.time ? " · " + esc(e.time) : ""}</div>
           </div>
-        `;
-      }).join("");
+        </div>
+      `).join("");
     }
     $("archiveOverlay").hidden = false;
     tg.BackButton?.show();
@@ -1581,6 +1604,7 @@ $("unlink").onclick = () => {
   });
 };
 
+// Скрываем FAB при скролле вниз, показываем при скролле вверх
 (() => {
   const fab = $("add");
   let lastY = window.scrollY;
