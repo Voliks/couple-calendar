@@ -19,6 +19,7 @@
     --declined: 239, 68, 68;
     --expired: 138, 138, 142;
     --todo: 139, 92, 246;
+    --personal: 100, 116, 139;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--text);
@@ -47,15 +48,33 @@
   .grid { gap: 2px; }
   .day { position: relative; aspect-ratio: 1 / 1; max-height: 54px; border-radius: 12px;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-    border: 2px solid transparent; font-size: 16px; }
+    border: 2px solid transparent; font-size: 16px;
+    user-select: none; -webkit-user-select: none;
+    touch-action: pan-y;
+    transition: background-color .12s ease;
+    background: transparent; }
   .day.today .num { color: var(--accent); font-weight: 700; }
-  .day.selected { border-color: var(--accent); background: var(--bg2); }
+  .day.selected { border-color: var(--accent); }
 
   .day .todo-bar { position: absolute; top: 2px; left: 6px; right: 6px; height: 4px;
-    display: flex; gap: 1px; border-radius: 2px; overflow: hidden; }
+    display: flex; gap: 1px; border-radius: 2px; overflow: hidden; z-index: 1; }
   .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
 
-  /* Точки статуса — квадратики */
+  /* Личные записи: заливка дня цветом записи */
+  .day.has-personal { background: rgba(var(--personal-bg, var(--personal)), .25); }
+  .day.has-personal.selected {
+    background: rgba(var(--personal-bg, var(--personal)), .35);
+    border-color: var(--accent);
+  }
+  .day.has-personal .num { position: relative; z-index: 2; }
+
+  .day.multi-selected { border-color: rgb(var(--personal)); background: rgba(var(--personal), .35); }
+  .day.multi-selected .num { color: var(--text); font-weight: 700; }
+  .day.multi-selected.has-personal { background: rgba(var(--personal-bg, var(--personal)), .35); }
+
+  body.multi-dragging .grid { touch-action: none; }
+  body.multi-dragging { overflow: hidden; }
+
   .dots { display: flex; gap: 3px; height: 7px; }
   .dot { width: 7px; height: 7px; border-radius: 2px; }
   .dot.pending  { border: 2px solid rgb(var(--pending)); background: transparent; }
@@ -72,6 +91,7 @@
   .card.declined { --c: var(--declined); }
   .card.expired  { --c: var(--expired); }
   .card.todo     { --c: var(--todo); }
+  .card.personal { --c: var(--personal); }
   .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
   .card h3 { margin: 0; font-size: 17px; word-break: break-word; flex: 1; }
   .card .tag { margin-top: 2px; font-size: 13px; color: var(--hint); }
@@ -109,6 +129,15 @@
   .fab.fab-hidden { transform: translateY(120px); opacity: 0; pointer-events: none; }
   @media (prefers-reduced-motion: reduce) { .fab { transition: none; } }
 
+  .multi-hint { position: fixed; left: 14px; right: 14px; bottom: calc(90px + env(safe-area-inset-bottom, 0px));
+    background: rgb(var(--personal)); color: #fff; padding: 10px 14px; border-radius: 12px;
+    display: flex; align-items: center; gap: 10px; z-index: 6; font-size: 14px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+  .multi-hint span { flex: 1; }
+  .multi-hint button { padding: 6px 10px; border-radius: 8px; font-weight: 600; color: #fff;
+    background: rgba(255,255,255,.2); }
+  .multi-hint button:active { background: rgba(255,255,255,.35); }
+
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; z-index: 10; }
   .sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
     max-height: 92vh; overflow-y: auto;
@@ -131,6 +160,10 @@
   .btn:disabled { opacity: .5; }
   .error { color: rgb(var(--declined)); font-size: 14px; margin-top: 10px; min-height: 1em; }
   .hint { font-size: 13px; color: var(--hint); margin-top: 12px; }
+
+  .bulk-dates-note { padding: 10px 12px; border-radius: 12px; background: rgba(var(--personal), .12);
+    color: var(--text); font-size: 14px; margin-top: 6px; }
+  .bulk-dates-list { margin-top: 6px; font-size: 13px; color: var(--hint); max-height: 120px; overflow-y: auto; }
 
   .sex-ideas-buttons { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 6px; }
   .sex-idea-trigger { padding: 12px 14px; border-radius: 12px; background: var(--bg2); font-size: 15px; font-weight: 500; text-align: left; border: 2px solid transparent; transition: all .15s; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
@@ -156,13 +189,23 @@
   .todo-color.selected { border-color: var(--text); }
 
   .checklist { margin-top: 10px; }
-  .checklist-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06);
-    touch-action: pan-y; }
+  .checklist-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 4px; margin: 0 -4px;
+    border-bottom: 1px solid rgba(0,0,0,.06);
+    border-radius: 8px;
+    touch-action: pan-y;
+    cursor: pointer;
+    transition: background-color .12s ease;
+  }
   .checklist-item:last-child { border-bottom: 0; }
-  .checklist-item input[type="checkbox"] { width: 20px; height: 20px; accent-color: rgb(var(--accepted)); flex-shrink: 0; cursor: pointer; padding: 0; }
+  .checklist-item:hover { background: rgba(0,0,0,.035); }
+  .checklist-item:active { background: rgba(0,0,0,.07); }
+  .checklist-item input[type="checkbox"] { width: 20px; height: 20px; accent-color: rgb(var(--accepted)); flex-shrink: 0; padding: 0; pointer-events: none; }
   .checklist-item .cl-text { flex: 1; word-break: break-word; }
   .checklist-item.checked .cl-text { text-decoration: line-through; opacity: .55; }
-  .checklist-item .cl-remove { font-size: 18px; opacity: .5; padding: 2px 8px; border-radius: 6px; }
+  .checklist-item .cl-remove { font-size: 18px; opacity: .5; padding: 2px 8px; border-radius: 6px;
+    pointer-events: auto; flex-shrink: 0; }
   .checklist-item .cl-remove:hover { opacity: 1; background: rgba(0,0,0,.05); }
 
   .cl-drag { cursor: grab; opacity: .45; padding: 2px 4px; border-radius: 6px;
@@ -304,11 +347,22 @@
   <button class="fab" id="add" aria-label="Добавить событие">+</button>
 </main>
 
+<div class="multi-hint" id="multiHint" hidden>
+  <span id="multiHintText">Выбрано дней: 0</span>
+  <button type="button" id="multiCancel">Отмена</button>
+  <button type="button" id="multiCreate">Создать</button>
+</div>
+
 <div class="overlay" id="overlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <h2 id="sheetTitle">Новое событие</h2>
 
-    <div class="two">
+    <div id="bulkDatesBox" class="bulk-dates-note" hidden>
+      <div><b>Личная запись на несколько дней</b></div>
+      <div class="bulk-dates-list" id="bulkDatesList"></div>
+    </div>
+
+    <div class="two" id="dateTimeRow">
       <div>
         <label for="fDate">Дата</label>
         <input type="date" id="fDate">
@@ -325,6 +379,7 @@
       <option value="sex">Секс</option>
       <option value="shop">Магазин</option>
       <option value="todo">Дела</option>
+      <option value="personal">Личное (только для меня)</option>
     </select>
 
     <div id="todoSection" hidden>
@@ -345,6 +400,12 @@
         <option value="2880">2 дня</option>
       </select>
       <div class="hint" id="remindHint">Напоминание работает, только если указано время события.</div>
+    </div>
+
+    <div id="personalSection" hidden>
+      <label>Цвет</label>
+      <div class="todo-colors" id="personalColors"></div>
+      <div class="hint">Личные записи видны только вам.</div>
     </div>
 
     <div id="sexIdeasSection" hidden>
@@ -433,16 +494,18 @@ const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const CATEGORIES = {
-  rest: { label: "Отдых",   icon: "🌿" },
-  sex:  { label: "Секс",    icon: "🔥" },
-  shop: { label: "Магазин", icon: "🛒" },
-  todo: { label: "Дела",    icon: "📌" },
+  rest:     { label: "Отдых",   icon: "🌿" },
+  sex:      { label: "Секс",    icon: "🔥" },
+  shop:     { label: "Магазин", icon: "🛒" },
+  todo:     { label: "Дела",    icon: "📌" },
+  personal: { label: "Личное",  icon: "🔒" },
 };
 const STATUS_TEXT = {
   pending: "⏳ Ждёт ответа", accepted: "✓ Принято", declined: "✕ Отклонено", expired: "Просрочено",
 };
 const MONTHS_FORMAT = new Intl.DateTimeFormat("ru", { month: "long", year: "numeric" });
 const DAY_FORMAT = new Intl.DateTimeFormat("ru", { day: "numeric", month: "long" });
+const DAY_SHORT = new Intl.DateTimeFormat("ru", { day: "numeric", month: "short" });
 
 const pad = (n) => String(n).padStart(2, "0");
 const fmt = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
@@ -452,7 +515,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
 function hexToRgb(hex) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
-  return m ? `${parseInt(m[1],16)}, ${parseInt(m[2],16)}, ${parseInt(m[3],16)}` : "139, 92, 246";
+  return m ? `${parseInt(m[1],16)}, ${parseInt(m[2],16)}, ${parseInt(m[3],16)}` : "100, 116, 139";
 }
 function humanizeMinutes(m) {
   if (m < 60) return `${m} мин`;
@@ -470,6 +533,21 @@ let editingEvent = null;
 let loaded = false;
 const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
 const monthCache = {};
+
+// Мультивыделение
+const LONG_PRESS_MS = 260;
+const MOVE_CANCEL_PX = 8;
+const multiSelect = {
+  active: false,
+  armed: false,
+  days: new Set(),
+  startDate: null,
+  drag: false,
+  pointerId: null,
+  startX: 0,
+  startY: 0,
+  longPressTimer: null,
+};
 
 const API_BASE = (document.querySelector('meta[name="api-base"]')?.content || "").replace(/\/$/, "");
 
@@ -629,24 +707,55 @@ function renderCalendar() {
           `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
       : "";
 
-    const nonTodos = list.filter(x => x.category !== "todo");
+    const personals = list.filter(x => x.category === "personal");
+    const hasPersonal = personals.length > 0;
+    let personalStyle = "";
+    if (hasPersonal) {
+      const rgb = hexToRgb(personals[0].color || "#64748b");
+      personalStyle = `--personal-bg: ${rgb};`;
+    }
+
+    const nonTodos = list.filter(x => x.category !== "todo" && x.category !== "personal");
     const st = new Set(nonTodos.map(statusKey));
     const dots = ["pending", "accepted", "declined", "expired"]
       .filter((s) => st.has(s)).map((s) => `<i class="dot ${s}"></i>`).join("");
 
-    const cls = ["day", date === today && "today", date === selected && "selected"].filter(Boolean).join(" ");
+    const ms = multiSelect.days.has(date);
+    const cls = [
+      "day",
+      date === today && "today",
+      date === selected && "selected",
+      hasPersonal && "has-personal",
+      ms && "multi-selected",
+    ].filter(Boolean).join(" ");
+
     const label = DAY_FORMAT.format(new Date(view.y, view.m, d))
       + (list.length ? `, событий: ${list.length}` : "");
-    html += `<button class="${cls}" data-date="${date}" aria-pressed="${date === selected}" aria-label="${esc(label)}">
+
+    html += `<button class="${cls}" data-date="${date}" style="${personalStyle}" aria-pressed="${date === selected}" aria-label="${esc(label)}">
                ${todoBar}
                <span class="num">${d}</span><span class="dots" aria-hidden="true">${dots}</span></button>`;
   }
   $("grid").innerHTML = html;
+
+  updateMultiHint();
+}
+
+function updateMultiHint() {
+  const box = $("multiHint");
+  if (multiSelect.days.size === 0) {
+    box.hidden = true;
+    document.body.classList.remove("multi-dragging");
+    return;
+  }
+  box.hidden = false;
+  document.body.classList.add("multi-dragging");
+  $("multiHintText").textContent = `Выбрано дней: ${multiSelect.days.size}`;
 }
 
 function checklistHtml(e) {
   const items = (e.checklist || []).map((it) => `
-    <div class="checklist-item${it.checked ? " checked" : ""}" data-item="${it.id}">
+    <div class="checklist-item${it.checked ? " checked" : ""}" data-item="${it.id}" data-cl-row role="button" tabindex="0">
       <span class="cl-drag" data-cl-drag role="button" tabindex="0" aria-label="Перетащить">⋮⋮</span>
       <input type="checkbox" ${it.checked ? "checked" : ""} data-cl-toggle aria-label="${esc(it.text)}">
       <span class="cl-text">${esc(it.text)}</span>
@@ -660,7 +769,8 @@ function checklistHtml(e) {
 }
 
 function answerHtml(e, expired) {
-  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
+  if (e.visibility === "private") return "";
   if (e.is_creator) return "";
   if (e.status === "pending") {
     return expired ? "" : `<div class="answer">
@@ -674,7 +784,8 @@ function answerHtml(e, expired) {
 }
 
 function reactionHtml(e) {
-  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
+  if (e.visibility === "private") return "";
   if (e.status !== "accepted" && e.status !== "declined") return "";
   const mine = e.reaction_mine || "";
   const partner = e.reaction_partner || "";
@@ -692,6 +803,7 @@ function reactionHtml(e) {
 
 function ideasHtml(e) {
   if (e.category !== "sex") return "";
+  if (e.visibility === "private") return "";
   if (!e.ideas || !e.ideas.length) return "";
   const rows = e.ideas.map(it => {
     const eff = it.effective || "";
@@ -711,7 +823,8 @@ function ideasHtml(e) {
 }
 
 function declineCommentHtml(e) {
-  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
+  if (e.visibility === "private") return "";
   if (e.status !== "declined") return "";
 
   const cCreator = e.decline_comment_creator || "";
@@ -734,21 +847,29 @@ function cardHtml(e) {
   const sk = statusKey(e);
   const isShop = e.category === "shop";
   const isTodo = e.category === "todo";
+  const isPersonal = e.category === "personal";
+  const isPrivate = e.visibility === "private";
   const remindText = (isTodo && e.remind_before && e.time)
     ? ` · 🔔 за ${humanizeMinutes(e.remind_before)}`
     : "";
   const tag = `${cat.icon} ${cat.label}${e.time ? " · " + esc(e.time) : ""}${remindText}`;
 
-  const cardCls = isTodo ? "todo" : (isShop ? "accepted" : sk);
-  const cardStyle = isTodo && e.color ? ` style="--c: ${hexToRgb(e.color)};"` : "";
+  const cardCls = isPersonal ? "personal" : (isTodo ? "todo" : (isShop ? "accepted" : sk));
+  let cardStyle = "";
+  if (isPersonal && e.color) cardStyle = ` style="--c: ${hexToRgb(e.color)};"`;
+  else if (isTodo && e.color) cardStyle = ` style="--c: ${hexToRgb(e.color)};"`;
 
-  const actions = (e.is_creator || isTodo)
+  const actions = (e.is_creator || isTodo || isPersonal)
     ? `<div class="card-actions">
          <button class="icon-btn edit-btn" aria-label="Редактировать" title="Редактировать">✏️</button>
          <button class="icon-btn delete-btn" aria-label="Удалить" title="Удалить">🗑️</button>
        </div>` : "";
 
-  const statusLabel = (isShop || isTodo) ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
+  const statusLabel = (isShop || isTodo || isPersonal || isPrivate) ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
+
+  const authorLine = isPrivate
+    ? "🔒 Только для вас"
+    : (e.is_creator ? "От вас" : "От партнёра");
 
   return `<article class="card ${cardCls}" data-id="${e.id}"${cardStyle}>
     <div class="card-header">
@@ -760,7 +881,7 @@ function cardHtml(e) {
     ${ideasHtml(e)}
     ${reactionHtml(e)}
     ${declineCommentHtml(e)}
-    <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span>${statusLabel}</div>
+    <div class="meta"><span>${authorLine}</span>${statusLabel}</div>
     ${answerHtml(e, sk === "expired")}
   </article>`;
 }
@@ -811,15 +932,173 @@ function renderList() {
   }
 }
 
-$("grid").addEventListener("click", (ev) => {
-  const btn = ev.target.closest(".day");
-  if (!btn) return;
-  selected = btn.dataset.date;
-  tg.HapticFeedback?.selectionChanged();
+// ---- Мультивыделение с long-press ----
+
+function dateFromEl(el) {
+  if (!el) return null;
+  return el.dataset?.date || null;
+}
+
+function clearMultiSelect() {
+  if (multiSelect.longPressTimer) {
+    clearTimeout(multiSelect.longPressTimer);
+    multiSelect.longPressTimer = null;
+  }
+  multiSelect.active = false;
+  multiSelect.armed = false;
+  multiSelect.days.clear();
+  multiSelect.startDate = null;
+  multiSelect.drag = false;
+  multiSelect.pointerId = null;
+  document.body.classList.remove("multi-dragging");
+  updateMultiHint();
   renderCalendar();
-  renderList();
-  $("grid").querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+}
+
+function armMultiSelect() {
+  multiSelect.longPressTimer = null;
+  if (!multiSelect.active || multiSelect.drag) return;
+  multiSelect.armed = true;
+  multiSelect.days.clear();
+  multiSelect.days.add(multiSelect.startDate);
+  document.body.classList.add("multi-dragging");
+  tg.HapticFeedback?.impactOccurred?.("medium");
+  updateMultiHint();
+  renderCalendar();
+}
+
+function selectRange(fromDate, toDate) {
+  const a = parse(fromDate);
+  const b = parse(toDate);
+  const [lo, hi] = a <= b ? [a, b] : [b, a];
+  multiSelect.days.clear();
+  const cur = new Date(lo);
+  while (cur <= hi) {
+    multiSelect.days.add(fmt(cur.getFullYear(), cur.getMonth(), cur.getDate()));
+    cur.setDate(cur.getDate() + 1);
+  }
+}
+
+const grid = $("grid");
+
+grid.addEventListener("pointerdown", (ev) => {
+  const dayEl = ev.target.closest(".day");
+  if (!dayEl) return;
+  const date = dateFromEl(dayEl);
+  if (!date) return;
+
+  try { grid.setPointerCapture(ev.pointerId); } catch (e) {}
+
+  multiSelect.active = true;
+  multiSelect.armed = false;
+  multiSelect.pointerId = ev.pointerId;
+  multiSelect.startDate = date;
+  multiSelect.startX = ev.clientX;
+  multiSelect.startY = ev.clientY;
+  multiSelect.days.clear();
+  multiSelect.drag = false;
+
+  if (multiSelect.longPressTimer) clearTimeout(multiSelect.longPressTimer);
+  multiSelect.longPressTimer = setTimeout(armMultiSelect, LONG_PRESS_MS);
 });
+
+grid.addEventListener("pointermove", (ev) => {
+  if (!multiSelect.active || ev.pointerId !== multiSelect.pointerId) return;
+
+  const dx = ev.clientX - multiSelect.startX;
+  const dy = ev.clientY - multiSelect.startY;
+  const moved = Math.hypot(dx, dy);
+
+  if (!multiSelect.armed) {
+    if (moved > MOVE_CANCEL_PX) {
+      if (multiSelect.longPressTimer) {
+        clearTimeout(multiSelect.longPressTimer);
+        multiSelect.longPressTimer = null;
+      }
+      multiSelect.active = false;
+      multiSelect.pointerId = null;
+      multiSelect.startDate = null;
+    }
+    return;
+  }
+
+  const el = document.elementFromPoint(ev.clientX, ev.clientY);
+  const dayEl = el ? el.closest(".day") : null;
+  const date = dateFromEl(dayEl);
+  if (!date) return;
+
+  if (!multiSelect.drag) multiSelect.drag = true;
+  if (ev.cancelable) ev.preventDefault();
+
+  if (date !== multiSelect.startDate) {
+    selectRange(multiSelect.startDate, date);
+  } else {
+    multiSelect.days.clear();
+    multiSelect.days.add(multiSelect.startDate);
+  }
+  updateMultiHint();
+  renderCalendar();
+}, { passive: false });
+
+function finishPointer(ev, cancelled = false) {
+  if (!multiSelect.active || ev.pointerId !== multiSelect.pointerId) return;
+
+  try { grid.releasePointerCapture(ev.pointerId); } catch (e) {}
+
+  if (multiSelect.longPressTimer) {
+    clearTimeout(multiSelect.longPressTimer);
+    multiSelect.longPressTimer = null;
+  }
+
+  const wasArmed = multiSelect.armed;
+  const startDate = multiSelect.startDate;
+  const hadSelection = multiSelect.days.size > 0;
+
+  multiSelect.active = false;
+  multiSelect.armed = false;
+  multiSelect.drag = false;
+  multiSelect.pointerId = null;
+  document.body.classList.remove("multi-dragging");
+
+  if (cancelled) {
+    if (multiSelect.days.size) multiSelect.days.clear();
+    multiSelect.startDate = null;
+    updateMultiHint();
+    renderCalendar();
+    return;
+  }
+
+  if (wasArmed && hadSelection) {
+    openPersonalBulkForm();
+    return;
+  }
+
+  multiSelect.days.clear();
+  multiSelect.startDate = null;
+  updateMultiHint();
+  if (startDate) {
+    selected = startDate;
+    tg.HapticFeedback?.selectionChanged();
+    renderCalendar();
+    renderList();
+  }
+}
+
+grid.addEventListener("pointerup", (ev) => finishPointer(ev, false));
+grid.addEventListener("pointercancel", (ev) => finishPointer(ev, true));
+
+$("multiCancel").onclick = () => {
+  clearMultiSelect();
+};
+$("multiCreate").onclick = () => {
+  if (multiSelect.days.size > 0) openPersonalBulkForm();
+};
+
+function openPersonalBulkForm() {
+  const dates = [...multiSelect.days].sort();
+  if (!dates.length) return;
+  openForm(null, { bulkDates: dates, forceCategory: "personal" });
+}
 
 function shiftMonth(delta) {
   const d = new Date(view.y, view.m + delta, 1);
@@ -947,7 +1226,6 @@ function moveItem(eventId, itemId, newPosition) {
   });
 }
 
-// Drag & drop для ручки ⋮⋮
 let dragState = null;
 
 function onDragStart(ev) {
@@ -958,6 +1236,7 @@ function onDragStart(ev) {
   if (!item || !card) return;
 
   ev.preventDefault();
+  ev.stopPropagation();
   const rect = item.getBoundingClientRect();
   dragState = {
     eventId: card.dataset.id,
@@ -1006,9 +1285,7 @@ function onDragEnd() {
   const ev = findEvent(eventId);
   if (!ev) { renderList(); return; }
   const oldOrder = ev.checklist.map(x => String(x.id));
-  if (idsNow.join(",") === oldOrder.join(",")) {
-    return;
-  }
+  if (idsNow.join(",") === oldOrder.join(",")) return;
   moveItem(eventId, itemId, newPos);
 }
 
@@ -1063,6 +1340,20 @@ $("list").addEventListener("click", async (ev) => {
   const event = findEvent(eventId);
   if (!event) return;
 
+  const row = ev.target.closest("[data-cl-row]");
+  if (row) {
+    const clickedDrag = ev.target.closest("[data-cl-drag]");
+    const clickedRemove = ev.target.closest("[data-cl-remove]");
+    if (!clickedDrag && !clickedRemove) {
+      const cb = row.querySelector("[data-cl-toggle]");
+      const itemId = row.dataset.item;
+      const newChecked = !(cb && cb.checked);
+      if (cb) cb.checked = newChecked;
+      toggleItem(eventId, itemId, newChecked);
+      return;
+    }
+  }
+
   const ideaYes = ev.target.closest("[data-idea-yes]");
   const ideaNo  = ev.target.closest("[data-idea-no]");
   if (ideaYes || ideaNo) {
@@ -1083,14 +1374,16 @@ $("list").addEventListener("click", async (ev) => {
   }
 
   if (ev.target.closest("[data-reaction-open]") || ev.target.closest("[data-reaction-toggle]")) {
-    if (event.category === "shop" || event.category === "todo") return;
+    if (event.category === "shop" || event.category === "todo" || event.category === "personal") return;
+    if (event.visibility === "private") return;
     if (event.status !== "accepted") return;
     openReactionPicker(event);
     return;
   }
 
   if (ev.target.closest("[data-comment-open]")) {
-    if (event.category === "shop" || event.category === "todo") return;
+    if (event.category === "shop" || event.category === "todo" || event.category === "personal") return;
+    if (event.visibility === "private") return;
     if (event.status !== "declined") return;
     openCommentDialog(event.my_decline_comment || "", async (comment) => {
       try {
@@ -1101,9 +1394,6 @@ $("list").addEventListener("click", async (ev) => {
     });
     return;
   }
-
-  const toggle = ev.target.closest("[data-cl-toggle]");
-  if (toggle) { toggleItem(eventId, toggle.closest("[data-item]").dataset.item, toggle.checked); return; }
 
   const remove = ev.target.closest("[data-cl-remove]");
   if (remove) { removeItem(eventId, remove.closest("[data-item]").dataset.item); return; }
@@ -1135,11 +1425,15 @@ $("list").addEventListener("click", async (ev) => {
   if (ev.target.closest(".edit-btn")) { openForm(event); return; }
 
   if (ev.target.closest(".delete-btn")) {
-    confirmDialog("Удалить это событие?", async () => {
+    const isGrouped = !!event.group_key;
+    const confirmText = isGrouped
+      ? "Удалить эту личную запись? Она удалится со ВСЕХ дней этой серии."
+      : "Удалить это событие?";
+    confirmDialog(confirmText, async () => {
       try {
         await api(`/events/${eventId}`, { method: "DELETE" });
         tg.HapticFeedback?.notificationOccurred("success");
-        toast("Удалено");
+        toast(isGrouped ? "Удалено со всех дней" : "Удалено");
         etag = null;
         await load();
       } catch (e) { toast(e.message); }
@@ -1152,12 +1446,23 @@ $("list").addEventListener("keydown", (ev) => {
     ev.preventDefault();
     addItem(ev.target.closest(".card").dataset.id, ev.target);
   }
+  if ((ev.key === "Enter" || ev.key === " ") && ev.target.matches?.("[data-cl-row]")) {
+    ev.preventDefault();
+    const row = ev.target;
+    const card = row.closest(".card");
+    const cb = row.querySelector("[data-cl-toggle]");
+    const newChecked = !(cb && cb.checked);
+    if (cb) cb.checked = newChecked;
+    toggleItem(card.dataset.id, row.dataset.item, newChecked);
+  }
 });
 
 let formChecklist = [];
 let selectedIdeas = [];
 let currentCategoryTitle = "";
 let formColor = "";
+let formPersonalColor = "";
+let formBulkDates = null;
 const todoColorsFallback = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
 
 function availableTodoColors() {
@@ -1181,13 +1486,24 @@ function updateFormSections() {
   const isShop = cat === "shop";
   const isSex = cat === "sex";
   const isTodo = cat === "todo";
+  const isPersonal = cat === "personal";
+  const isBulk = !!formBulkDates && isPersonal;
 
   $("checklistSection").hidden = !(isShop && !editingEvent);
   $("sexIdeasSection").hidden = !isSex;
   $("todoSection").hidden = !isTodo;
+  $("personalSection").hidden = !isPersonal;
+  $("bulkDatesBox").hidden = !isBulk;
+  $("dateTimeRow").hidden = isBulk;
+
+  if (isBulk) {
+    $("bulkDatesList").textContent = formBulkDates
+      .map(d => DAY_SHORT.format(parse(d))).join(", ");
+  }
 
   if (isShop && !editingEvent) renderFormChecklist();
   if (isTodo) renderTodoSection();
+  if (isPersonal) renderPersonalColors();
   updateRemindAvailability();
 
   if (!isSex) {
@@ -1207,11 +1523,30 @@ function renderTodoSection() {
   ).join("");
 }
 
+function renderPersonalColors() {
+  const box = $("personalColors");
+  if (!box) return;
+  const colors = availableTodoColors();
+  const active = formPersonalColor || colors[5];
+  box.innerHTML = colors.map(c =>
+    `<button type="button" class="todo-color${c === active ? " selected" : ""}"
+             data-personal-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
+  ).join("");
+}
+
 $("todoColors").addEventListener("click", (e) => {
   const b = e.target.closest("[data-color]");
   if (!b) return;
   formColor = b.dataset.color;
   renderTodoSection();
+  tg.HapticFeedback?.selectionChanged();
+});
+
+$("personalColors").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-personal-color]");
+  if (!b) return;
+  formPersonalColor = b.dataset.personalColor;
+  renderPersonalColors();
   tg.HapticFeedback?.selectionChanged();
 });
 
@@ -1396,12 +1731,24 @@ document.addEventListener("keydown", (e) => {
   if (!$("ideasOverlay").hidden) closeIdeasModal();
 });
 
-function openForm(event = null) {
+function openForm(event = null, opts = {}) {
   editingEvent = event;
-  $("sheetTitle").textContent = event ? "Редактировать событие" : "Новое событие";
-  $("fDate").value = event ? event.date : selected;
-  $("fTime").value = event ? event.time : "";
-  $("fCategory").value = event ? event.category : "rest";
+  formBulkDates = opts.bulkDates || null;
+
+  const initialCat = opts.forceCategory || (event ? event.category : "rest");
+  $("sheetTitle").textContent = formBulkDates
+    ? "Новая личная запись"
+    : (event ? "Редактировать событие" : "Новое событие");
+
+  if (formBulkDates) {
+    $("fDate").value = formBulkDates[0];
+    $("fTime").value = "";
+  } else {
+    $("fDate").value = event ? event.date : selected;
+    $("fTime").value = event ? event.time : "";
+  }
+
+  $("fCategory").value = initialCat;
   $("fDesc").value = event ? event.description || "" : "";
 
   selectedIdeas = [];
@@ -1416,7 +1763,13 @@ function openForm(event = null) {
     $("fRemindBefore").value = "0";
   }
 
-  $("fHint").hidden = !event || (event && (event.category === "shop" || event.category === "todo"));
+  if (event && event.category === "personal") {
+    formPersonalColor = event.color || availableTodoColors()[5];
+  } else {
+    formPersonalColor = availableTodoColors()[5];
+  }
+
+  $("fHint").hidden = true;
   $("fError").textContent = "";
   formChecklist = [];
   updateFormSections();
@@ -1427,6 +1780,7 @@ function openForm(event = null) {
 function closeForm() {
   $("overlay").hidden = true;
   tg.BackButton?.hide();
+  if (multiSelect.days.size) clearMultiSelect();
 }
 
 $("add").onclick = () => openForm();
@@ -1437,6 +1791,7 @@ try { tg.BackButton?.onClick(() => { if (!$("overlay").hidden) closeForm(); }); 
 
 $("fCategory").addEventListener("change", () => {
   if ($("fCategory").value !== "shop") formChecklist = [];
+  if (formBulkDates && $("fCategory").value !== "personal") formBulkDates = null;
   updateFormSections();
 });
 $("fTime").addEventListener("change", updateRemindAvailability);
@@ -1473,6 +1828,35 @@ $("fChecklist").addEventListener("click", (ev) => {
 
 $("fSave").onclick = async () => {
   const category = $("fCategory").value;
+
+  if (formBulkDates && category === "personal") {
+    if (!formPersonalColor) { $("fError").textContent = "Выберите цвет"; return; }
+    const payload = {
+      dates: formBulkDates,
+      description: $("fDesc").value.trim(),
+      color: formPersonalColor,
+    };
+    const btn = $("fSave");
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Сохраняем…";
+    try {
+      await api("/events/bulk", { method: "POST", body: payload });
+      tg.HapticFeedback?.notificationOccurred("success");
+      toast(`Создано ${formBulkDates.length} записей`);
+      formBulkDates = null;
+      closeForm();
+      etag = null;
+      await load();
+    } catch (e) {
+      $("fError").textContent = e.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+    return;
+  }
+
   const date = $("fDate").value;
   if (!date) { $("fError").textContent = "Выберите дату"; return; }
 
@@ -1493,6 +1877,10 @@ $("fSave").onclick = async () => {
     payload.color = formColor;
     const rb = parseInt($("fRemindBefore").value, 10) || 0;
     payload.remind_before = ($("fTime").value ? rb : 0);
+  }
+  if (category === "personal") {
+    if (!formPersonalColor) { $("fError").textContent = "Выберите цвет"; return; }
+    payload.color = formPersonalColor;
   }
   if (!editingEvent && category === "shop") payload.checklist = formChecklist;
 
@@ -1561,7 +1949,7 @@ $("copy").onclick = async () => {
   catch { toast(state.invite_link); }
 };
 $("unlink").onclick = () => {
-  confirmDialog("Отвязать партнёра? Все общие события будут удалены безвозвратно.", async () => {
+  confirmDialog("Отвязать партнёра? Все общие события будут удалены безвозвратно. Личные записи останутся у вас.", async () => {
     try {
       await api("/unlink", { method: "POST" });
       toast("Партнёр отвязан");
@@ -1572,7 +1960,6 @@ $("unlink").onclick = () => {
   });
 };
 
-// Скрываем FAB при скролле вниз, показываем при скролле вверх
 (() => {
   const fab = $("add");
   let lastY = window.scrollY;
@@ -1610,7 +1997,8 @@ $("unlink").onclick = () => {
 
 function startPolling() {
   const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
-    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl && !dragState;
+    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl && !dragState
+    && multiSelect.days.size === 0;
   setInterval(() => { if (canPoll()) load(true); }, 15000);
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
