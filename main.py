@@ -1223,7 +1223,8 @@ async def api_upload_photo(request: web.Request) -> web.Response:
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post("https://api.z.ai/api/paas/v4/chat/completions", json=payload, headers=headers) as resp:
+           async with aiohttp.ClientSession() as session:
+        async with session.post("https://open.bigmodel.cn/api/paas/v4/chat/completions", json=payload, headers=headers) as resp:
             if resp.status != 200:
                 err = await resp.text()
                 logging.error(f"GLM API error: {err}")
