@@ -53,20 +53,31 @@
     border: 2px solid transparent; font-size: 16px; user-select: none; }
   .day.today .num { color: var(--accent); font-weight: 700; }
   .day.selected { border-color: var(--accent); background: var(--bg2); }
+
+  /* personal-события заливают плитку дня целиком выбранным цветом */
+  .day.has-personal {
+    background: var(--personal-bg);
+    border-color: var(--personal-border);
+  }
+  .day.has-personal .num { color: var(--personal-fg, #fff); font-weight: 700; }
+  .day.has-personal.today .num { color: var(--personal-fg, #fff); }
+  .day.has-personal .dots .dot.pending,
+  .day.has-personal .dots .dot.expired { border-color: var(--personal-fg, #fff); }
+  .day.has-personal.selected {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  /* мультивыделение перекрывает personal-заливку — идёт после неё */
   .day.multi {
     background: var(--multi-color-bg);
     border-color: var(--multi-color-border);
   }
   .day.multi .num { color: #fff; font-weight: 700; }
-  .day.range-start,
-  .day.range-end { border-radius: 12px; }
 
   .day .todo-bar { position: absolute; top: 2px; left: 6px; right: 6px; height: 4px;
     display: flex; gap: 1px; border-radius: 2px; overflow: hidden; }
   .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
-  .day .personal-bar { position: absolute; bottom: 2px; left: 6px; right: 6px; height: 4px;
-    display: flex; gap: 1px; border-radius: 2px; overflow: hidden; }
-  .day .personal-bar i { flex: 1; min-width: 3px; height: 100%; }
 
   .dots { display: flex; gap: 3px; height: 7px; }
   .dot { width: 7px; height: 7px; border-radius: 2px; }
@@ -644,7 +655,6 @@ async function bootstrap() {
 
 function render() {
   $("welcome").hidden = state.has_partner;
-  // Приложение показываем всегда, если есть партнёр или личные события без пары.
   const canShowApp = state.has_partner || (state.events && state.events.length > 0);
   $("app").hidden = !canShowApp;
   if (canShowApp) { renderCalendar(); renderList(); renderStats(); }
@@ -676,7 +686,6 @@ function dayHasDate(event, date) {
 function renderCalendar() {
   $("title").textContent = MONTHS_FORMAT.format(new Date(view.y, view.m, 1));
 
-  // Раскладываем события по дням с учётом диапазона
   const byDay = {};
   for (const e of state.events) {
     const start = e.date;
@@ -707,11 +716,16 @@ function renderCalendar() {
           `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
       : "";
 
+    // personal-события на этот день — берём последнее по id, чтобы свежее перекрывало
     const personals = list.filter(x => x.category === "personal").slice().sort((a, b) => a.id - b.id);
-    const personalBar = personals.length
-      ? `<span class="personal-bar" aria-hidden="true">${personals.map(t =>
-          `<i style="background:${esc(t.color || "#6366f1")}"></i>`).join("")}</span>`
-      : "";
+    const personalLast = personals.length ? personals[personals.length - 1] : null;
+    let personalStyle = "";
+    let hasPersonal = false;
+    if (personalLast) {
+      hasPersonal = true;
+      const rgb = hexToRgb(personalLast.color || "#6366f1");
+      personalStyle = ` style="--personal-bg: rgb(${rgb}); --personal-border: rgb(${rgb}); --personal-fg: #fff;"`;
+    }
 
     const nonTodos = list.filter(x => x.category !== "todo" && x.category !== "personal");
     const st = new Set(nonTodos.map(statusKey));
@@ -723,13 +737,13 @@ function renderCalendar() {
       date === today && "today",
       date === selected && "selected",
       isMulti && "multi",
+      hasPersonal && "has-personal",
     ].filter(Boolean).join(" ");
     const label = DAY_FORMAT.format(new Date(view.y, view.m, d))
       + (list.length ? `, событий: ${list.length}` : "");
-    html += `<button class="${cls}" data-date="${date}" aria-pressed="${isMulti}" aria-label="${esc(label)}">
+    html += `<button class="${cls}" data-date="${date}" aria-pressed="${isMulti}" aria-label="${esc(label)}"${personalStyle}>
                ${todoBar}
                <span class="num">${d}</span><span class="dots" aria-hidden="true">${dots}</span>
-               ${personalBar}
              </button>`;
   }
   $("grid").innerHTML = html;
@@ -915,7 +929,7 @@ function renderList() {
 }
 
 // === Мультивыделение + свайп на календаре ===
-let gridDrag = null; // { pointerId, anchor, swiping }
+let gridDrag = null;
 
 function dayElFromPoint(x, y) {
   const el = document.elementFromPoint(x, y);
@@ -938,7 +952,7 @@ function updateMultiColorPreview() {
   const hex = formColor || "";
   if (hex) {
     const rgb = hexToRgb(hex);
-    document.documentElement.style.setProperty("--multi-color-bg", `rgba(${rgb}, .35)`);
+    document.documentElement.style.setProperty("--multi-color-bg", `rgb(${rgb})`);
     document.documentElement.style.setProperty("--multi-color-border", `rgb(${rgb})`);
   } else {
     document.documentElement.style.setProperty("--multi-color-bg", "rgba(99, 102, 241, .25)");
@@ -970,7 +984,6 @@ $("grid").addEventListener("pointermove", (ev) => {
   const dy = Math.abs(ev.clientY - gridDrag.startY);
   if (!gridDrag.moved && (dx > 6 || dy > 6)) gridDrag.moved = true;
 
-  // Свайп по горизонтали — мультивыделение; вертикаль отдаём браузеру (скролл).
   if (dx <= dy && dy > 6) return;
 
   const day = dayElFromPoint(ev.clientX, ev.clientY);
@@ -1001,18 +1014,15 @@ function endGridDrag(ev) {
   if (!dates.length) return;
 
   if (wasSwipe && dates.length > 0) {
-    // свайп → открываем форму personal с диапазоном
     openFormForRange(dates);
     return;
   }
-  // обычный тап — переключаем selected (показываем список)
   if (!moved) {
     selected = dates[0];
     tg.HapticFeedback?.selectionChanged();
     renderCalendar();
     renderList();
   } else {
-    // сброс, если это был не свайп и не тап
     clearMultiSelect();
   }
 }
@@ -1681,7 +1691,6 @@ function openFormForRange(dates) {
   $("fDate").value = start;
   $("fPersonalDateEnd").value = end !== start ? end : "";
   updateFormSections();
-  // Прокрутить к форме
   $("sheetTitle").textContent = `Новое личное событие · ${fmtRange(start, end)}`;
 }
 
@@ -1854,7 +1863,6 @@ $("unlink").onclick = () => {
   });
 };
 
-// Скрываем FAB при скролле вниз, показываем при скролле вверх
 (() => {
   const fab = $("add");
   let lastY = window.scrollY;
