@@ -444,6 +444,17 @@ async def _m14_checklist_position() -> None:
     await _exec("UPDATE checklist_items SET position = id WHERE position = 0")
 
 
+async def _m15_personal_section() -> None:
+    # date_end — дата окончания диапазона (для мульти-выделения). '' = одиночное событие.
+    await _add_column("events", "date_end", "TEXT NOT NULL DEFAULT ''")
+    # visibility — 'shared' или 'private'. Осмысленно только для category='personal'.
+    await _add_column("events", "visibility", "TEXT NOT NULL DEFAULT 'shared'")
+    await _exec(
+        "CREATE INDEX IF NOT EXISTS idx_events_personal "
+        "ON events (created_by, category, date)"
+    )
+
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -459,6 +470,7 @@ MIGRATIONS = [
     (12, _m12_todo_remind_before),
     (13, _m13_idea_responses),
     (14, _m14_checklist_position),
+    (15, _m15_personal_section),
 ]
 
 
@@ -583,9 +595,9 @@ async def unlink_partners(user_id: int) -> int | None:
 
 
 EVENT_COLS = (
-    "id, created_by, target_user, title, description, date, time, category, status, "
+    "id, created_by, target_user, title, description, date, date_end, time, category, status, "
     "color, priority, reaction, reaction_by, decline_comment, "
-    "decline_comment_creator, decline_comment_target, remind_before"
+    "decline_comment_creator, decline_comment_target, remind_before, visibility"
 )
 
 
@@ -599,17 +611,19 @@ def _event(r) -> dict | None:
         "title": r[3],
         "description": r[4],
         "date": r[5],
-        "time": r[6] or "",
-        "category": r[7],
-        "status": r[8],
-        "color": r[9] or "",
-        "priority": r[10] or "",
-        "reaction": r[11] or "",
-        "reaction_by": r[12],
-        "decline_comment": r[13] or "",
-        "decline_comment_creator": r[14] or "",
-        "decline_comment_target": r[15] or "",
-        "remind_before": r[16] or 0,
+        "date_end": r[6] or r[5],
+        "time": r[7] or "",
+        "category": r[8],
+        "status": r[9],
+        "color": r[10] or "",
+        "priority": r[11] or "",
+        "reaction": r[12] or "",
+        "reaction_by": r[13],
+        "decline_comment": r[14] or "",
+        "decline_comment_creator": r[15] or "",
+        "decline_comment_target": r[16] or "",
+        "remind_before": r[17] or 0,
+        "visibility": r[18] or "shared",
         "reactions": {},
         "idea_responses": {},
         "checklist": [],
@@ -659,14 +673,16 @@ async def count_events_created(user_id: int) -> int:
 
 
 async def create_event(created_by, target_user, title, description, date, event_time, category,
-                       items=None, color: str = "", remind_before: int = 0):
-    initial_status = "accepted" if category in ("shop", "todo") else "pending"
+                       items=None, color: str = "", remind_before: int = 0,
+                       date_end: str = "", visibility: str = "shared"):
+    initial_status = "accepted" if category in ("shop", "todo", "personal") else "pending"
     rs = await _exec(
         "INSERT INTO events "
-        "(created_by, target_user, title, description, date, time, category, status, color, remind_before) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (created_by, target_user, title, description, date, event_time, category, initial_status,
-         color, remind_before),
+        "(created_by, target_user, title, description, date, date_end, time, category, status, "
+        " color, remind_before, visibility) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (created_by, target_user, title, description, date, date_end, event_time, category,
+         initial_status, color, remind_before, visibility),
     )
     event_id = rs.last_id
     if items and category == "shop":
@@ -683,11 +699,19 @@ async def create_event(created_by, target_user, title, description, date, event_
 
 
 async def list_events_range(user_id: int, start: str, end: str) -> list[dict]:
+    """Возвращает события, пересекающиеся с [start, end).
+    Personal-события видит только автор (или партнёр, если visibility='shared')."""
     rs = await _exec(
         f"SELECT {EVENT_COLS} FROM events "
-        "WHERE (created_by = ? OR target_user = ?) AND date >= ? AND date < ? "
+        "WHERE ("
+        "  (COALESCE(NULLIF(date_end, ''), date) >= ? AND date < ?) "
+        ") AND ("
+        "  (category != 'personal' AND (created_by = ? OR target_user = ?)) "
+        "  OR (category = 'personal' AND created_by = ?) "
+        "  OR (category = 'personal' AND visibility = 'shared' AND target_user = ?) "
+        ") "
         "ORDER BY date, time, id",
-        (user_id, user_id, start, end),
+        (start, end, user_id, user_id, user_id, user_id),
     )
     return await _attach_items([_event(r) for r in rs.rows])
 
@@ -703,17 +727,28 @@ async def set_status(event_id: int, status: str) -> None:
     await _exec("UPDATE events SET status = ? WHERE id = ?", (status, event_id))
 
 
+async def set_visibility(event_id: int, visibility: str) -> None:
+    await _exec("UPDATE events SET visibility = ? WHERE id = ?", (visibility, event_id))
+
+
+async def set_target_user(event_id: int, target_user: int) -> None:
+    await _exec("UPDATE events SET target_user = ? WHERE id = ?", (target_user, event_id))
+
+
 async def update_event(event_id, title, description, date, event_time, category, reset_status: bool,
-                       color: str = "", remind_before: int = 0):
+                       color: str = "", remind_before: int = 0,
+                       date_end: str = "", visibility: str | None = None):
     stmts = [
         (
-            "UPDATE events SET title = ?, description = ?, date = ?, time = ?, category = ?, "
-            "color = ?, remind_before = ?, "
+            "UPDATE events SET title = ?, description = ?, date = ?, date_end = ?, time = ?, "
+            "category = ?, color = ?, remind_before = ?, "
             "status = CASE WHEN ? THEN 'pending' ELSE status END WHERE id = ?",
-            (title, description, date, event_time, category, color, remind_before,
+            (title, description, date, date_end, event_time, category, color, remind_before,
              int(reset_status), event_id),
         )
     ]
+    if visibility is not None:
+        stmts.append(("UPDATE events SET visibility = ? WHERE id = ?", (visibility, event_id)))
     if reset_status:
         stmts.append(("DELETE FROM reminders WHERE event_id = ?", (event_id,)))
         stmts.append(("DELETE FROM idea_responses WHERE event_id = ?", (event_id,)))
@@ -972,18 +1007,24 @@ async def get_archived_ideas(limit: int = 2000) -> list[dict]:
 
 
 async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
+    """Кандидаты на напоминание. Private personal-события — только автору.
+    Для multi-day personal дата окончания = COALESCE(date_end, date)."""
     rs = await _exec(
-        "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz, e.category, e.remind_before "
+        "SELECT e.id, e.title, e.date, COALESCE(NULLIF(e.date_end,''), e.date) AS date_end, "
+        "       e.time, u.telegram_id, u.tz, e.category, e.remind_before, e.visibility "
         "FROM events e JOIN users u ON u.telegram_id IN (e.created_by, e.target_user) "
-        "WHERE e.status = 'accepted' AND e.date BETWEEN ? AND ? "
-        "AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.event_id = e.id AND r.user_id = u.telegram_id)",
+        "WHERE e.status = 'accepted' "
+        "  AND COALESCE(NULLIF(e.date_end,''), e.date) BETWEEN ? AND ? "
+        "  AND (e.visibility = 'shared' OR u.telegram_id = e.created_by) "
+        "  AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.event_id = e.id AND r.user_id = u.telegram_id)",
         (date_from, date_to),
     )
     return [
         {
-            "event_id": r[0], "title": r[1], "date": r[2], "time": r[3] or "",
-            "user_id": r[4], "tz": r[5] or "", "category": r[6] or "",
-            "remind_before": r[7] or 0,
+            "event_id": r[0], "title": r[1], "date": r[2], "date_end": r[3],
+            "time": r[4] or "", "user_id": r[5], "tz": r[6] or "",
+            "category": r[7] or "", "remind_before": r[8] or 0,
+            "visibility": r[9] or "shared",
         }
         for r in rs.rows
     ]
@@ -1035,7 +1076,11 @@ async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
 
 
 async def pair_stats(user_id: int, partner_id: int) -> dict:
-    pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
+    """Статистика пары. Private personal-события не учитываются."""
+    pair = (
+        "((created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)) "
+        "AND visibility = 'shared'"
+    )
     pargs = (user_id, partner_id, partner_id, user_id)
 
     rs_total = await _exec(f"SELECT COUNT(*) FROM events WHERE {pair}", pargs)
