@@ -101,8 +101,12 @@
 
   .fab { position: fixed; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom, 0px));
     width: 58px; height: 58px; border-radius: 50%; background: var(--accent); color: var(--accent-text);
-    font-size: 32px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+    font-size: 32px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.25);
+    transition: transform .18s ease, opacity .18s ease;
+    z-index: 5; }
   .fab:active { transform: scale(.94); }
+  .fab.fab-hidden { transform: translateY(120px); opacity: 0; pointer-events: none; }
+  @media (prefers-reduced-motion: reduce) { .fab { transition: none; } }
 
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; z-index: 10; }
   .sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
@@ -165,11 +169,6 @@
     touch-action: none; letter-spacing: -3px; }
   .cl-drag:active { cursor: grabbing; opacity: .9; }
 
-  .cl-move { display: flex; flex-direction: column; gap: 0; flex-shrink: 0; }
-  .cl-move button { font-size: 12px; line-height: 1; padding: 2px 6px; opacity: .55; border-radius: 4px; }
-  .cl-move button:hover { opacity: 1; background: rgba(0,0,0,.06); }
-  .cl-move button:disabled { opacity: .15; pointer-events: none; }
-
   .checklist-item.dragging { opacity: .4; background: rgba(36,129,204,.1); }
 
   .cl-empty { padding: 8px 0; font-size: 14px; color: var(--hint); }
@@ -180,6 +179,8 @@
   .card .checklist { background: rgba(0,0,0,.03); border-radius: 10px; padding: 4px 10px; }
   .card .checklist-item .cl-text { font-size: 15px; }
   .card .cl-add-row { margin-top: 8px; }
+  /* Запас снизу для карточек с чек-листом, чтобы FAB не перекрывал последний пункт */
+  .card:has(.checklist) { padding-bottom: 24px; }
 
   .welcome { text-align: center; padding: 60px 8px 0; }
   .welcome h1 { font-size: 24px; margin: 0 0 10px; }
@@ -644,14 +645,9 @@ function renderCalendar() {
 }
 
 function checklistHtml(e) {
-  const list = e.checklist || [];
-  const items = list.map((it, idx) => `
-    <div class="checklist-item${it.checked ? " checked" : ""}" data-item="${it.id}" data-idx="${idx}">
+  const items = (e.checklist || []).map((it) => `
+    <div class="checklist-item${it.checked ? " checked" : ""}" data-item="${it.id}">
       <span class="cl-drag" data-cl-drag role="button" tabindex="0" aria-label="Перетащить">⋮⋮</span>
-      <div class="cl-move">
-        <button type="button" data-cl-up ${idx === 0 ? "disabled" : ""} aria-label="Выше">▲</button>
-        <button type="button" data-cl-down ${idx === list.length - 1 ? "disabled" : ""} aria-label="Ниже">▼</button>
-      </div>
       <input type="checkbox" ${it.checked ? "checked" : ""} data-cl-toggle aria-label="${esc(it.text)}">
       <span class="cl-text">${esc(it.text)}</span>
       <button type="button" class="cl-remove" data-cl-remove aria-label="Удалить пункт «${esc(it.text)}»">×</button>
@@ -1011,7 +1007,7 @@ function onDragEnd() {
   if (!ev) { renderList(); return; }
   const oldOrder = ev.checklist.map(x => String(x.id));
   if (idsNow.join(",") === oldOrder.join(",")) {
-    return; // ничего не поменялось
+    return;
   }
   moveItem(eventId, itemId, newPos);
 }
@@ -1066,20 +1062,6 @@ $("list").addEventListener("click", async (ev) => {
   const eventId = card.dataset.id;
   const event = findEvent(eventId);
   if (!event) return;
-
-  // Кнопки ↑/↓ перестановки
-  const upBtn = ev.target.closest("[data-cl-up]");
-  const downBtn = ev.target.closest("[data-cl-down]");
-  if (upBtn || downBtn) {
-    const item = ev.target.closest(".checklist-item");
-    const items = [...card.querySelectorAll(".checklist-item")];
-    const curIdx = items.indexOf(item);
-    const newPos = upBtn ? curIdx - 1 : curIdx + 1;
-    if (newPos >= 0 && newPos < items.length) {
-      moveItem(eventId, item.dataset.item, newPos);
-    }
-    return;
-  }
 
   const ideaYes = ev.target.closest("[data-idea-yes]");
   const ideaNo  = ev.target.closest("[data-idea-no]");
@@ -1589,6 +1571,43 @@ $("unlink").onclick = () => {
     } catch (e) { toast(e.message); }
   });
 };
+
+// Скрываем FAB при скролле вниз, показываем при скролле вверх
+(() => {
+  const fab = $("add");
+  let lastY = window.scrollY;
+  let ticking = false;
+  const THRESHOLD = 8;
+
+  function onScroll() {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const y = window.scrollY;
+      const diff = y - lastY;
+      if (y < 40) {
+        fab.classList.remove("fab-hidden");
+      } else if (diff > THRESHOLD) {
+        fab.classList.add("fab-hidden");
+      } else if (diff < -THRESHOLD) {
+        fab.classList.remove("fab-hidden");
+      }
+      lastY = y;
+      ticking = false;
+    });
+  }
+
+  window.addEventListener("scroll", onScroll, { passive: true });
+
+  // Показываем FAB, если открыт любой модал (чтобы не завис невидимым)
+  const observer = new MutationObserver(() => {
+    const anyOpen = !$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden;
+    if (anyOpen) fab.classList.remove("fab-hidden");
+  });
+  ["overlay", "ideasOverlay", "archiveOverlay"].forEach(id => {
+    observer.observe($(id), { attributes: true, attributeFilter: ["hidden"] });
+  });
+})();
 
 function startPolling() {
   const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
