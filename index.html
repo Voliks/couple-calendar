@@ -50,7 +50,8 @@
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
     border: 2px solid transparent; font-size: 16px;
     user-select: none; -webkit-user-select: none;
-    touch-action: pan-y; } /* вертикальный скролл страницы разрешён, горизонтальные/мульти-жесты нет */
+    touch-action: pan-y;
+    transition: background-color .12s ease; }
   .day.today .num { color: var(--accent); font-weight: 700; }
   .day.selected { border-color: var(--accent); background: var(--bg2); }
 
@@ -64,7 +65,6 @@
   .day.multi-selected { border-color: rgb(var(--personal)); background: rgba(var(--personal), .35); }
   .day.multi-selected .num { color: var(--text); font-weight: 700; }
 
-  /* Когда включён режим drag-выделения, запрещаем любой скролл по сетке */
   body.multi-dragging .grid { touch-action: none; }
   body.multi-dragging { overflow: hidden; }
 
@@ -527,13 +527,19 @@ let loaded = false;
 const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
 const monthCache = {};
 
-// ---- Мультивыделение дней ----
+// ---- Мультивыделение дней с long-press ----
+const LONG_PRESS_MS = 260;      // задержка перед активацией мультивыделения
+const MOVE_CANCEL_PX = 8;        // если сдвинулись больше — отменяем long-press (обычный скролл)
+
 const multiSelect = {
   active: false,
+  armed: false,            // long-press сработал, режим мультивыделения включён
   days: new Set(),
   startDate: null,
   drag: false,
   pointerId: null,
+  startX: 0,
+  startY: 0,
   longPressTimer: null,
 };
 
@@ -921,7 +927,7 @@ function renderList() {
   }
 }
 
-// ---- Мультивыделение дней ----
+// ---- Мультивыделение с long-press ----
 
 function dateFromEl(el) {
   if (!el) return null;
@@ -929,16 +935,30 @@ function dateFromEl(el) {
 }
 
 function clearMultiSelect() {
-  multiSelect.active = false;
-  multiSelect.days.clear();
-  multiSelect.startDate = null;
-  multiSelect.drag = false;
-  multiSelect.pointerId = null;
   if (multiSelect.longPressTimer) {
     clearTimeout(multiSelect.longPressTimer);
     multiSelect.longPressTimer = null;
   }
+  multiSelect.active = false;
+  multiSelect.armed = false;
+  multiSelect.days.clear();
+  multiSelect.startDate = null;
+  multiSelect.drag = false;
+  multiSelect.pointerId = null;
   document.body.classList.remove("multi-dragging");
+  updateMultiHint();
+  renderCalendar();
+}
+
+function armMultiSelect() {
+  multiSelect.longPressTimer = null;
+  if (!multiSelect.active || multiSelect.drag) return;   // уже отменили / уже drag
+  multiSelect.armed = true;
+  // Включаем режим выделения: показываем стартовый день и плашку
+  multiSelect.days.clear();
+  multiSelect.days.add(multiSelect.startDate);
+  document.body.classList.add("multi-dragging");
+  tg.HapticFeedback?.impactOccurred?.("medium");
   updateMultiHint();
   renderCalendar();
 }
@@ -957,80 +977,106 @@ function selectRange(fromDate, toDate) {
 
 const grid = $("grid");
 
-// Начало жеста
 grid.addEventListener("pointerdown", (ev) => {
   const dayEl = ev.target.closest(".day");
   if (!dayEl) return;
   const date = dateFromEl(dayEl);
   if (!date) return;
 
-  // Захватываем указатель на grid — тогда pointermove/up будут приходить сюда,
-  // даже если палец выйдет за пределы сетки.
   try { grid.setPointerCapture(ev.pointerId); } catch (e) {}
 
   multiSelect.active = true;
+  multiSelect.armed = false;
   multiSelect.pointerId = ev.pointerId;
   multiSelect.startDate = date;
+  multiSelect.startX = ev.clientX;
+  multiSelect.startY = ev.clientY;
   multiSelect.days.clear();
-  multiSelect.days.add(date);
   multiSelect.drag = false;
 
-  // Небольшая задержка: если пользователь не сдвинул палец — это будет обычный клик.
-  // Если сдвинул раньше — режим drag активируется в pointermove.
-  updateMultiHint();
-  renderCalendar();
+  // Ставим таймер: если через LONG_PRESS_MS палец всё ещё тут и не сдвинулся — включаем выделение
+  if (multiSelect.longPressTimer) clearTimeout(multiSelect.longPressTimer);
+  multiSelect.longPressTimer = setTimeout(armMultiSelect, LONG_PRESS_MS);
 });
 
-// Движение пальца
 grid.addEventListener("pointermove", (ev) => {
   if (!multiSelect.active || ev.pointerId !== multiSelect.pointerId) return;
-  // Для мыши: если кнопка не зажата — игнорируем
-  if (ev.pointerType === "mouse" && ev.buttons === 0) return;
 
+  const dx = ev.clientX - multiSelect.startX;
+  const dy = ev.clientY - multiSelect.startY;
+  const moved = Math.hypot(dx, dy);
+
+  // Если палец сдвинулся ДО активации long-press — это обычный скролл/клик,
+  // отменяем таймер и не выделяем ничего.
+  if (!multiSelect.armed) {
+    if (moved > MOVE_CANCEL_PX) {
+      if (multiSelect.longPressTimer) {
+        clearTimeout(multiSelect.longPressTimer);
+        multiSelect.longPressTimer = null;
+      }
+      multiSelect.active = false;
+      multiSelect.pointerId = null;
+      multiSelect.startDate = null;
+    }
+    return;
+  }
+
+  // Режим выделения включён — тянем диапазон
   const el = document.elementFromPoint(ev.clientX, ev.clientY);
   const dayEl = el ? el.closest(".day") : null;
   const date = dateFromEl(dayEl);
   if (!date) return;
 
-  // Если сдвинулись на другой день — включаем режим drag
-  if (!multiSelect.drag && date !== multiSelect.startDate) {
+  if (!multiSelect.drag) {
     multiSelect.drag = true;
-    document.body.classList.add("multi-dragging");
   }
-
-  if (!multiSelect.drag) return;
-
-  // Предотвращаем скролл/зум во время выделения
   if (ev.cancelable) ev.preventDefault();
 
-  selectRange(multiSelect.startDate, date);
+  if (date !== multiSelect.startDate) {
+    selectRange(multiSelect.startDate, date);
+  } else {
+    multiSelect.days.clear();
+    multiSelect.days.add(multiSelect.startDate);
+  }
   updateMultiHint();
   renderCalendar();
 }, { passive: false });
 
-// Отпускание пальца
-grid.addEventListener("pointerup", (ev) => {
+function finishPointer(ev, cancelled = false) {
   if (!multiSelect.active || ev.pointerId !== multiSelect.pointerId) return;
 
   try { grid.releasePointerCapture(ev.pointerId); } catch (e) {}
 
-  const wasDrag = multiSelect.drag;
+  if (multiSelect.longPressTimer) {
+    clearTimeout(multiSelect.longPressTimer);
+    multiSelect.longPressTimer = null;
+  }
+
+  const wasArmed = multiSelect.armed;
   const startDate = multiSelect.startDate;
+  const hadSelection = multiSelect.days.size > 0;
 
   multiSelect.active = false;
-  multiSelect.pointerId = null;
+  multiSelect.armed = false;
   multiSelect.drag = false;
+  multiSelect.pointerId = null;
   document.body.classList.remove("multi-dragging");
 
-  if (wasDrag) {
-    // Оставляем выделение — открываем форму
-    if (multiSelect.days.size > 0) {
-      openPersonalBulkForm();
-    }
+  if (cancelled) {
+    if (multiSelect.days.size) multiSelect.days.clear();
+    multiSelect.startDate = null;
+    updateMultiHint();
+    renderCalendar();
     return;
   }
 
-  // Обычный клик по дню — переключаем выбранную дату
+  if (wasArmed && hadSelection) {
+    // Открываем форму создания личных записей на выбранные дни
+    openPersonalBulkForm();
+    return;
+  }
+
+  // Иначе — обычный тап: выбрать день
   multiSelect.days.clear();
   multiSelect.startDate = null;
   updateMultiHint();
@@ -1040,18 +1086,10 @@ grid.addEventListener("pointerup", (ev) => {
     renderCalendar();
     renderList();
   }
-});
+}
 
-grid.addEventListener("pointercancel", () => {
-  multiSelect.active = false;
-  multiSelect.pointerId = null;
-  multiSelect.drag = false;
-  if (multiSelect.days.size === 1) multiSelect.days.clear();
-  multiSelect.startDate = null;
-  document.body.classList.remove("multi-dragging");
-  updateMultiHint();
-  renderCalendar();
-});
+grid.addEventListener("pointerup", (ev) => finishPointer(ev, false));
+grid.addEventListener("pointercancel", (ev) => finishPointer(ev, true));
 
 $("multiCancel").onclick = () => {
   clearMultiSelect();
@@ -1966,6 +2004,3 @@ function startPolling() {
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
 bootstrap();
-</script>
-</body>
-</html>
