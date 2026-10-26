@@ -489,12 +489,14 @@ def parse_event_payload(body: dict) -> dict:
         if remind_before and not event_time:
             raise ApiError("Напоминание возможно только если указано время")
         visibility = "shared"
-        date_end = ""
+        # date_end для todo разрешён (мультивыделение)
     else:
         color = ""
         remind_before = 0
         visibility = "shared"
-        date_end = ""
+        # date_end разрешён только для rest; для sex и shop — одиночный день
+        if category != "rest":
+            date_end = ""
 
     title = CATEGORY_TITLES.get(category, "Событие")
 
@@ -624,7 +626,6 @@ async def api_state(request: web.Request) -> web.Response:
         link = ""
     else:
         user = await db.ensure_invite(user)
-        # без партнёра пользователь всё равно должен видеть свои личные события
         events = await db.list_events_range(tg_user.id, start, end)
         link = invite_link(user["invite_code"])
 
@@ -667,7 +668,6 @@ async def api_create_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     user = await db.get_or_create_user(tg_user.id)
 
-    # personal можно создавать и без партнёра (это личные заметки)
     data = parse_event_payload(await read_json(request))
     if data["category"] != "personal" and not user["partner_id"]:
         raise ApiError("Сначала свяжитесь с партнёром", 409)
@@ -675,12 +675,10 @@ async def api_create_event(request: web.Request) -> web.Response:
     if await db.count_events_created(tg_user.id) >= db.MAX_EVENTS_PER_USER:
         raise ApiError("Достигнут лимит событий", 409)
 
-    # target_user: для private personal — автор; иначе партнёр
     is_private_personal = data["category"] == "personal" and data["visibility"] == "private"
     if is_private_personal:
         target_user = tg_user.id
     elif data["category"] == "personal":
-        # shared personal
         target_user = user["partner_id"] or tg_user.id
     else:
         target_user = user["partner_id"]
@@ -708,7 +706,6 @@ async def api_create_event(request: web.Request) -> web.Response:
                 f"{fmt_range(data['date'], data['date_end'])}{at}. "
                 "Откройте календарь, чтобы посмотреть.",
             )
-        # private — никому не сообщаем
     elif data["category"] == "todo":
         icon = CATEGORY_ICONS.get("todo", "📌")
         at = f" в {data['time']}" if data["time"] else ""
@@ -764,14 +761,12 @@ async def api_update_event(request: web.Request) -> web.Response:
         date_end=data["date_end"], visibility=data["visibility"],
     )
 
-    # Смена target_user при изменении видимости personal
     if data["category"] == "personal" and visibility_changed:
         partner_id = user["partner_id"]
         if data["visibility"] == "private":
             await db.set_target_user(event["id"], tg_user.id)
         else:
             await db.set_target_user(event["id"], partner_id or tg_user.id)
-        # уведомление партнёру
         if partner_id:
             if data["visibility"] == "shared":
                 notify(
@@ -1099,7 +1094,6 @@ async def send_due_reminders() -> None:
             )
             continue
 
-        # Обычное напоминание: в день начала (для multi-day — тоже в день начала)
         if local_now.strftime("%Y-%m-%d") != c["date"] or local_now.hour < REMINDER_HOUR:
             continue
         if not await db.mark_reminded(c["event_id"], c["user_id"]):
