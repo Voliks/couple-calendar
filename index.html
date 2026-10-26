@@ -54,7 +54,7 @@
   .day.today .num { color: var(--accent); font-weight: 700; }
   .day.selected { border-color: var(--accent); background: var(--bg2); }
 
-  /* personal-события заливают плитку дня полупрозрачным цветом */
+  /* заливка плитки дня (personal, а также todo/rest при диапазоне) */
   .day.has-personal {
     background: var(--personal-bg);
     border-color: var(--personal-border);
@@ -66,7 +66,7 @@
     outline-offset: -2px;
   }
 
-  /* мультивыделение перекрывает personal-заливку — идёт после неё */
+  /* мультивыделение перекрывает заливку — идёт после неё */
   .day.multi {
     background: var(--multi-color-bg);
     border-color: var(--multi-color-border);
@@ -739,23 +739,54 @@ function renderCalendar() {
     const date = fmt(view.y, view.m, d);
     const list = byDay[date] || [];
 
-    const todos = list.filter(x => x.category === "todo").slice().sort((a, b) => a.id - b.id);
+    // 1. personal — заливка цветом (высший приоритет)
+    const personals = list.filter(x => x.category === "personal").slice().sort((a, b) => a.id - b.id);
+    const personalLast = personals.length ? personals[personals.length - 1] : null;
+
+    // 2. todo с диапазоном — заливка цветом todo
+    const todoRange = list
+      .filter(x => x.category === "todo" && x.date_end && x.date_end !== x.date)
+      .sort((a, b) => a.id - b.id);
+    const todoRangeLast = todoRange.length ? todoRange[todoRange.length - 1] : null;
+
+    // 3. rest с диапазоном — заливка зелёным (accepted)
+    const restRange = list
+      .filter(x => x.category === "rest" && x.date_end && x.date_end !== x.date)
+      .sort((a, b) => a.id - b.id);
+    const restRangeLast = restRange.length ? restRange[restRange.length - 1] : null;
+
+    let personalStyle = "";
+    let hasPersonal = false;
+    let fillColor = "";
+    if (personalLast) {
+      hasPersonal = true;
+      fillColor = hexToRgb(personalLast.color || "#6366f1");
+    } else if (todoRangeLast) {
+      hasPersonal = true;
+      fillColor = hexToRgb(todoRangeLast.color || "#8b5cf6");
+    } else if (restRangeLast) {
+      hasPersonal = true;
+      fillColor = "34, 197, 94"; // зелёный accepted
+    }
+    if (hasPersonal) {
+      personalStyle = ` style="--personal-bg: rgba(${fillColor}, .28); --personal-border: rgba(${fillColor}, .55); --personal-fg: var(--text);"`;
+    }
+
+    // Полоска todo — только для одиночных (не диапазонных) todo
+    const todos = list
+      .filter(x => x.category === "todo" && !(x.date_end && x.date_end !== x.date))
+      .slice().sort((a, b) => a.id - b.id);
     const todoBar = todos.length
       ? `<span class="todo-bar" aria-hidden="true">${todos.map(t =>
           `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
       : "";
 
-    const personals = list.filter(x => x.category === "personal").slice().sort((a, b) => a.id - b.id);
-    const personalLast = personals.length ? personals[personals.length - 1] : null;
-    let personalStyle = "";
-    let hasPersonal = false;
-    if (personalLast) {
-      hasPersonal = true;
-      const rgb = hexToRgb(personalLast.color || "#6366f1");
-      personalStyle = ` style="--personal-bg: rgba(${rgb}, .28); --personal-border: rgba(${rgb}, .55); --personal-fg: var(--text);"`;
-    }
-
-    const nonTodos = list.filter(x => x.category !== "todo" && x.category !== "personal");
+    // Точки статуса — только для не-todo/personal и не rest-диапазона
+    const nonTodos = list.filter(x => {
+      if (x.category === "todo" || x.category === "personal") return false;
+      if (x.category === "rest" && x.date_end && x.date_end !== x.date) return false;
+      return true;
+    });
     const st = new Set(nonTodos.map(statusKey));
     const dots = ["pending", "accepted", "declined", "expired"]
       .filter((s) => st.has(s)).map((s) => `<i class="dot ${s}"></i>`).join("");
@@ -1765,7 +1796,7 @@ function openFormForRange(dates, category) {
   const start = sorted[0];
   const end = sorted[sorted.length - 1];
 
-  // Полный запрет диапазона для sex и shop: если пришёл диапазон — не открываем форму
+  // Полный запрет диапазона для sex и shop
   if ((category === "sex" || category === "shop") && end !== start) {
     toast("Для этой категории диапазон не поддерживается — выберите один день");
     clearMultiSelect();
