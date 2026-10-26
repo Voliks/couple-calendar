@@ -222,10 +222,11 @@ async def handle_voice_message(message: Message):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         prompt = f"""
         Сегодня {today}. Пользователь сказал: "{text}"
-        Преврати это в JSON для календаря. Выбери категорию из: rest, sex, shop, todo, personal.
-        Если категория shop, выдели продукты в массив "items". В title напиши "Список покупок".
-        Верни СТРОГО JSON без лишнего текста:
-        {{"category": "shop", "date": "{today}", "time": "", "title": "Список покупок", "items": ["хлеб", "молоко"]}}
+        Если пользователь просит добавить продукты в список покупок (даже если не называет дату), верни JSON с категорией "shop" и массивом "items" (сами продукты). 
+        Если это обычное событие, выбери категорию из: rest, sex, todo, personal. 
+        Верни СТРОГО JSON без лишнего текста. Примеры:
+        {{"category": "shop", "items": ["хлеб", "молоко"]}}
+        {{"category": "todo", "date": "{today}", "time": "15:00", "title": "Встреча"}}
         """
         
         payload = {
@@ -261,18 +262,63 @@ async def handle_voice_message(message: Message):
             cat = "rest"
             
         color = "#8b5cf6" if cat == "todo" else ""
-        
-        await db.create_event(
-            created_by=message.from_user.id,
-            target_user=user["partner_id"],
-            title=ev.get("title", "Событие")[:100],
-            description="Добавлено голосом",
-            date=ev.get("date", today),
-            event_time=ev.get("time", ""),
-            category=cat,
-            color=color,
-            items=[{"text": str(x)[:200], "checked": False} for x in ev.get("items", [])] if cat == "shop" else None
-        )
+        # Если это покупки
+        if cat == "shop":
+            raw_items = ev.get("items", [])
+            new_items = [str(x)[:200] for x in raw_items] if isinstance(raw_items, list) else []
+            
+            if not new_items:
+                await message.answer("Я не понял, какие продукты добавить.")
+                return
+
+            # Ищем самый ближайший список покупок (от сегодня и на 30 дней вперед)
+            from datetime import timedelta
+            start_date = today
+            end_date = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")
+            
+            events = await db.list_events_range(message.from_user.id, start_date, end_date)
+            
+            # Фильтруем только магазины и сортируем по дате
+            shops = [e for e in events if e["category"] == "shop"]
+            shops.sort(key=lambda x: x["date"])
+
+            if shops:
+                # Берем самый ближайший список
+                nearest_shop = shops[0]
+                for item_text in new_items:
+                    await db.add_item(nearest_shop["id"], item_text)
+                await message.answer(f"✅ Добавил {len(new_items)} продуктов в ближайший список на {fmt_date(nearest_shop['date'])}!")
+            else:
+                # Если списков вообще нет, создаем новый на сегодня
+                items_list = [{"text": t, "checked": False} for t in new_items]
+                await db.create_event(
+                    created_by=message.from_user.id,
+                    target_user=user["partner_id"],
+                    title="Список покупок",
+                    description="Создано голосом",
+                    date=today,
+                    event_time="",
+                    category="shop",
+                    color="",
+                    items=items_list
+                )
+                await message.answer(f"✅ Списков не было, создал новый на сегодня и добавил {len(new_items)} продуктов!")
+
+        else:
+            # Для остальных категорий (Дела, Отдых и т.д.) создаем обычное событие
+            await db.create_event(
+                created_by=message.from_user.id,
+                target_user=user["partner_id"],
+                title=ev.get("title", "Событие")[:100],
+                description="Добавлено голосом",
+                date=ev.get("date", today),
+                event_time=ev.get("time", ""),
+                category=cat,
+                color=color if cat == "todo" else "",
+                items=None
+            )
+            cat_name = CATEGORY_TITLES.get(cat, "Событие")
+            await message.answer(f"✅ Добавлено в «{cat_name}»:\n📅 {ev.get('date', today)} {ev.get('time', '')}\n📝 {ev.get('title')}")
         
         cat_name = CATEGORY_TITLES.get(cat, "Событие")
         await message.answer(f"✅ Добавлено в «{cat_name}»:\n📅 {ev.get('date')} {ev.get('time')}\n📝 {ev.get('title')}")
