@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import time
+import base64
+import aiohttp
 from collections import deque
 from datetime import date as date_cls, datetime, timedelta, timezone
 from functools import lru_cache
@@ -326,6 +328,117 @@ async def event_inline_action(call: CallbackQuery):
         pass
     await call.answer("Готово")
 
+@router.message(F.photo)
+async def handle_calendar_photo(message: Message):
+    # 1. Берем фото наилучшего качества
+    photo = message.photo[-1]
+    
+    # 2. Скачиваем файл из Telegram в память
+    file = await bot.get_file(photo.file_id)
+    file_bytes = await bot.download_file(file.file_path)
+    
+    # 3. Кодируем в Base64
+    b64_image = base64.b64encode(file_bytes.getvalue()).decode('utf-8')
+    
+    # 4. Отправляем в GLM
+    api_key = os.getenv("ZHIPU_API_KEY")
+    if not api_key:
+        await message.answer("Ошибка: не настроен ключ API.")
+        return
+
+    # Промпт: просим распознать события и вернуть JSON
+    prompt = """
+    Это фотография бумажного календаря. Найди все рукописные записи о событиях.
+    Верни ответ СТРОГО в формате JSON без лишнего текста, вот такой структурой:
+    [
+      {"date": "2026-10-27", "title": "Встреча с врачом", "time": "15:00"},
+      {"date": "2026-10-28", "title": "Купить хлеб", "time": ""}
+    ]
+    Если время не указано, оставь пустую строку. Если год не указан, используй 2026.
+    """
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": "glm-4.6v-flash",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
+                ]
+            }
+        ]
+    }
+
+    await message.answer("📸 Смотрю на календарь, это займет секунд 10...")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+           async with session.post("https://api.z.ai/api/paas/v4/chat/completions", json=payload, headers=headers) as resp:
+                if resp.status != 200:
+                    err = await resp.text()
+                    logging.error(f"GLM API error: {err}")
+                    await message.answer("Не удалось распознать фото. Попробуйте еще раз.")
+                    return
+                
+                data = await resp.json()
+                answer_text = data["choices"][0]["message"]["content"]
+                
+                # 5. Парсим JSON из ответа
+                import json
+                import re
+                # Ищем JSON-массив в тексте (на случай если нейросеть добавила markdown)
+                match = re.search(r'\[.*\]', answer_text, re.DOTALL)
+                if not match:
+                    await message.answer("Не смог разобрать ответ. Вот что увидел:\n" + answer_text)
+                    return
+                
+                events = json.loads(match.group(0))
+                
+                if not events:
+                    await message.answer("На фото не найдено событий.")
+                    return
+                
+                # 6. Добавляем в базу (используем существующую функцию из db.py)
+                user = await db.get_or_create_user(message.from_user.id)
+                if not user["partner_id"]:
+                    await message.answer("Сначала привяжите партнера, чтобы добавлять события.")
+                    return
+                
+                added_count = 0
+                for ev in events:
+                    title = ev.get("title", "Событие")[:50]
+                    date = ev.get("date", "")
+                    time_val = ev.get("time", "")
+                    
+                    # Простая валидация даты
+                    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
+                        continue
+                        
+                    # Используем create_event из db.py
+                    await db.create_event(
+                        created_by=message.from_user.id,
+                        target_user=user["partner_id"],
+                        title="📸 " + title,
+                        description="Добавлено с фото календаря",
+                        date=date,
+                        event_time=time_val,
+                        category="todo", # По умолчанию "Отдых", можно поменять
+                        color="#8b5cf6",          # Добавили фиолетовый цвет для "Дел"
+                        items=None
+                    )
+                    added_count += 1
+                
+                await message.answer(f"✅ Готово! Добавлено событий: {added_count}")
+                
+    except Exception as e:
+        logging.exception("Ошибка при обработке фото")
+        await message.answer("Произошла ошибка при обработке фото.")
 
 @router.error()
 async def on_error(event: ErrorEvent):
