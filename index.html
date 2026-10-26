@@ -528,12 +528,12 @@ const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
 const monthCache = {};
 
 // ---- Мультивыделение дней с long-press ----
-const LONG_PRESS_MS = 260;      // задержка перед активацией мультивыделения
-const MOVE_CANCEL_PX = 8;        // если сдвинулись больше — отменяем long-press (обычный скролл)
+const LONG_PRESS_MS = 260;
+const MOVE_CANCEL_PX = 8;
 
 const multiSelect = {
   active: false,
-  armed: false,            // long-press сработал, режим мультивыделения включён
+  armed: false,
   days: new Set(),
   startDate: null,
   drag: false,
@@ -952,9 +952,8 @@ function clearMultiSelect() {
 
 function armMultiSelect() {
   multiSelect.longPressTimer = null;
-  if (!multiSelect.active || multiSelect.drag) return;   // уже отменили / уже drag
+  if (!multiSelect.active || multiSelect.drag) return;
   multiSelect.armed = true;
-  // Включаем режим выделения: показываем стартовый день и плашку
   multiSelect.days.clear();
   multiSelect.days.add(multiSelect.startDate);
   document.body.classList.add("multi-dragging");
@@ -994,7 +993,6 @@ grid.addEventListener("pointerdown", (ev) => {
   multiSelect.days.clear();
   multiSelect.drag = false;
 
-  // Ставим таймер: если через LONG_PRESS_MS палец всё ещё тут и не сдвинулся — включаем выделение
   if (multiSelect.longPressTimer) clearTimeout(multiSelect.longPressTimer);
   multiSelect.longPressTimer = setTimeout(armMultiSelect, LONG_PRESS_MS);
 });
@@ -1006,8 +1004,6 @@ grid.addEventListener("pointermove", (ev) => {
   const dy = ev.clientY - multiSelect.startY;
   const moved = Math.hypot(dx, dy);
 
-  // Если палец сдвинулся ДО активации long-press — это обычный скролл/клик,
-  // отменяем таймер и не выделяем ничего.
   if (!multiSelect.armed) {
     if (moved > MOVE_CANCEL_PX) {
       if (multiSelect.longPressTimer) {
@@ -1021,15 +1017,12 @@ grid.addEventListener("pointermove", (ev) => {
     return;
   }
 
-  // Режим выделения включён — тянем диапазон
   const el = document.elementFromPoint(ev.clientX, ev.clientY);
   const dayEl = el ? el.closest(".day") : null;
   const date = dateFromEl(dayEl);
   if (!date) return;
 
-  if (!multiSelect.drag) {
-    multiSelect.drag = true;
-  }
+  if (!multiSelect.drag) multiSelect.drag = true;
   if (ev.cancelable) ev.preventDefault();
 
   if (date !== multiSelect.startDate) {
@@ -1071,12 +1064,10 @@ function finishPointer(ev, cancelled = false) {
   }
 
   if (wasArmed && hadSelection) {
-    // Открываем форму создания личных записей на выбранные дни
     openPersonalBulkForm();
     return;
   }
 
-  // Иначе — обычный тап: выбрать день
   multiSelect.days.clear();
   multiSelect.startDate = null;
   updateMultiHint();
@@ -2004,3 +1995,6 @@ function startPolling() {
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
 bootstrap();
+</script>
+</body>
+</html>
