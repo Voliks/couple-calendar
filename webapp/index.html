@@ -1,1 +1,184 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="api-base" content="https://couple-calendar-ycu9.onrender.com">
+<title>Календарь на двоих</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
 
+<section id="loading" class="loading" role="status">
+  <div class="spinner" id="loadingSpinner" aria-hidden="true"></div>
+  <p id="loadingHint">Подключаемся…</p>
+</section>
+
+<section id="welcome" class="welcome" hidden>
+  <h1>Календарь на двоих</h1>
+  <p>Чтобы начать, отправьте пригласительную ссылку второму человеку. Когда он откроет её в боте, вы будете связаны.</p>
+  <button class="btn primary" id="share">Отправить ссылку партнёру</button>
+  <button class="btn ghost" id="copy">Скопировать ссылку</button>
+</section>
+
+<main id="app" hidden>
+  <div class="cal-head">
+    <button class="nav" id="prev" aria-label="Предыдущий месяц">‹</button>
+    <div class="cal-title" id="title" role="button" tabindex="0" aria-label="Вернуться к текущему месяцу"></div>
+    <button class="nav" id="next" aria-label="Следующий месяц">›</button>
+    <button class="today-btn" id="todayBtn" aria-label="Сегодня">Сегодня</button>
+    <button class="today-btn" id="archiveBtn" aria-label="Архив дел">Архив</button>
+  </div>
+  <div class="weekdays" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
+  <div class="grid" id="grid"></div>
+
+  <div class="list-title" id="listTitle"></div>
+  <div id="list"></div>
+
+  <div id="statsBlock" class="stats" hidden>
+    <div class="stats-title">Статистика пары</div>
+    <div class="stats-grid" id="statsGrid"></div>
+  </div>
+
+  <button class="link-btn" id="unlink">Отвязать партнёра</button>
+  <button class="fab" id="add" aria-label="Добавить событие">+</button>
+</main>
+
+<div class="multi-hint" id="multiHint" hidden>
+  <span id="multiHintText">Выбрано дней: 0</span>
+  <button type="button" id="multiCancel">Отмена</button>
+  <button type="button" id="multiCreate">Создать</button>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <h2 id="sheetTitle">Новое событие</h2>
+
+    <div id="bulkDatesBox" class="bulk-dates-note" hidden>
+      <div><b>Личная запись на несколько дней</b></div>
+      <div class="bulk-dates-list" id="bulkDatesList"></div>
+    </div>
+
+    <div class="two" id="dateTimeRow">
+      <div>
+        <label for="fDate">Дата</label>
+        <input type="date" id="fDate">
+      </div>
+      <div>
+        <label for="fTime">Время</label>
+        <input type="time" id="fTime">
+      </div>
+    </div>
+
+    <label for="fCategory">Категория</label>
+    <select id="fCategory">
+      <option value="rest">Отдых</option>
+      <option value="sex">Секс</option>
+      <option value="shop">Магазин</option>
+      <option value="todo">Дела</option>
+      <option value="personal">Личное (только для меня)</option>
+    </select>
+
+    <div id="todoSection" hidden>
+      <label>Цвет</label>
+      <div class="todo-colors" id="todoColors"></div>
+      <label for="fRemindBefore">Напомнить за</label>
+      <select id="fRemindBefore">
+        <option value="0">Не напоминать</option>
+        <option value="5">5 минут</option>
+        <option value="15">15 минут</option>
+        <option value="30">30 минут</option>
+        <option value="60">1 час</option>
+        <option value="120">2 часа</option>
+        <option value="180">3 часа</option>
+        <option value="360">6 часов</option>
+        <option value="720">12 часов</option>
+        <option value="1440">1 день</option>
+        <option value="2880">2 дня</option>
+      </select>
+      <div class="hint" id="remindHint">Напоминание работает, только если указано время события.</div>
+    </div>
+
+    <div id="personalSection" hidden>
+      <label>Цвет</label>
+      <div class="todo-colors" id="personalColors"></div>
+      <div class="hint">Личные записи видны только вам.</div>
+    </div>
+
+    <div id="sexIdeasSection" hidden>
+      <label>Идеи (откройте категорию — можно выбрать несколько)</label>
+      <div class="sex-ideas-buttons">
+        <button type="button" class="sex-idea-trigger" data-title="🔥 Страстная ночь">
+          <span>🔥 Страстная ночь</span><span class="trg-count" data-count hidden></span>
+        </button>
+        <button type="button" class="sex-idea-trigger" data-title="🌹 Романтический вечер">
+          <span>🌹 Романтический вечер</span><span class="trg-count" data-count hidden></span>
+        </button>
+        <button type="button" class="sex-idea-trigger" data-title="✨ Эксперименты и фантазии">
+          <span>✨ Эксперименты и фантазии</span><span class="trg-count" data-count hidden></span>
+        </button>
+      </div>
+
+      <div id="chosenBlock" class="chosen-block" hidden>
+        <div class="chosen-title">Выбрано: <span id="chosenCount">0</span></div>
+        <div class="chosen-chips" id="chosenChips"></div>
+      </div>
+    </div>
+
+    <div id="checklistSection" hidden>
+      <label>Список покупок</label>
+      <div class="checklist" id="fChecklist"></div>
+      <div class="cl-add-row">
+        <input type="text" id="fClInput" placeholder="Добавить пункт..." maxlength="200" aria-label="Новый пункт списка">
+        <button type="button" id="fClAdd" aria-label="Добавить пункт">+</button>
+      </div>
+    </div>
+
+    <label for="fDesc">Описание (необязательно)</label>
+    <textarea id="fDesc" maxlength="2000"></textarea>
+
+    <div class="hint" id="fHint" hidden>Если изменить дату, время или категорию, партнёру придётся ответить заново.</div>
+
+    <div class="error" id="fError" role="alert"></div>
+    <div class="row">
+      <button class="btn ghost" id="fCancel">Отмена</button>
+      <button class="btn primary" id="fSave">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="ideas-overlay" id="ideasOverlay" hidden>
+  <div class="ideas-sheet" role="dialog" aria-modal="true">
+    <div class="ideas-head">
+      <h3 id="ideasModalTitle">Идеи</h3>
+      <button type="button" class="ideas-add-toggle" id="addIdeaToggle">+ Добавить</button>
+    </div>
+    <div class="ideas-hint">Отметьте одну или несколько идей — они появятся в блоке «Выбрано».</div>
+
+    <div class="idea-form" id="ideaForm" hidden>
+      <input type="text" id="newIdeaInput" placeholder="Текст новой идеи..." maxlength="300" aria-label="Новая идея">
+      <button type="button" id="addIdeaBtn">ОК</button>
+    </div>
+
+    <div class="ideas-list" id="ideasContainer"></div>
+
+    <button type="button" class="ideas-done" id="ideasDone">Готово</button>
+  </div>
+</div>
+
+<div class="overlay" id="archiveOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true">
+    <h2>Архив дел</h2>
+    <div id="archiveList"></div>
+    <div class="row">
+      <button class="btn ghost" id="archiveClose" style="grid-column: 1 / -1;">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script src="/app.js" defer></script>
+</body>
+</html>
