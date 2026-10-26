@@ -59,12 +59,10 @@
     display: flex; gap: 1px; border-radius: 2px; overflow: hidden; z-index: 1; }
   .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
 
-  .day.has-personal { background: rgba(var(--personal), .15); }
-  .day.has-personal.selected { background: rgba(var(--personal), .22); border-color: var(--accent); }
-  .day.personal-dot::before {
-    content: ""; position: absolute; left: 4px; right: 4px; bottom: 3px; height: 3px;
-    border-radius: 2px; background: var(--personal-fill, rgb(var(--personal))); z-index: 1;
-  }
+  /* Личные записи: заливка дня + лёгкий маркер, чтобы отличать от «Дел» */
+  .day.has-personal { background: rgba(var(--personal), .22); }
+  .day.has-personal.selected { background: rgba(var(--personal), .32); border-color: var(--accent); }
+  .day.has-personal .num { position: relative; z-index: 2; }
 
   .day.multi-selected { border-color: rgb(var(--personal)); background: rgba(var(--personal), .35); }
   .day.multi-selected .num { color: var(--text); font-weight: 700; }
@@ -698,21 +696,14 @@ function renderCalendar() {
     const date = fmt(view.y, view.m, d);
     const list = byDay[date] || [];
 
-    // Полоски дел (todo) над числом
     const todos = list.filter(x => x.category === "todo").slice().sort((a, b) => a.id - b.id);
     const todoBar = todos.length
       ? `<span class="todo-bar" aria-hidden="true">${todos.map(t =>
           `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
       : "";
 
-    // Личные записи — заливка дня + маркер снизу
     const personals = list.filter(x => x.category === "personal");
     const hasPersonal = personals.length > 0;
-    let personalStyle = "";
-    if (hasPersonal) {
-      const col = personals[0].color || "#64748b";
-      personalStyle = `--personal-fill:${esc(col)};`;
-    }
 
     const nonTodos = list.filter(x => x.category !== "todo" && x.category !== "personal");
     const st = new Set(nonTodos.map(statusKey));
@@ -725,14 +716,13 @@ function renderCalendar() {
       date === today && "today",
       date === selected && "selected",
       hasPersonal && "has-personal",
-      hasPersonal && "personal-dot",
       ms && "multi-selected",
     ].filter(Boolean).join(" ");
 
     const label = DAY_FORMAT.format(new Date(view.y, view.m, d))
       + (list.length ? `, событий: ${list.length}` : "");
 
-    html += `<button class="${cls}" data-date="${date}" style="--c:var(--personal);${personalStyle}" aria-pressed="${date === selected}" aria-label="${esc(label)}">
+    html += `<button class="${cls}" data-date="${date}" aria-pressed="${date === selected}" aria-label="${esc(label)}">
                ${todoBar}
                <span class="num">${d}</span><span class="dots" aria-hidden="true">${dots}</span></button>`;
   }
@@ -1425,11 +1415,15 @@ $("list").addEventListener("click", async (ev) => {
   if (ev.target.closest(".edit-btn")) { openForm(event); return; }
 
   if (ev.target.closest(".delete-btn")) {
-    confirmDialog("Удалить это событие?", async () => {
+    const isGrouped = !!event.group_key;
+    const confirmText = isGrouped
+      ? "Удалить эту личную запись? Она удалится со ВСЕХ дней этой серии."
+      : "Удалить это событие?";
+    confirmDialog(confirmText, async () => {
       try {
         await api(`/events/${eventId}`, { method: "DELETE" });
         tg.HapticFeedback?.notificationOccurred("success");
-        toast("Удалено");
+        toast(isGrouped ? "Удалено со всех дней" : "Удалено");
         etag = null;
         await load();
       } catch (e) { toast(e.message); }
