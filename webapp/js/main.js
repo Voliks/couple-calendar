@@ -154,7 +154,6 @@ function startPolling() {
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
 $("scanBtn").onclick = () => {
-  // Если Telegram WebApp доступен, показываем нативный попап
   if (tg.showPopup) {
     tg.showPopup({
       title: "Добавить фото",
@@ -166,16 +165,71 @@ $("scanBtn").onclick = () => {
       ]
     }, (buttonId) => {
       if (buttonId === "camera") {
-        openFileInput(true);  // true = камера
+        openRealCamera(); // Новая функция
       } else if (buttonId === "gallery") {
-        openFileInput(false); // false = галерея
+        openFileInput(false);
       }
     });
   } else {
-    // Fallback для обычного браузера
     openFileInput(false);
   }
 };
+
+// Функция для настоящей камеры
+async function openRealCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: { facingMode: "environment" } 
+    });
+    
+    // Создаем оверлей
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;z-index:100;background:#000;display:flex;flex-direction:column;";
+    overlay.innerHTML = `
+      <video id="camPreview" autoplay playsinline style="flex:1;object-fit:cover;"></video>
+      <div style="padding:20px;display:flex;justify-content:center;gap:20px;background:rgba(0,0,0,0.8);">
+        <button id="camCancel" style="padding:10px 20px;border-radius:10px;background:#444;color:#fff;border:none;">Отмена</button>
+        <button id="camShoot" style="padding:10px 30px;border-radius:10px;background:#2481cc;color:#fff;border:none;font-weight:bold;">Снять</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    
+    const video = overlay.querySelector("#camPreview");
+    video.srcObject = stream;
+    
+    overlay.querySelector("#camCancel").onclick = () => {
+      stream.getTracks().forEach(t => t.stop());
+      overlay.remove();
+    };
+    
+    overlay.querySelector("#camShoot").onclick = async () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext("2d").drawImage(video, 0, 0);
+      
+      canvas.toBlob(async (blob) => {
+        stream.getTracks().forEach(t => t.stop());
+        overlay.remove();
+        
+        const file = new File([blob], "camera.jpg", { type: "image/jpeg" });
+        
+        toast("Отправляем фото...");
+        try {
+          const res = await uploadPhoto(file);
+          toast(`Готово! Добавлено ${res.added} событий`);
+          await load();
+        } catch (err) {
+          toast(err.message);
+        }
+      }, "image/jpeg", 0.8);
+    };
+  } catch (err) {
+    console.error("Camera error:", err);
+    toast("Не удалось открыть камеру. Выберите фото из галереи.");
+    openFileInput(false); // Fallback
+  }
+}
 
 function openFileInput(useCamera) {
   const input = $("photoInput");
