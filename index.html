@@ -292,6 +292,21 @@
     padding: 12px; border-radius: 12px; background: var(--bg2); cursor: pointer; }
   .public-check input { width: 20px; height: 20px; accent-color: var(--accent); padding: 0; flex-shrink: 0; }
   .public-check .pc-text { flex: 1; font-size: 14px; }
+
+  /* Выбор категории после выделения */
+  .cat-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; z-index: 15; }
+  .cat-sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px)); animation: up .18s ease-out;
+    max-height: 85vh; overflow-y: auto; }
+  .cat-sheet h2 { margin: 0 0 6px; font-size: 19px; }
+  .cat-range { font-size: 13px; color: var(--hint); margin-bottom: 14px; }
+  .cat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .cat-btn { display: flex; align-items: center; gap: 10px; padding: 14px; border-radius: 14px;
+    background: var(--bg2); font-weight: 600; font-size: 15px; text-align: left; }
+  .cat-btn:active { background: rgba(36,129,204,.2); }
+  .cat-btn .cat-icon { font-size: 22px; line-height: 1; }
+  .cat-cancel { width: 100%; margin-top: 14px; padding: 12px; border-radius: 12px;
+    background: transparent; color: var(--hint); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -330,6 +345,22 @@
   <button class="link-btn" id="unlink">Отвязать партнёра</button>
   <button class="fab" id="add" aria-label="Добавить событие">+</button>
 </main>
+
+<!-- Выбор категории после выделения -->
+<div class="cat-overlay" id="catOverlay" hidden>
+  <div class="cat-sheet" role="dialog" aria-modal="true" aria-labelledby="catTitle">
+    <h2 id="catTitle">Что создаём?</h2>
+    <div class="cat-range" id="catRange"></div>
+    <div class="cat-grid">
+      <button type="button" class="cat-btn" data-cat="rest"><span class="cat-icon">🌿</span>Отдых</button>
+      <button type="button" class="cat-btn" data-cat="sex"><span class="cat-icon">🔥</span>Секс</button>
+      <button type="button" class="cat-btn" data-cat="shop"><span class="cat-icon">🛒</span>Магазин</button>
+      <button type="button" class="cat-btn" data-cat="todo"><span class="cat-icon">📌</span>Дела</button>
+      <button type="button" class="cat-btn" data-cat="personal"><span class="cat-icon">📝</span>Личное</button>
+    </div>
+    <button type="button" class="cat-cancel" id="catCancel">Отмена</button>
+  </div>
+</div>
 
 <div class="overlay" id="overlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
@@ -714,7 +745,6 @@ function renderCalendar() {
           `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
       : "";
 
-    // personal-события на этот день — берём последнее по id, чтобы свежее перекрывало
     const personals = list.filter(x => x.category === "personal").slice().sort((a, b) => a.id - b.id);
     const personalLast = personals.length ? personals[personals.length - 1] : null;
     let personalStyle = "";
@@ -962,7 +992,7 @@ $("grid").addEventListener("pointerdown", (ev) => {
   if (ev.button !== undefined && ev.button !== 0) return;
   const day = ev.target.closest(".day");
   if (!day) return;
-  if (!$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden) return;
+  if (!$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden || !$("catOverlay").hidden) return;
 
   gridDrag = {
     pointerId: ev.pointerId,
@@ -1011,24 +1041,71 @@ function endGridDrag(ev) {
 
   if (!dates.length) return;
 
-  if (wasSwipe && dates.length > 0) {
-    openFormForRange(dates);
+  if (wasSwipe || !moved) {
+    selected = dates[0];
+    renderList();
+    openCategoryPicker(dates);
     return;
   }
-  if (!moved) {
-    selected = dates[0];
-    tg.HapticFeedback?.selectionChanged();
-    renderCalendar();
-    renderList();
-  } else {
-    clearMultiSelect();
-  }
+  clearMultiSelect();
 }
 $("grid").addEventListener("pointerup", endGridDrag);
 $("grid").addEventListener("pointercancel", (ev) => {
   if (!gridDrag || gridDrag.pointerId !== ev.pointerId) return;
   gridDrag = null;
   clearMultiSelect();
+});
+
+// === Выбор категории после выделения ===
+let pendingRange = [];
+
+function openCategoryPicker(dates) {
+  if (!dates.length) return;
+  const sorted = [...dates].sort();
+  pendingRange = sorted;
+  const start = sorted[0];
+  const end = sorted[sorted.length - 1];
+  const isRange = end !== start;
+
+  $("catRange").textContent = !isRange
+    ? DAY_FORMAT.format(parse(start))
+    : `${fmtRange(start, end)} · ${sorted.length} ${pluralDays(sorted.length)}`;
+
+  // Для диапазона (2+ дня) полностью скрываем sex и shop
+  document.querySelectorAll(".cat-btn").forEach(btn => {
+    const cat = btn.dataset.cat;
+    btn.hidden = isRange && (cat === "sex" || cat === "shop");
+  });
+
+  $("catOverlay").hidden = false;
+  tg.BackButton?.show();
+}
+
+function pluralDays(n) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return "день";
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return "дня";
+  return "дней";
+}
+
+function closeCategoryPicker() {
+  $("catOverlay").hidden = true;
+  if (!$("overlay").hidden) tg.BackButton?.show(); else tg.BackButton?.hide();
+  pendingRange = [];
+}
+
+$("catCancel").onclick = () => { closeCategoryPicker(); clearMultiSelect(); };
+$("catOverlay").addEventListener("click", (e) => {
+  if (e.target === $("catOverlay")) { closeCategoryPicker(); clearMultiSelect(); }
+});
+
+document.querySelectorAll(".cat-btn").forEach(btn => {
+  btn.onclick = () => {
+    const cat = btn.dataset.cat;
+    const dates = [...pendingRange];
+    $("catOverlay").hidden = true;
+    openFormForRange(dates, cat);
+  };
 });
 
 function shiftMonth(delta) {
@@ -1371,6 +1448,7 @@ let formChecklist = [];
 let selectedIdeas = [];
 let currentCategoryTitle = "";
 let formColor = "";
+let formDateEnd = "";
 const todoColorsFallback = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
 
 function availableTodoColors() {
@@ -1637,6 +1715,7 @@ $("ideasOverlay").addEventListener("click", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  if (!$("catOverlay").hidden) { closeCategoryPicker(); clearMultiSelect(); return; }
   if (!$("ideasOverlay").hidden && !$("ideaForm").hidden) { hideIdeaForm(); return; }
   if (!$("ideasOverlay").hidden) closeIdeasModal();
 });
@@ -1670,6 +1749,7 @@ function openForm(event = null) {
     $("fPersonalPublic").checked = false;
   }
 
+  formDateEnd = event ? (event.date_end && event.date_end !== event.date ? event.date_end : "") : "";
   $("fHint").hidden = !event || (event && (event.category === "shop" || event.category === "todo" || event.category === "personal"));
   $("fError").textContent = "";
   formChecklist = [];
@@ -1679,22 +1759,39 @@ function openForm(event = null) {
   tg.BackButton?.show();
 }
 
-function openFormForRange(dates) {
+function openFormForRange(dates, category) {
   if (!dates.length) return;
   const sorted = [...dates].sort();
   const start = sorted[0];
   const end = sorted[sorted.length - 1];
+
+  // Полный запрет диапазона для sex и shop: если пришёл диапазон — не открываем форму
+  if ((category === "sex" || category === "shop") && end !== start) {
+    toast("Для этой категории диапазон не поддерживается — выберите один день");
+    clearMultiSelect();
+    return;
+  }
+
   openForm();
-  $("fCategory").value = "personal";
+  $("fCategory").value = category;
   $("fDate").value = start;
-  $("fPersonalDateEnd").value = end !== start ? end : "";
+  formDateEnd = end !== start ? end : "";
+  if (category === "personal") {
+    $("fPersonalDateEnd").value = formDateEnd;
+  }
   updateFormSections();
-  $("sheetTitle").textContent = `Новое личное событие · ${fmtRange(start, end)}`;
+
+  const catLabel = CATEGORIES[category]?.label || "";
+  const rangeLabel = formDateEnd
+    ? `${fmtRange(start, formDateEnd)} · ${sorted.length} ${pluralDays(sorted.length)}`
+    : DAY_FORMAT.format(parse(start));
+  $("sheetTitle").textContent = `Новое · ${catLabel} · ${rangeLabel}`;
 }
 
 function closeForm() {
   $("overlay").hidden = true;
   tg.BackButton?.hide();
+  formDateEnd = "";
   clearMultiSelect();
 }
 
@@ -1702,7 +1799,10 @@ $("add").onclick = () => openForm();
 $("fCancel").onclick = closeForm;
 $("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeForm(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("overlay").hidden) closeForm(); });
-try { tg.BackButton?.onClick(() => { if (!$("overlay").hidden) closeForm(); }); } catch (e) {}
+try { tg.BackButton?.onClick(() => {
+  if (!$("catOverlay").hidden) { closeCategoryPicker(); clearMultiSelect(); return; }
+  if (!$("overlay").hidden) closeForm();
+}); } catch (e) {}
 
 $("fCategory").addEventListener("change", () => {
   if ($("fCategory").value !== "shop") formChecklist = [];
@@ -1764,7 +1864,7 @@ $("fSave").onclick = async () => {
     const rb = parseInt($("fRemindBefore").value, 10) || 0;
     payload.remind_before = ($("fTime").value ? rb : 0);
     payload.visibility = "shared";
-    payload.date_end = "";
+    payload.date_end = formDateEnd || "";
   }
 
   if (category === "personal") {
@@ -1781,6 +1881,11 @@ $("fSave").onclick = async () => {
     } else {
       payload.date_end = "";
     }
+  }
+
+  // Диапазон разрешён только для rest. sex и shop — только один день.
+  if (category === "rest") {
+    payload.date_end = formDateEnd || "";
   }
 
   if (!editingEvent && category === "shop") payload.checklist = formChecklist;
@@ -1888,17 +1993,18 @@ $("unlink").onclick = () => {
   window.addEventListener("scroll", onScroll, { passive: true });
 
   const observer = new MutationObserver(() => {
-    const anyOpen = !$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden;
+    const anyOpen = !$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden || !$("catOverlay").hidden;
     if (anyOpen) fab.classList.remove("fab-hidden");
   });
-  ["overlay", "ideasOverlay", "archiveOverlay"].forEach(id => {
+  ["overlay", "ideasOverlay", "archiveOverlay", "catOverlay"].forEach(id => {
     observer.observe($(id), { attributes: true, attributeFilter: ["hidden"] });
   });
 })();
 
 function startPolling() {
   const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
-    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl && !dragState && !gridDrag;
+    && $("archiveOverlay").hidden && $("catOverlay").hidden
+    && pendingOps === 0 && !reactionPickerEl && !dragState && !gridDrag;
   setInterval(() => { if (canPoll()) load(true); }, 15000);
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
