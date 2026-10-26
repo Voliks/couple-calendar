@@ -33,9 +33,11 @@ load_dotenv()
 import db
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-blue.vercel.app").rstrip("/")
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-ycu9.onrender.com").rstrip("/")
 PORT = int(os.getenv("PORT", "8080"))
-INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
+
+# Возвращаемся к одному файлу index.html в корне
+INDEX_FILE = Path(__file__).resolve().parent / "index.html"
 
 REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
 SHOW_TITLES = os.getenv("NOTIFY_SHOW_TITLES", "0") == "1"
@@ -45,6 +47,7 @@ CATEGORY_TITLES = {
     "sex": "Секс",
     "shop": "Магазин",
     "todo": "Дела",
+    "personal": "Личное",
 }
 
 CATEGORY_ICONS = {
@@ -52,6 +55,7 @@ CATEGORY_ICONS = {
     "sex": "🔥",
     "shop": "🛒",
     "todo": "📌",
+    "personal": "🔒",
 }
 
 SEX_IDEA_CATEGORIES = {
@@ -76,7 +80,7 @@ ALLOWED_ORIGINS = {_origin(WEBAPP_URL)} | {
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
-CATEGORIES = {"rest", "sex", "shop", "todo"}
+CATEGORIES = {"rest", "sex", "shop", "todo", "personal"}
 INIT_DATA_MAX_AGE = 24 * 3600
 
 RATE_LIMIT = 40
@@ -154,10 +158,8 @@ def _humanize_minutes(m: int) -> str:
     if m < 60:
         return f"{m} мин"
     if m < 1440:
-        h = m // 60
-        return f"{h} ч"
-    d = m // 1440
-    return f"{d} дн"
+        return f"{m // 60} ч"
+    return f"{m // 1440} дн"
 
 
 @lru_cache(maxsize=256)
@@ -181,8 +183,6 @@ def rate_limit(uid: int) -> None:
     if len(q) >= RATE_LIMIT:
         raise ApiError("Слишком много запросов, подождите минуту", 429)
     q.append(now)
-    if not q:
-        _rate_hits.pop(uid, None)
 
 
 @router.message(CommandStart())
@@ -239,7 +239,8 @@ async def cmd_unlink(message: Message):
         await message.answer("У вас нет партнёра — отвязывать нечего.")
         return
     await message.answer(
-        "Отвязать партнёра? Все общие события будут удалены безвозвратно.",
+        "Отвязать партнёра? Все общие события будут удалены безвозвратно. "
+        "Личные записи останутся только у вас.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -263,7 +264,9 @@ async def unlink_confirm(call: CallbackQuery):
     if partner is None:
         await call.message.edit_text("У вас нет партнёра.")
     else:
-        await call.message.edit_text("Готово: связь разорвана, общие события удалены.")
+        await call.message.edit_text(
+            "Готово: связь разорвана, общие события удалены. Личные записи сохранены."
+        )
         notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
     await call.answer()
 
@@ -282,11 +285,15 @@ async def event_inline_action(call: CallbackQuery):
         await call.answer("Событие не найдено", show_alert=True)
         return
 
+    if event.get("visibility") == "private":
+        await call.answer("Это личная запись — она недоступна", show_alert=True)
+        return
+
     if call.from_user.id != event["target_user"]:
         await call.answer("Отвечать может только приглашённый", show_alert=True)
         return
 
-    if event["category"] in ("shop", "todo"):
+    if event["category"] in ("shop", "todo", "personal"):
         await call.answer("Это не требует ответа", show_alert=True)
         return
 
@@ -418,6 +425,18 @@ def _extract_idea_lines(description: str) -> list[str]:
     return out
 
 
+def _normalize_date(s: str) -> str:
+    if not isinstance(s, str) or not DATE_RE.match(s):
+        raise ApiError("Некорректная дата")
+    try:
+        year = date_cls.fromisoformat(s).year
+    except ValueError:
+        raise ApiError("Некорректная дата")
+    if not 2000 <= year <= 2100:
+        raise ApiError("Некорректная дата")
+    return s
+
+
 def parse_event_payload(body: dict) -> dict:
     description = str(body.get("description", "")).strip()
     date = str(body.get("date", ""))
@@ -434,24 +453,19 @@ def parse_event_payload(body: dict) -> dict:
         raise ApiError("Неизвестная категория")
     if len(description) > 2000:
         raise ApiError("Слишком длинный текст")
-    if not DATE_RE.match(date):
-        raise ApiError("Некорректная дата")
-    try:
-        year = date_cls.fromisoformat(date).year
-    except ValueError:
-        raise ApiError("Некорректная дата")
-    if not 2000 <= year <= 2100:
-        raise ApiError("Некорректная дата")
+    _normalize_date(date)
     if event_time and not TIME_RE.match(event_time):
         raise ApiError("Некорректное время")
 
-    if category == "todo":
+    if category in ("todo", "personal"):
         if color not in db.TODO_COLORS:
-            raise ApiError("Выберите цвет для дела")
+            raise ApiError("Выберите цвет")
         if remind_before not in ALLOWED_REMIND_BEFORE:
             raise ApiError("Недопустимое время напоминания")
         if remind_before and not event_time:
             raise ApiError("Напоминание возможно только если указано время")
+        if category == "personal":
+            remind_before = 0
     else:
         color = ""
         remind_before = 0
@@ -470,6 +484,40 @@ def parse_event_payload(body: dict) -> dict:
     }
 
 
+def parse_bulk_personal_payload(body: dict) -> dict:
+    dates_raw = body.get("dates")
+    if not isinstance(dates_raw, list) or not dates_raw:
+        raise ApiError("Выберите хотя бы один день")
+    if len(dates_raw) > db.MAX_BULK_DATES:
+        raise ApiError(f"Слишком много дней (максимум {db.MAX_BULK_DATES})")
+
+    seen = set()
+    dates: list[str] = []
+    for d in dates_raw:
+        nd = _normalize_date(str(d))
+        if nd in seen:
+            continue
+        seen.add(nd)
+        dates.append(nd)
+    dates.sort()
+
+    description = str(body.get("description", "")).strip()
+    if len(description) > 2000:
+        raise ApiError("Слишком длинный текст")
+
+    color = str(body.get("color", "")).strip()
+    if color not in db.TODO_COLORS:
+        raise ApiError("Выберите цвет")
+
+    return {
+        "title": CATEGORY_TITLES["personal"],
+        "description": description,
+        "category": "personal",
+        "color": color,
+        "dates": dates,
+    }
+
+
 def event_to_dict(e: dict, uid: int) -> dict:
     is_creator = e["created_by"] == uid
     partner_id = e["target_user"] if is_creator else e["created_by"]
@@ -479,6 +527,7 @@ def event_to_dict(e: dict, uid: int) -> dict:
     idea_responses = e.get("idea_responses", {}) or {}
 
     overall = e["status"]
+    visibility = e.get("visibility", "pair")
 
     idea_lines = _extract_idea_lines(e["description"]) if e["category"] == "sex" else []
     ideas_out = []
@@ -505,6 +554,7 @@ def event_to_dict(e: dict, uid: int) -> dict:
         not is_creator
         and overall == "pending"
         and len(ideas_out) > 0
+        and visibility == "pair"
     )
 
     return {
@@ -515,6 +565,8 @@ def event_to_dict(e: dict, uid: int) -> dict:
         "time": e["time"],
         "category": e["category"],
         "status": e["status"],
+        "visibility": visibility,
+        "group_key": e.get("group_key", "") or "",
         "color": e.get("color", ""),
         "remind_before": e.get("remind_before", 0),
         "reaction_mine": my_reaction,
@@ -538,6 +590,8 @@ async def member_event(request: web.Request, uid: int) -> dict:
     if event is None:
         raise ApiError("Событие не найдено", 404)
     if uid not in (event["created_by"], event["target_user"]):
+        raise ApiError("Нет доступа", 403)
+    if event.get("visibility") == "private" and event["created_by"] != uid:
         raise ApiError("Нет доступа", 403)
     return event
 
@@ -569,12 +623,12 @@ async def api_state(request: web.Request) -> web.Response:
 
     start, end = parse_month(request.query.get("month"))
     has_partner = bool(user["partner_id"])
+
+    events = await db.list_events_range(tg_user.id, start, end)
     if has_partner:
-        events = await db.list_events_range(tg_user.id, start, end)
         link = ""
     else:
         user = await db.ensure_invite(user)
-        events = []
         link = invite_link(user["invite_code"])
 
     try:
@@ -615,10 +669,22 @@ async def api_state(request: web.Request) -> web.Response:
 async def api_create_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     user = await db.get_or_create_user(tg_user.id)
+
+    data = parse_event_payload(await read_json(request))
+
+    if data["category"] == "personal":
+        ids = await db.create_personal_events(
+            tg_user.id, [data["date"]], data["title"],
+            data["description"], data["color"],
+        )
+        if not ids:
+            raise ApiError("Не удалось создать запись")
+        event = await db.get_event(ids[0])
+        return web.json_response(event_to_dict(event, tg_user.id), status=201)
+
     if not user["partner_id"]:
         raise ApiError("Сначала свяжитесь с партнёром", 409)
 
-    data = parse_event_payload(await read_json(request))
     if await db.count_events_created(tg_user.id) >= db.MAX_EVENTS_PER_USER:
         raise ApiError("Достигнут лимит событий", 409)
 
@@ -626,44 +692,63 @@ async def api_create_event(request: web.Request) -> web.Response:
         tg_user.id, user["partner_id"], data["title"], data["description"],
         data["date"], data["time"], data["category"], data["items"],
         color=data["color"], remind_before=data["remind_before"],
+        visibility="pair",
     )
 
     if data["category"] == "shop":
-        notify(
-            user["partner_id"],
-            f"🛒 Партнёр добавил список покупок на {fmt_date(data['date'])}. "
-            "Откройте календарь, чтобы посмотреть.",
-        )
+        notify(user["partner_id"], f"🛒 Партнёр добавил список покупок на {fmt_date(data['date'])}. Откройте календарь, чтобы посмотреть.")
     elif data["category"] == "todo":
         icon = CATEGORY_ICONS.get("todo", "📌")
         at = f" в {data['time']}" if data["time"] else ""
-        extra = ""
-        if data["time"] and data["remind_before"]:
-            extra = f" (напомню за {_humanize_minutes(data['remind_before'])})"
-        notify(
-            user["partner_id"],
-            f"{icon} Новое дело на {fmt_date(data['date'])}{at}.{extra} "
-            "Откройте календарь, чтобы посмотреть.",
-        )
+        extra = f" (напомню за {_humanize_minutes(data['remind_before'])})" if data["time"] and data["remind_before"] else ""
+        notify(user["partner_id"], f"{icon} Новое дело на {fmt_date(data['date'])}{at}.{extra} Откройте календарь, чтобы посмотреть.")
     else:
         icon = CATEGORY_ICONS.get(data["category"], "➕")
-        notify(
-            user["partner_id"],
-            f"{icon} Новое событие на {fmt_date(data['date'])}"
-            f"{(' в ' + data['time']) if data['time'] else ''}. "
-            "Ответьте прямо здесь или откройте календарь.",
-            reply_markup=event_reply_keyboard(event["id"]),
-        )
+        notify(user["partner_id"], f"{icon} Новое событие на {fmt_date(data['date'])}{(' в ' + data['time']) if data['time'] else ''}. Ответьте прямо здесь или откройте календарь.", reply_markup=event_reply_keyboard(event["id"]))
     return web.json_response(event_to_dict(event, tg_user.id), status=201)
+
+
+async def api_create_personal_bulk(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    await db.get_or_create_user(tg_user.id)
+
+    data = parse_bulk_personal_payload(await read_json(request))
+
+    total = await db.count_events_created(tg_user.id)
+    if total + len(data["dates"]) > db.MAX_EVENTS_PER_USER:
+        raise ApiError("Достигнут лимит событий", 409)
+
+    ids = await db.create_personal_events(
+        tg_user.id, data["dates"], data["title"],
+        data["description"], data["color"],
+    )
+    events = []
+    for eid in ids:
+        e = await db.get_event(eid)
+        if e:
+            events.append(event_to_dict(e, tg_user.id))
+    return web.json_response({"events": events}, status=201)
 
 
 async def api_update_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
-    if event["category"] != "todo" and event["created_by"] != tg_user.id:
-        raise ApiError("Редактировать событие может только его автор", 403)
+
+    is_private = event.get("visibility") == "private"
+    is_personal = event["category"] == "personal"
+
+    if is_private or is_personal:
+        if event["created_by"] != tg_user.id:
+            raise ApiError("Редактировать личную запись может только её автор", 403)
+    else:
+        if event["category"] != "todo" and event["created_by"] != tg_user.id:
+            raise ApiError("Редактировать событие может только его автор", 403)
 
     data = parse_event_payload(await read_json(request))
+
+    if (is_private or is_personal) and data["category"] != event["category"]:
+        raise ApiError("Нельзя изменить тип личной записи")
+
     identity_changed = (
         data["title"], data["category"], data["date"], data["time"]
     ) != (event["title"], event["category"], event["date"], event["time"])
@@ -673,39 +758,50 @@ async def api_update_event(request: web.Request) -> web.Response:
     if not changed:
         return web.json_response(event_to_dict(event, tg_user.id))
 
-    reset = identity_changed and data["category"] not in ("shop", "todo")
+    reset = identity_changed and data["category"] not in ("shop", "todo", "personal")
     updated = await db.update_event(
         event["id"], data["title"], data["description"], data["date"],
         data["time"], data["category"], reset_status=reset,
         color=data["color"], remind_before=data["remind_before"],
     )
+
+    if is_private or is_personal:
+        return web.json_response(event_to_dict(updated, tg_user.id))
+
     if data["category"] == "shop":
-        notify(
-            event["target_user"],
-            f"✏️ Список покупок на {fmt_date(data['date'])} изменён.",
-        )
+        notify(event["target_user"], f"✏️ Список покупок на {fmt_date(data['date'])} изменён.")
     elif data["category"] == "todo":
-        notify(
-            event["target_user"],
-            f"📌 Дело на {fmt_date(data['date'])} изменено.",
-        )
+        notify(event["target_user"], f"📌 Дело на {fmt_date(data['date'])} изменено.")
     else:
         suffix = " Оно снова ждёт вашего ответа." if identity_changed else ""
-        notify(
-            event["target_user"],
-            f"✏️ Событие на {fmt_date(data['date'])}{title_part(data['title'])} изменено.{suffix}",
-        )
+        notify(event["target_user"], f"✏️ Событие на {fmt_date(data['date'])}{title_part(data['title'])} изменено.{suffix}")
     return web.json_response(event_to_dict(updated, tg_user.id))
 
 
 async def api_delete_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
+
+    is_private = event.get("visibility") == "private"
+    is_personal = event["category"] == "personal"
+
+    if is_private or is_personal:
+        if event["created_by"] != tg_user.id:
+            raise ApiError("Удалить личную запись может только её автор", 403)
+
+        group_key = event.get("group_key", "") or ""
+        if group_key:
+            n = await db.delete_group(group_key, tg_user.id)
+            return web.json_response({"status": "deleted", "count": n})
+
+        await db.delete_event(event["id"])
+        return web.json_response({"status": "deleted", "count": 1})
+
     if event["category"] != "todo" and event["created_by"] != tg_user.id:
         raise ApiError("Удалить событие может только его автор. Вы можете отказаться от него.", 403)
 
     await db.delete_event(event["id"])
-    return web.json_response({"status": "deleted"})
+    return web.json_response({"status": "deleted", "count": 1})
 
 
 async def api_respond(request: web.Request) -> web.Response:
@@ -713,7 +809,9 @@ async def api_respond(request: web.Request) -> web.Response:
     event = await member_event(request, tg_user.id)
     body = await read_json(request)
 
-    if event["category"] in ("shop", "todo"):
+    if event["category"] in ("shop", "todo", "personal"):
+        raise ApiError("Это не требует ответа")
+    if event.get("visibility") == "private":
         raise ApiError("Это не требует ответа")
 
     status = body.get("status")
@@ -749,6 +847,8 @@ async def api_set_idea_response(request: web.Request) -> web.Response:
     event = await member_event(request, tg_user.id)
     if event["category"] != "sex":
         raise ApiError("Здесь нет отдельных идей")
+    if event.get("visibility") == "private":
+        raise ApiError("Здесь нет отдельных идей")
     if event["status"] != "pending":
         raise ApiError("Общий ответ уже дан — изменить отдельные нельзя")
     if event["target_user"] != tg_user.id:
@@ -778,7 +878,9 @@ async def api_set_reaction(request: web.Request) -> web.Response:
     body = await read_json(request)
     emoji = str(body.get("emoji") or "").strip()
 
-    if event["category"] in ("shop", "todo"):
+    if event["category"] in ("shop", "todo", "personal"):
+        raise ApiError("Здесь реакция не нужна")
+    if event.get("visibility") == "private":
         raise ApiError("Здесь реакция не нужна")
     if event["status"] != "accepted":
         raise ApiError("Реакция доступна только для принятого события")
@@ -793,7 +895,9 @@ async def api_set_reaction(request: web.Request) -> web.Response:
 async def api_set_decline_comment(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
-    if event["category"] in ("shop", "todo"):
+    if event["category"] in ("shop", "todo", "personal"):
+        raise ApiError("Здесь комментарий не нужен")
+    if event.get("visibility") == "private":
         raise ApiError("Здесь комментарий не нужен")
     if event["status"] != "declined":
         raise ApiError("Комментарий доступен только для отклонённого события")
@@ -936,6 +1040,7 @@ async def api_archived_todos(request: web.Request) -> web.Response:
         "category": e["category"],
         "status": e["status"],
         "color": e.get("color", ""),
+        "visibility": e.get("visibility", "pair"),
         "is_creator": e["created_by"] == tg_user.id,
         "checklist": [],
     } for e in items]
@@ -951,7 +1056,9 @@ async def api_unlink(request: web.Request) -> web.Response:
     return web.json_response({"status": "unlinked"})
 
 
-async def index(_: web.Request) -> web.FileResponse:
+async def index(_: web.Request) -> web.Response:
+    if not INDEX_FILE.is_file():
+        raise web.HTTPNotFound(text=f"File not found: {INDEX_FILE}")
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
 
@@ -1016,7 +1123,7 @@ async def cleanup_old_reminders() -> None:
     try:
         n2 = await db.purge_old_todos(cutoff_todos)
         if n2:
-            logging.info("Удалено старых дел (6+ мес): %s", n2)
+            logging.info("Удалено старых дел и личных записей (6+ мес): %s", n2)
     except Exception:
         logging.exception("Не удалось очистить старые дела")
 
@@ -1061,6 +1168,7 @@ async def main() -> None:
     app.router.add_get("/api/archive.json", api_archive)
     app.router.add_get("/api/todos/archive", api_archived_todos)
     app.router.add_post("/api/events", api_create_event)
+    app.router.add_post("/api/events/bulk", api_create_personal_bulk)
     app.router.add_put("/api/events/{id}", api_update_event)
     app.router.add_delete("/api/events/{id}", api_delete_event)
     app.router.add_post("/api/events/{id}/respond", api_respond)
@@ -1079,6 +1187,7 @@ async def main() -> None:
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     logging.info("Web app: http://0.0.0.0:%s  (public: %s)", PORT, WEBAPP_URL)
+    logging.info("Serving index from: %s (exists: %s)", INDEX_FILE, INDEX_FILE.is_file())
 
     reminders = asyncio.create_task(reminder_loop())
     try:
