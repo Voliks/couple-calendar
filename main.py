@@ -861,6 +861,21 @@ async def api_delete_item(request: web.Request) -> web.Response:
     return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id))
 
 
+async def api_move_item(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    event = await _shop_event(request, tg_user.id)
+    body = await read_json(request)
+    try:
+        position = int(body.get("position"))
+    except (TypeError, ValueError):
+        raise ApiError("Некорректная позиция")
+    if position < 0:
+        raise ApiError("Некорректная позиция")
+    if not await db.move_item(event["id"], _int_param(request, "item_id"), position):
+        raise ApiError("Пункт не найден", 404)
+    return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id))
+
+
 async def api_add_sex_idea(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     user = await db.get_or_create_user(tg_user.id)
@@ -1055,6 +1070,7 @@ async def main() -> None:
     app.router.add_post("/api/events/{id}/items", api_add_item)
     app.router.add_put("/api/events/{id}/items/{item_id}", api_set_item)
     app.router.add_delete("/api/events/{id}/items/{item_id}", api_delete_item)
+    app.router.add_post("/api/events/{id}/items/{item_id}/move", api_move_item)
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
