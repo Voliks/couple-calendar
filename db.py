@@ -474,6 +474,36 @@ MIGRATIONS = [
 ]
 
 
+# Список «обязательных» колонок/индексов, которые должны существовать
+# после применения соответствующей миграции. Нужен на случай частично
+# применённой миграции (например, schema_version=15 записан, а колонка
+# не добавилась из-за сбоя/репликации в Turso).
+_REQUIRED_COLUMNS = {
+    15: [
+        ("events", "date_end", "TEXT NOT NULL DEFAULT ''"),
+        ("events", "visibility", "TEXT NOT NULL DEFAULT 'shared'"),
+    ],
+}
+
+
+async def _ensure_required_columns() -> None:
+    for version, cols in _REQUIRED_COLUMNS.items():
+        for table, name, ddl in cols:
+            try:
+                added = await _add_column(table, name, ddl)
+            except DbError as e:
+                log.error(
+                    "Не удалось до-добавить колонку %s.%s (v%s): %s",
+                    table, name, version, e,
+                )
+                continue
+            if added:
+                log.warning(
+                    "До-добавлена колонка %s.%s (миграция v%s была применена частично)",
+                    table, name, version,
+                )
+
+
 async def _migrate() -> None:
     await _exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
     current = (await _exec("SELECT MAX(version) FROM schema_version")).rows[0][0] or 0
@@ -482,6 +512,8 @@ async def _migrate() -> None:
             log.info("Миграция БД → v%s", version)
             await fn()
             await _exec("INSERT INTO schema_version (version) VALUES (?)", (version,))
+    # Долечить уже отмеченные версии (на случай частичного применения)
+    await _ensure_required_columns()
 
 
 def _load_json_ideas_sync() -> dict:
