@@ -56,10 +56,10 @@
   .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
 
   .dots { display: flex; gap: 3px; height: 7px; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .dot { width: 7px; height: 7px; border-radius: 2px; }
   .dot.pending  { border: 2px solid rgb(var(--pending)); }
   .dot.accepted { background: rgb(var(--accepted)); }
-  .dot.declined { background: rgb(var(--declined)); border-radius: 1px; transform: rotate(45deg); }
+  .dot.declined { background: rgb(var(--declined)); border-radius: 2px; transform: none; }
   .dot.expired  { border: 2px solid rgb(var(--expired)); }
 
   .list-title { margin: 20px 0 10px; font-size: 15px; font-weight: 600; color: var(--hint); }
