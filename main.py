@@ -33,7 +33,7 @@ load_dotenv()
 import db
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-blue.vercel.app").rstrip("/")
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-ycu9.onrender.com").rstrip("/")
 PORT = int(os.getenv("PORT", "8080"))
 INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
 
