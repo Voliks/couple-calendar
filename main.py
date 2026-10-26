@@ -264,45 +264,24 @@ async def handle_voice_message(message: Message):
         color = "#8b5cf6" if cat == "todo" else ""
         # Если это покупки
         if cat == "shop":
-            raw_items = ev.get("items", [])
-            new_items = [str(x)[:200] for x in raw_items] if isinstance(raw_items, list) else []
-            
-            if not new_items:
-                await message.answer("Я не понял, какие продукты добавить.")
-                return
-
-            # Ищем самый ближайший список покупок (от сегодня и на 30 дней вперед)
-            from datetime import timedelta
-            start_date = today
-            end_date = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")
-            
-            events = await db.list_events_range(message.from_user.id, start_date, end_date)
-            
-            # Фильтруем только магазины и сортируем по дате
-            shops = [e for e in events if e["category"] == "shop"]
-            shops.sort(key=lambda x: x["date"])
-
-            if shops:
-                # Берем самый ближайший список
-                nearest_shop = shops[0]
-                for item_text in new_items:
-                    await db.add_item(nearest_shop["id"], item_text)
-                await message.answer(f"✅ Добавил {len(new_items)} продуктов в ближайший список на {fmt_date(nearest_shop['date'])}!")
-            else:
-                # Если списков вообще нет, создаем новый на сегодня
-                items_list = [{"text": t, "checked": False} for t in new_items]
-                await db.create_event(
-                    created_by=message.from_user.id,
-                    target_user=user["partner_id"],
-                    title="Список покупок",
-                    description="Создано голосом",
-                    date=today,
-                    event_time="",
-                    category="shop",
-                    color="",
-                    items=items_list
-                )
-                await message.answer(f"✅ Списков не было, создал новый на сегодня и добавил {len(new_items)} продуктов!")
+            new_items = ev.get("items", [])
+            if not isinstance(new_items, list):
+                new_items = []
+            new_items = [item.strip() for item in new_items if isinstance(item, str) and item.strip()]
+            # Создаем список покупок на сегодня
+            items_list = [{"text": item, "checked": False} for item in new_items]
+            await db.create_event(
+                created_by=message.from_user.id,
+                target_user=user["partner_id"],
+                title="Список покупок",
+                description="Создано голосом",
+                date=today,
+                event_time="",
+                category="shop",
+                color="",
+                items=items_list
+            )
+            await message.answer(f"✅ Создал список покупок на сегодня и добавил {len(new_items)} продуктов!")
 
         else:
             # Для остальных категорий (Дела, Отдых и т.д.) создаем обычное событие
