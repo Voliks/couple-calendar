@@ -973,7 +973,10 @@ function onDragStart(ev) {
 function onDragMove(ev) {
   if (!dragState) return;
   ev.preventDefault();
+
   const list = dragState.el.parentElement;
+  if (!list) return;
+
   const items = [...list.querySelectorAll(".checklist-item")].filter(x => x !== dragState.el);
   let closest = null;
   let closestDist = Infinity;
@@ -984,6 +987,7 @@ function onDragMove(ev) {
     if (dist < closestDist) { closestDist = dist; closest = el; }
   }
   if (!closest) return;
+
   const rect = closest.getBoundingClientRect();
   const after = ev.clientY > rect.top + rect.height / 2;
   if (after) {
@@ -993,29 +997,33 @@ function onDragMove(ev) {
   }
 }
 
-function onDragEnd() {
+function onDragEnd(ev) {
   if (!dragState) return;
   const { eventId, itemId, el } = dragState;
   el.classList.remove("dragging");
   const list = el.parentElement;
+  if (!list) {
+    dragState = null;
+    return;
+  }
+
   const items = [...list.querySelectorAll(".checklist-item")];
   const newPos = items.indexOf(el);
   const idsNow = items.map(x => String(x.dataset.item));
+  const oldOrder = findEvent(eventId)?.checklist.map(x => String(x.id)) || [];
   dragState = null;
 
-  const ev = findEvent(eventId);
-  if (!ev) { renderList(); return; }
-  const oldOrder = ev.checklist.map(x => String(x.id));
   if (idsNow.join(",") === oldOrder.join(",")) {
     return;
   }
+
   moveItem(eventId, itemId, newPos);
 }
 
 $("list").addEventListener("pointerdown", onDragStart);
-$("list").addEventListener("pointermove", onDragMove);
-$("list").addEventListener("pointerup", onDragEnd);
-$("list").addEventListener("pointercancel", () => {
+document.addEventListener("pointermove", onDragMove);
+document.addEventListener("pointerup", onDragEnd);
+document.addEventListener("pointercancel", () => {
   if (!dragState) return;
   dragState.el.classList.remove("dragging");
   dragState = null;
