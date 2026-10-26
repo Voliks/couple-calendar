@@ -35,7 +35,10 @@ import db
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-blue.vercel.app").rstrip("/")
 PORT = int(os.getenv("PORT", "8080"))
-INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
+WEBAPP_DIR = Path(__file__).parent / "webapp"
+INDEX_FILE = WEBAPP_DIR / "index.html"
+STYLES_FILE = WEBAPP_DIR / "styles.css"
+APP_JS_FILE = WEBAPP_DIR / "app.js"
 
 REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
 SHOW_TITLES = os.getenv("NOTIFY_SHOW_TITLES", "0") == "1"
@@ -817,7 +820,6 @@ async def api_delete_event(request: web.Request) -> web.Response:
         if event["created_by"] != tg_user.id:
             raise ApiError("Удалить личную запись может только её автор", 403)
 
-        # Если у события есть group_key — удаляем все записи из этой группы.
         group_key = event.get("group_key", "") or ""
         if group_key:
             n = await db.delete_group(group_key, tg_user.id)
@@ -1089,6 +1091,14 @@ async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
 
+async def styles(_: web.Request) -> web.FileResponse:
+    return web.FileResponse(STYLES_FILE, headers={"Cache-Control": "no-cache"})
+
+
+async def app_js(_: web.Request) -> web.FileResponse:
+    return web.FileResponse(APP_JS_FILE, headers={"Cache-Control": "no-cache"})
+
+
 async def send_due_reminders() -> None:
     now_utc = datetime.now(timezone.utc)
     lo = (now_utc - timedelta(days=3)).strftime("%Y-%m-%d")
@@ -1190,6 +1200,8 @@ async def main() -> None:
 
     app = web.Application(middlewares=[api_middleware])
     app.router.add_get("/", index)
+    app.router.add_get("/styles.css", styles)
+    app.router.add_get("/app.js", app_js)
     app.router.add_get("/health", health_check)
     app.router.add_get("/api/state", api_state)
     app.router.add_get("/api/archive.json", api_archive)
