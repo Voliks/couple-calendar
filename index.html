@@ -1080,13 +1080,19 @@ function endGridDrag(ev) {
 
   if (!dates.length) return;
 
-  if (wasSwipe || !moved) {
+  if (wasSwipe) {
+    // свайп по нескольким дням → меню выбора категории
     selected = dates[0];
     renderList();
     openCategoryPicker(dates);
     return;
   }
-  clearMultiSelect();
+
+  // обычный клик по одному дню → просто выбираем день
+  selected = dates[0];
+  tg.HapticFeedback?.selectionChanged();
+  clearMultiSelect();     // убираем подсветку мультивыделения
+  renderList();
 }
 $("grid").addEventListener("pointerup", endGridDrag);
 $("grid").addEventListener("pointercancel", (ev) => {
