@@ -1175,6 +1175,94 @@ async def api_unlink(request: web.Request) -> web.Response:
     notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
     return web.json_response({"status": "unlinked"})
 
+async def api_upload_photo(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    user = await db.get_or_create_user(tg_user.id)
+    if not user["partner_id"]:
+        raise ApiError("Сначала свяжитесь с партнёром", 409)
+
+    # 1. Получаем файл из запроса
+    reader = await request.multipart()
+    field = await reader.next()
+    if not field or field.name != "photo":
+        raise ApiError("Файл не найден", 400)
+    
+    file_bytes = await field.read()
+    b64_image = base64.b64encode(file_bytes).decode('utf-8')
+
+    # 2. Отправляем в нейросеть (z.ai)
+    api_key = os.getenv("ZHIPU_API_KEY")
+    if not api_key:
+        raise ApiError("Ошибка настройки сервера (нет ключа API)", 500)
+
+    prompt = """
+    Это фотография бумажного календаря. Найди все рукописные записи о событиях.
+    Верни ответ СТРОГО в формате JSON без лишнего текста, вот такой структурой:
+    [
+      {"date": "2026-10-27", "title": "Встреча с врачом", "time": "15:00"}
+    ]
+    Если время не указано, оставь пустую строку. Если год не указан, используй 2026.
+    """
+    
+    payload = {
+        "model": "glm-4.6v-flash",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
+                ]
+            }
+        ]
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post("https://api.z.ai/api/paas/v4/chat/completions", json=payload, headers=headers) as resp:
+            if resp.status != 200:
+                err = await resp.text()
+                logging.error(f"GLM API error: {err}")
+                raise ApiError("Не удалось распознать фото", 500)
+            
+            data = await resp.json()
+            answer_text = data["choices"][0]["message"]["content"]
+            
+            import re, json
+            match = re.search(r'\[.*\]', answer_text, re.DOTALL)
+            if not match:
+                raise ApiError("Не удалось разобрать ответ нейросети", 500)
+            
+            events = json.loads(match.group(0))
+
+    # 3. Сохраняем в базу
+    added_count = 0
+    for ev in events:
+        title = ev.get("title", "Событие")[:50]
+        date = ev.get("date", "")
+        time_val = ev.get("time", "")
+        
+        if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
+            continue
+            
+        await db.create_event(
+            created_by=tg_user.id,
+            target_user=user["partner_id"],
+            title="📸 " + title,
+            description="Добавлено с фото календаря",
+            date=date,
+            event_time=time_val,
+            category="todo",
+            color="#8b5cf6",
+            items=None
+        )
+        added_count += 1
+
+    return web.json_response({"added": added_count})
 
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
@@ -1295,6 +1383,7 @@ async def main() -> None:
     app.router.add_static("/css", INDEX_FILE.parent / "css")
     app.router.add_static("/js", INDEX_FILE.parent / "js")
 
+    # API маршруты
     app.router.add_get("/api/state", api_state)
     app.router.add_get("/api/archive.json", api_archive)
     app.router.add_get("/api/todos/archive", api_archived_todos)
@@ -1312,6 +1401,9 @@ async def main() -> None:
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
+    
+    # НОВЫЙ МАРШРУТ ДЛЯ ФОТО
+    app.router.add_post("/api/upload-photo", api_upload_photo)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -1328,7 +1420,6 @@ async def main() -> None:
         await runner.cleanup()
         await bot.session.close()
         await db.close_db()
-
 
 if __name__ == "__main__":
     asyncio.run(main())

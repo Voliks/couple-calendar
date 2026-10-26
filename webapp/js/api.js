@@ -128,4 +128,20 @@ function openCommentDialog(initial, onConfirm) {
   setTimeout(() => ta.focus(), 50);
 }
 
+async function uploadPhoto(file) {
+  const formData = new FormData();
+  formData.append("photo", file);
+
+  const res = await fetch(API_BASE + "/api/upload-photo", {
+    method: "POST",
+    headers: { "X-Init-Data": tg.initData || "" },
+    body: formData,
+  });
+  
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new HttpError(data.error || "Ошибка загрузки", res.status);
+  }
+  return await res.json();
+}
 let etag = null, etagKey = "";

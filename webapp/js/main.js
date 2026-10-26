@@ -153,5 +153,26 @@ function startPolling() {
   setInterval(() => { if (canPoll()) load(true); }, 15000);
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
+$("scanBtn").onclick = () => $("photoInput").click();
+
+$("photoInput").onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  
+  $("photoInput").value = "";
+  
+  toast("Отправляем фото...");
+  $("scanBtn").disabled = true;
+  
+  try {
+    const res = await uploadPhoto(file);
+    toast(`Готово! Добавлено ${res.added} событий`);
+    await load(); // Обновляем календарь
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    $("scanBtn").disabled = false;
+  }
+};
 
 bootstrap();

@@ -43,7 +43,14 @@
     <div class="stats-grid" id="statsGrid"></div>
   </div>
 
-  <button class="link-btn" id="unlink">Отвязать партнёра</button>
+    <button class="link-btn" id="unlink">Отвязать партнёра</button>
+  
+  <!-- Скрытый инпут для выбора фото -->
+  <input type="file" id="photoInput" accept="image/*" style="display: none;">
+  
+  <!-- Кнопка сканера -->
+  <button class="fab fab-scan" id="scanBtn" aria-label="Сканировать календарь" style="right: 86px; background: #8b5cf6;">📸</button>
+  
   <button class="fab" id="add" aria-label="Добавить событие">+</button>
 </main>
 
