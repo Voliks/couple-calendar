@@ -222,10 +222,10 @@ async def handle_voice_message(message: Message):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         prompt = f"""
         Сегодня {today}. Пользователь сказал: "{text}"
-        Преврати это в JSON для календаря. Выбери одну категорию из: rest, sex, shop, todo, personal.
+        Преврати это в JSON для календаря. Выбери категорию из: rest, sex, shop, todo, personal.
+        Если категория shop, выдели продукты в массив "items". В title напиши "Список покупок".
         Верни СТРОГО JSON без лишнего текста:
-        {{"category": "todo", "date": "{today}", "time": "", "title": "Купить хлеб"}}
-        Если время не указано, оставь "". Если дата не указана, используй сегодняшнюю.
+        {{"category": "shop", "date": "{today}", "time": "", "title": "Список покупок", "items": ["хлеб", "молоко"]}}
         """
         
         payload = {
@@ -271,7 +271,7 @@ async def handle_voice_message(message: Message):
             event_time=ev.get("time", ""),
             category=cat,
             color=color,
-            items=None
+            items=[{"text": str(x)[:200], "checked": False} for x in ev.get("items", [])] if cat == "shop" else None
         )
         
         cat_name = CATEGORY_TITLES.get(cat, "Событие")
