@@ -439,6 +439,12 @@ async def _m13_idea_responses() -> None:
     )
 
 
+async def _m14_checklist_position() -> None:
+    await _add_column("checklist_items", "position", "INTEGER NOT NULL DEFAULT 0")
+    # Заполняем position = id для существующих записей, чтобы сохранить текущий порядок
+    await _exec("UPDATE checklist_items SET position = id WHERE position = 0")
+
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -453,6 +459,7 @@ MIGRATIONS = [
     (11, _m11_reactions_table),
     (12, _m12_todo_remind_before),
     (13, _m13_idea_responses),
+    (14, _m14_checklist_position),
 ]
 
 
@@ -617,7 +624,7 @@ async def _attach_items(events: list[dict]) -> list[dict]:
         marks = ",".join("?" * len(by_id))
         rs = await _exec(
             f"SELECT id, event_id, text, checked FROM checklist_items "
-            f"WHERE event_id IN ({marks}) ORDER BY id",
+            f"WHERE event_id IN ({marks}) ORDER BY position, id",
             tuple(by_id),
         )
         for item_id, event_id, text, checked in rs.rows:
@@ -666,8 +673,9 @@ async def create_event(created_by, target_user, title, description, date, event_
     if items and category == "shop":
         try:
             await _batch(
-                [("INSERT INTO checklist_items (event_id, text, checked) VALUES (?, ?, ?)",
-                  (event_id, it["text"], int(it["checked"]))) for it in items]
+                [("INSERT INTO checklist_items (event_id, text, checked, position) VALUES (?, ?, ?, ?)",
+                  (event_id, it["text"], int(it["checked"]), i + 1))
+                 for i, it in enumerate(items)]
             )
         except DbError:
             await _exec("DELETE FROM events WHERE id = ?", (event_id,))
@@ -730,9 +738,11 @@ async def delete_event(event_id: int) -> None:
 
 async def add_item(event_id: int, text: str) -> bool:
     rs = await _exec(
-        "INSERT INTO checklist_items (event_id, text, checked) "
-        "SELECT ?, ?, 0 WHERE (SELECT COUNT(*) FROM checklist_items WHERE event_id = ?) < ?",
-        (event_id, text, event_id, MAX_ITEMS_PER_EVENT),
+        "INSERT INTO checklist_items (event_id, text, checked, position) "
+        "SELECT ?, ?, 0, "
+        "COALESCE((SELECT MAX(position) FROM checklist_items WHERE event_id = ?), 0) + 1 "
+        "WHERE (SELECT COUNT(*) FROM checklist_items WHERE event_id = ?) < ?",
+        (event_id, text, event_id, event_id, MAX_ITEMS_PER_EVENT),
     )
     return rs.affected == 1
 
@@ -748,6 +758,32 @@ async def set_item_checked(event_id: int, item_id: int, checked: bool) -> bool:
 async def delete_item(event_id: int, item_id: int) -> bool:
     rs = await _exec("DELETE FROM checklist_items WHERE id = ? AND event_id = ?", (item_id, event_id))
     return rs.affected == 1
+
+
+async def move_item(event_id: int, item_id: int, new_position: int) -> bool:
+    """
+    Перемещает пункт item_id на позицию new_position (0-based индекс в отсортированном списке).
+    Остальные пункты перенумеровываются.
+    """
+    rs = await _exec(
+        "SELECT id FROM checklist_items WHERE event_id = ? ORDER BY position, id",
+        (event_id,),
+    )
+    ids = [r[0] for r in rs.rows]
+    if item_id not in ids:
+        return False
+
+    ids.remove(item_id)
+    new_position = max(0, min(new_position, len(ids)))
+    ids.insert(new_position, item_id)
+
+    await _batch(
+        [
+            ("UPDATE checklist_items SET position = ? WHERE id = ?", (i + 1, cid))
+            for i, cid in enumerate(ids)
+        ]
+    )
+    return True
 
 
 async def set_reaction(event_id: int, emoji: str, by_user_id: int) -> None:
@@ -875,157 +911,4 @@ async def archive_idea(category_title: str, text: str, source: str, archived_by:
     )
 
 
-async def delete_sex_idea(idea_id: int, archived_by: int | None = None) -> bool:
-    rs = await _exec(
-        "SELECT category_title, text FROM sex_ideas WHERE id = ? AND source = 'sex'",
-        (idea_id,),
-    )
-    if not rs.rows:
-        return False
-    _category_title, text = rs.rows[0]
-    try:
-        await archive_idea(CUSTOM_ARCHIVE_TITLE, text, "custom", archived_by)
-    except Exception:
-        log.exception("Не удалось записать идею в архив (не критично)")
-    rs2 = await _exec("DELETE FROM sex_ideas WHERE id = ? AND source = 'sex'", (idea_id,))
-    return rs2.affected == 1
-
-
-async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key: str) -> None:
-    try:
-        data = await _load_json_ideas()
-        idx = 1
-        found_title = None
-        found_text = None
-        for category_title, texts in data.items():
-            if category_title == ARCHIVE_KEY or not isinstance(texts, list):
-                continue
-            for txt in texts:
-                key = f"json_{idx}"
-                idx += 1
-                if key == idea_key:
-                    found_title, found_text = category_title, txt
-                    break
-            if found_text is not None:
-                break
-        if found_text is not None:
-            await archive_idea(found_title, found_text, "builtin", user_id)
-    except Exception:
-        log.exception("Не удалось архивировать JSON-идею (не критично)")
-
-    rows = [(user_id, idea_key)]
-    if partner_id and partner_id != user_id:
-        rows.append((partner_id, idea_key))
-    await _batch(
-        [("INSERT OR IGNORE INTO hidden_ideas (user_id, idea_key) VALUES (?, ?)", r) for r in rows]
-    )
-
-
-async def get_archived_ideas(limit: int = 2000) -> list[dict]:
-    rs = await _exec(
-        "SELECT id, category_title, text, source, archived_by, archived_at "
-        "FROM archived_ideas ORDER BY archived_at DESC, id DESC LIMIT ?",
-        (limit,),
-    )
-    return [
-        {
-            "id": r[0],
-            "category_title": r[1],
-            "text": r[2],
-            "source": r[3],
-            "archived_by": r[4],
-            "archived_at": r[5],
-        }
-        for r in rs.rows
-    ]
-
-
-async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
-    rs = await _exec(
-        "SELECT e.id, e.title, e.date, e.time, u.telegram_id, u.tz, e.category, e.remind_before "
-        "FROM events e JOIN users u ON u.telegram_id IN (e.created_by, e.target_user) "
-        "WHERE e.status = 'accepted' AND e.date BETWEEN ? AND ? "
-        "AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.event_id = e.id AND r.user_id = u.telegram_id)",
-        (date_from, date_to),
-    )
-    return [
-        {
-            "event_id": r[0], "title": r[1], "date": r[2], "time": r[3] or "",
-            "user_id": r[4], "tz": r[5] or "", "category": r[6] or "",
-            "remind_before": r[7] or 0,
-        }
-        for r in rs.rows
-    ]
-
-
-async def mark_reminded(event_id: int, user_id: int) -> bool:
-    rs = await _exec(
-        "INSERT OR IGNORE INTO reminders (event_id, user_id) VALUES (?, ?)", (event_id, user_id)
-    )
-    return rs.affected == 1
-
-
-async def purge_old_reminders(date_before: str) -> int:
-    rs = await _exec(
-        "DELETE FROM reminders WHERE event_id IN "
-        "(SELECT id FROM events WHERE date < ?)",
-        (date_before,),
-    )
-    return rs.affected
-
-
-async def purge_old_todos(date_before: str) -> int:
-    rs = await _batch(
-        [
-            ("DELETE FROM checklist_items WHERE event_id IN "
-             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
-            ("DELETE FROM reminders WHERE event_id IN "
-             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
-            ("DELETE FROM reactions WHERE event_id IN "
-             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
-            ("DELETE FROM idea_responses WHERE event_id IN "
-             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
-            ("DELETE FROM events WHERE category = 'todo' AND date < ?", (date_before,)),
-        ]
-    )
-    return rs[4].affected
-
-
-async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
-    from datetime import date as _d, timedelta as _td
-    cutoff = (_d.today() - _td(days=31)).isoformat()
-    rs = await _exec(
-        f"SELECT {EVENT_COLS} FROM events "
-        "WHERE category = 'todo' AND date < ? AND (created_by = ? OR target_user = ?) "
-        "ORDER BY date DESC, id DESC LIMIT ?",
-        (cutoff, user_id, user_id, limit),
-    )
-    return [_event(r) for r in rs.rows]
-
-
-async def pair_stats(user_id: int, partner_id: int) -> dict:
-    pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
-    pargs = (user_id, partner_id, partner_id, user_id)
-
-    rs_total = await _exec(f"SELECT COUNT(*) FROM events WHERE {pair}", pargs)
-    total = rs_total.rows[0][0] if rs_total.rows else 0
-
-    rs_status = await _exec(
-        f"SELECT status, COUNT(*) FROM events WHERE {pair} GROUP BY status",
-        pargs,
-    )
-    by_status = {row[0]: row[1] for row in rs_status.rows}
-
-    rs_cat = await _exec(
-        f"SELECT category, COUNT(*) FROM events WHERE {pair} GROUP BY category",
-        pargs,
-    )
-    by_category = {row[0]: row[1] for row in rs_cat.rows}
-
-    return {
-        "total": total,
-        "pending": by_status.get("pending", 0),
-        "accepted": by_status.get("accepted", 0),
-        "declined": by_status.get("declined", 0),
-        "by_category": by_category,
-    }
+async def delete_sex_idea(idea_id: int, archived
