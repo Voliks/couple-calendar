@@ -496,7 +496,6 @@ def parse_event_payload(body: dict) -> dict:
             date_end = ""
 
         if category == "rest" and date_end:
-            # при диапазоне rest может иметь цвет заливки
             if color and color not in db.TODO_COLORS:
                 raise ApiError("Некорректный цвет")
         else:
@@ -1178,6 +1177,11 @@ async def main() -> None:
     app = web.Application(middlewares=[api_middleware])
     app.router.add_get("/", index)
     app.router.add_get("/health", health_check)
+    
+    # Раздача статики (CSS и JS)
+    app.router.add_static("/css", INDEX_FILE.parent / "css")
+    app.router.add_static("/js", INDEX_FILE.parent / "js")
+
     app.router.add_get("/api/state", api_state)
     app.router.add_get("/api/archive.json", api_archive)
     app.router.add_get("/api/todos/archive", api_archived_todos)
