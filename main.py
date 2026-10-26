@@ -1404,7 +1404,10 @@ async def main() -> None:
             ]
         )
 
-    app = web.Application(middlewares=[api_middleware])
+    app = web.Application(
+        middlewares=[api_middleware],
+        client_max_size=20 * 1024 * 1024  # Увеличиваем лимит до 20 МБ
+    )
     app.router.add_get("/", index)
     app.router.add_get("/health", health_check)
     
