@@ -55,11 +55,15 @@
   .day.today .num { color: var(--accent); font-weight: 700; }
   .day.selected { border-color: var(--accent); background: var(--bg2); }
 
+  .day .todo-bar { position: absolute; top: 2px; left: 6px; right: 6px; height: 4px;
+    display: flex; gap: 1px; border-radius: 2px; overflow: hidden; z-index: 1; }
+  .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
+
   .day.has-personal { background: rgba(var(--personal), .15); }
   .day.has-personal.selected { background: rgba(var(--personal), .22); border-color: var(--accent); }
   .day.personal-dot::before {
     content: ""; position: absolute; left: 4px; right: 4px; bottom: 3px; height: 3px;
-    border-radius: 2px; background: var(--personal-fill, rgb(var(--personal)));
+    border-radius: 2px; background: var(--personal-fill, rgb(var(--personal))); z-index: 1;
   }
 
   .day.multi-selected { border-color: rgb(var(--personal)); background: rgba(var(--personal), .35); }
@@ -527,7 +531,6 @@ let loaded = false;
 const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
 const monthCache = {};
 
-// ---- Мультивыделение дней с long-press ----
 const LONG_PRESS_MS = 260;
 const MOVE_CANCEL_PX = 8;
 
@@ -695,6 +698,14 @@ function renderCalendar() {
     const date = fmt(view.y, view.m, d);
     const list = byDay[date] || [];
 
+    // Полоски дел (todo) над числом
+    const todos = list.filter(x => x.category === "todo").slice().sort((a, b) => a.id - b.id);
+    const todoBar = todos.length
+      ? `<span class="todo-bar" aria-hidden="true">${todos.map(t =>
+          `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
+      : "";
+
+    // Личные записи — заливка дня + маркер снизу
     const personals = list.filter(x => x.category === "personal");
     const hasPersonal = personals.length > 0;
     let personalStyle = "";
@@ -702,12 +713,6 @@ function renderCalendar() {
       const col = personals[0].color || "#64748b";
       personalStyle = `--personal-fill:${esc(col)};`;
     }
-
-    const todos = list.filter(x => x.category === "todo").slice().sort((a, b) => a.id - b.id);
-    const todoBar = todos.length
-      ? `<span class="todo-bar" aria-hidden="true">${todos.map(t =>
-          `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
-      : "";
 
     const nonTodos = list.filter(x => x.category !== "todo" && x.category !== "personal");
     const st = new Set(nonTodos.map(statusKey));
@@ -1221,7 +1226,6 @@ function moveItem(eventId, itemId, newPosition) {
   });
 }
 
-// Drag & drop чек-листа
 let dragState = null;
 
 function onDragStart(ev) {
