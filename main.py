@@ -463,7 +463,6 @@ def parse_event_payload(body: dict) -> dict:
             raise ApiError("Некорректная дата окончания")
         if date_end < date:
             raise ApiError("Дата окончания раньше даты начала")
-        # ограничение: не больше ~366 дней, чтобы не улететь в бесконечный диапазон
         try:
             span = (date_cls.fromisoformat(date_end) - date_cls.fromisoformat(date)).days
         except ValueError:
@@ -803,7 +802,6 @@ async def api_update_event(request: web.Request) -> web.Response:
             event["target_user"],
             f"✏️ Событие на {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])} изменено.{suffix}",
         )
-    # для personal при visibility_changed уведомления уже отправлены выше
 
     updated = await db.get_event(event["id"])
     return web.json_response(event_to_dict(updated, tg_user.id))
