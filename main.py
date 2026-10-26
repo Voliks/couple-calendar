@@ -6,8 +6,6 @@ import logging
 import os
 import re
 import time
-import base64
-import aiohttp
 from collections import deque
 from datetime import date as date_cls, datetime, timedelta, timezone
 from functools import lru_cache
@@ -15,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import Bot, Dispatcher, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     BotCommand,
@@ -262,13 +260,13 @@ async def cmd_unlink(message: Message):
     )
 
 
-@router.callback_query(F.data == "unlink:no")
+@router.callback_query(lambda c: c.data == "unlink:no")
 async def unlink_cancel(call: CallbackQuery):
     await call.message.edit_text("Отменено.")
     await call.answer()
 
 
-@router.callback_query(F.data == "unlink:yes")
+@router.callback_query(lambda c: c.data == "unlink:yes")
 async def unlink_confirm(call: CallbackQuery):
     partner = await db.unlink_partners(call.from_user.id)
     if partner is None:
@@ -279,7 +277,7 @@ async def unlink_confirm(call: CallbackQuery):
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("ev:"))
+@router.callback_query(lambda c: c.data and c.data.startswith("ev:"))
 async def event_inline_action(call: CallbackQuery):
     try:
         _, action, raw_id = call.data.split(":", 2)
@@ -327,104 +325,6 @@ async def event_inline_action(call: CallbackQuery):
     except Exception:
         pass
     await call.answer("Готово")
-
-
-@router.message(F.photo)
-async def handle_calendar_photo(message: Message):
-    photo = message.photo[-1]
-    file = await bot.get_file(photo.file_id)
-    file_bytes = await bot.download_file(file.file_path)
-    b64_image = base64.b64encode(file_bytes.getvalue()).decode('utf-8')
-    
-    api_key = os.getenv("ZHIPU_API_KEY")
-    if not api_key:
-        await message.answer("Ошибка: не настроен ключ API.")
-        return
-
-    prompt = """
-    Это фотография бумажного календаря. Найди все рукописные записи о событиях.
-    Верни ответ СТРОГО в формате JSON без лишнего текста, вот такой структурой:
-    [
-      {"date": "2026-10-27", "title": "Встреча с врачом", "time": "15:00"}
-    ]
-    Если время не указано, оставь пустую строку. Если год не указан, используй 2026.
-    """
-    
-    payload = {
-        "model": "glm-4v-flash",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": b64_image}}
-                ]
-            }
-        ]
-    }
-    
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    await message.answer("📸 Смотрю на календарь, это займет секунд 10...")
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post("https://open.bigmodel.cn/api/paas/v4/chat/completions", json=payload, headers=headers) as resp:
-                text = await resp.text()
-                if resp.status != 200:
-                    logging.error(f"GLM API error: {text}")
-                    await message.answer("Не удалось распознать фото (ошибка API).")
-                    return
-                
-                data = json.loads(text)
-                answer_text = data["choices"][0]["message"]["content"]
-                
-                match = re.search(r'\[.*\]', answer_text, re.DOTALL)
-                if not match:
-                    await message.answer("Не смог разобрать ответ.")
-                    return
-                
-                events = json.loads(match.group(0))
-                
-                if not events:
-                    await message.answer("На фото не найдено событий.")
-                    return
-                
-                user = await db.get_or_create_user(message.from_user.id)
-                if not user["partner_id"]:
-                    await message.answer("Сначала привяжите партнера.")
-                    return
-                
-                added_count = 0
-                for ev in events:
-                    title = ev.get("title", "Событие")[:50]
-                    date = ev.get("date", "")
-                    time_val = ev.get("time", "")
-                    
-                    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
-                        continue
-                        
-                    await db.create_event(
-                        created_by=message.from_user.id,
-                        target_user=user["partner_id"],
-                        title="📸 " + title,
-                        description="Добавлено с фото календаря",
-                        date=date,
-                        event_time=time_val,
-                        category="todo",
-                        color="#8b5cf6",
-                        items=None
-                    )
-                    added_count += 1
-                
-                await message.answer(f"✅ Готово! Добавлено событий: {added_count}")
-                
-    except Exception as e:
-        logging.exception("Ошибка при обработке фото")
-        await message.answer("Произошла ошибка при обработке фото.")
 
 
 @router.error()
@@ -615,6 +515,8 @@ def parse_event_payload(body: dict) -> dict:
         "visibility": visibility,
         "items": normalize_items(body.get("checklist")) if category == "shop" else [],
     }
+
+
 def event_to_dict(e: dict, uid: int) -> dict:
     is_creator = e["created_by"] == uid
     partner_id = e["target_user"] if is_creator else e["created_by"]
@@ -1161,126 +1063,6 @@ async def api_unlink(request: web.Request) -> web.Response:
     return web.json_response({"status": "unlinked"})
 
 
-async def api_upload_photo(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    user = await db.get_or_create_user(tg_user.id)
-    if not user["partner_id"]:
-        raise ApiError("Сначала свяжитесь с партнёром", 409)
-
-    try:
-        reader = await request.multipart()
-        field = await reader.next()
-        if not field or field.name != "photo":
-            raise ApiError("Файл не найден в запросе", 400)
-        
-        file_bytes = await field.read()
-        if len(file_bytes) == 0:
-            raise ApiError("Файл пустой", 400)
-            
-        b64_image = base64.b64encode(file_bytes).decode('utf-8')
-    except Exception as e:
-        logging.exception("Ошибка чтения файла")
-        raise ApiError(f"Не удалось прочитать файл: {str(e)}", 400)
-
-    api_key = os.getenv("ZHIPU_API_KEY")
-    if not api_key:
-        raise ApiError("Ошибка настройки сервера (нет ключа API)", 500)
-
-    prompt = """
-    Это фотография бумажного календаря. Найди все рукописные записи о событиях.
-    Верни ответ СТРОГО в формате JSON без лишнего текста, вот такой структурой:
-    [
-      {"date": "2026-10-27", "title": "Встреча с врачом", "time": "15:00"}
-    ]
-    Если время не указано, оставь пустую строку. Если год не указан, используй 2026.
-    """
-    
-    payload = {
-        "model": "glm-4.6v-flash",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": b64_image}}
-                ]
-            }
-        ]
-    }
-    
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    events = []
-    max_retries = 3
-    
-    for attempt in range(max_retries):
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post("https://open.bigmodel.cn/api/paas/v4/chat/completions", json=payload, headers=headers) as resp:
-                    text = await resp.text()
-                    
-                    if resp.status != 200:
-                        logging.error(f"GLM API error (HTTP {resp.status}): {text}")
-                        raise ApiError(f"Ошибка API ({resp.status}): {text[:200]}", 500)
-                    
-                    try:
-                        data = json.loads(text)
-                    except json.JSONDecodeError:
-                        logging.error(f"Не удалось распарсить JSON. Ответ: {text[:500]}")
-                        raise ApiError("Сервер вернул не JSON. Проверьте логи.", 500)
-
-                    err = data.get("error", {})
-                    if err.get("code") == "1305":
-                        if attempt < max_retries - 1:
-                            logging.warning(f"Модель перегружена, попытка {attempt + 1}. Ждем 5 секунд...")
-                            await asyncio.sleep(5)
-                            continue
-                        else:
-                            raise ApiError("Модель сейчас перегружена. Попробуйте через минуту.", 503)
-                    
-                    answer_text = data["choices"][0]["message"]["content"]
-                    
-                    match = re.search(r'\[.*\]', answer_text, re.DOTALL)
-                    if not match:
-                        raise ApiError("Не удалось разобрать ответ нейросети", 500)
-                    
-                    events = json.loads(match.group(0))
-                    break
-                    
-        except aiohttp.ClientError as e:
-            if attempt < max_retries - 1:
-                await asyncio.sleep(5)
-                continue
-            raise ApiError(f"Ошибка сети: {str(e)}", 500)
-
-    added_count = 0
-    for ev in events:
-        title = ev.get("title", "Событие")[:50]
-        date = ev.get("date", "")
-        time_val = ev.get("time", "")
-        
-        if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
-            continue
-            
-        await db.create_event(
-            created_by=tg_user.id,
-            target_user=user["partner_id"],
-            title="📸 " + title,
-            description="Добавлено с фото календаря",
-            date=date,
-            event_time=time_val,
-            category="todo",
-            color="#8b5cf6",
-            items=None
-        )
-        added_count += 1
-
-    return web.json_response({"added": added_count})
-
-
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
@@ -1419,7 +1201,6 @@ async def main() -> None:
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
-    app.router.add_post("/api/upload-photo", api_upload_photo)
 
     runner = web.AppRunner(app)
     await runner.setup()
