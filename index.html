@@ -151,13 +151,27 @@
   .todo-color.selected { border-color: var(--text); }
 
   .checklist { margin-top: 10px; }
-  .checklist-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06); }
+  .checklist-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,.06);
+    touch-action: pan-y; }
   .checklist-item:last-child { border-bottom: 0; }
   .checklist-item input[type="checkbox"] { width: 20px; height: 20px; accent-color: rgb(var(--accepted)); flex-shrink: 0; cursor: pointer; padding: 0; }
   .checklist-item .cl-text { flex: 1; word-break: break-word; }
   .checklist-item.checked .cl-text { text-decoration: line-through; opacity: .55; }
   .checklist-item .cl-remove { font-size: 18px; opacity: .5; padding: 2px 8px; border-radius: 6px; }
   .checklist-item .cl-remove:hover { opacity: 1; background: rgba(0,0,0,.05); }
+
+  .cl-drag { cursor: grab; opacity: .45; padding: 2px 4px; border-radius: 6px;
+    font-size: 18px; line-height: 1; user-select: none; flex-shrink: 0;
+    touch-action: none; letter-spacing: -3px; }
+  .cl-drag:active { cursor: grabbing; opacity: .9; }
+
+  .cl-move { display: flex; flex-direction: column; gap: 0; flex-shrink: 0; }
+  .cl-move button { font-size: 12px; line-height: 1; padding: 2px 6px; opacity: .55; border-radius: 4px; }
+  .cl-move button:hover { opacity: 1; background: rgba(0,0,0,.06); }
+  .cl-move button:disabled { opacity: .15; pointer-events: none; }
+
+  .checklist-item.dragging { opacity: .4; background: rgba(36,129,204,.1); }
+
   .cl-empty { padding: 8px 0; font-size: 14px; color: var(--hint); }
   .cl-add-row { display: flex; gap: 8px; margin-top: 10px; }
   .cl-add-row input { flex: 1; }
@@ -236,7 +250,6 @@
   .reaction-picker button { font-size: 26px; padding: 4px 6px; border-radius: 10px; line-height: 1; }
   .reaction-picker button:active { background: var(--bg2); }
 
-  /* Идеи внутри карточки (секс) */
   .ideas-list-card { margin-top: 10px; display: flex; flex-direction: column; gap: 4px;
     background: rgba(0,0,0,.03); border-radius: 10px; padding: 6px 10px; }
   .idea-line { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
@@ -631,8 +644,14 @@ function renderCalendar() {
 }
 
 function checklistHtml(e) {
-  const items = (e.checklist || []).map((it) => `
-    <div class="checklist-item${it.checked ? " checked" : ""}" data-item="${it.id}">
+  const list = e.checklist || [];
+  const items = list.map((it, idx) => `
+    <div class="checklist-item${it.checked ? " checked" : ""}" data-item="${it.id}" data-idx="${idx}">
+      <span class="cl-drag" data-cl-drag role="button" tabindex="0" aria-label="Перетащить">⋮⋮</span>
+      <div class="cl-move">
+        <button type="button" data-cl-up ${idx === 0 ? "disabled" : ""} aria-label="Выше">▲</button>
+        <button type="button" data-cl-down ${idx === list.length - 1 ? "disabled" : ""} aria-label="Ниже">▼</button>
+      </div>
       <input type="checkbox" ${it.checked ? "checked" : ""} data-cl-toggle aria-label="${esc(it.text)}">
       <span class="cl-text">${esc(it.text)}</span>
       <button type="button" class="cl-remove" data-cl-remove aria-label="Удалить пункт «${esc(it.text)}»">×</button>
@@ -910,6 +929,103 @@ function addItem(eventId, input) {
   });
 }
 
+function moveItem(eventId, itemId, newPosition) {
+  const ev = findEvent(eventId);
+  if (!ev) return;
+  const idx = ev.checklist.findIndex(x => String(x.id) === String(itemId));
+  if (idx < 0) return;
+  newPosition = Math.max(0, Math.min(newPosition, ev.checklist.length - 1));
+  if (idx === newPosition) return;
+  const [moved] = ev.checklist.splice(idx, 1);
+  ev.checklist.splice(newPosition, 0, moved);
+  renderList();
+  tg.HapticFeedback?.selectionChanged();
+  queueOp(async () => {
+    try {
+      const updated = await api(
+        `/events/${eventId}/items/${itemId}/move`,
+        { method: "POST", body: { position: newPosition } }
+      );
+      if (lastOp()) replaceEvent(updated);
+    } catch (e) { toast(e.message); await load(); }
+  });
+}
+
+// Drag & drop для ручки ⋮⋮
+let dragState = null;
+
+function onDragStart(ev) {
+  const handle = ev.target.closest("[data-cl-drag]");
+  if (!handle) return;
+  const item = handle.closest(".checklist-item");
+  const card = handle.closest(".card");
+  if (!item || !card) return;
+
+  ev.preventDefault();
+  const rect = item.getBoundingClientRect();
+  dragState = {
+    eventId: card.dataset.id,
+    itemId: item.dataset.item,
+    el: item,
+    pointerOffsetY: ev.clientY - rect.top,
+    pointerId: ev.pointerId,
+  };
+  item.classList.add("dragging");
+  try { handle.setPointerCapture(ev.pointerId); } catch (e) {}
+}
+
+function onDragMove(ev) {
+  if (!dragState) return;
+  ev.preventDefault();
+  const list = dragState.el.parentElement;
+  const items = [...list.querySelectorAll(".checklist-item")].filter(x => x !== dragState.el);
+  let closest = null;
+  let closestDist = Infinity;
+  for (const el of items) {
+    const rect = el.getBoundingClientRect();
+    const mid = rect.top + rect.height / 2;
+    const dist = Math.abs(ev.clientY - mid);
+    if (dist < closestDist) { closestDist = dist; closest = el; }
+  }
+  if (!closest) return;
+  const rect = closest.getBoundingClientRect();
+  const after = ev.clientY > rect.top + rect.height / 2;
+  if (after) {
+    list.insertBefore(dragState.el, closest.nextSibling);
+  } else {
+    list.insertBefore(dragState.el, closest);
+  }
+}
+
+function onDragEnd() {
+  if (!dragState) return;
+  const { eventId, itemId, el } = dragState;
+  el.classList.remove("dragging");
+  const list = el.parentElement;
+  const items = [...list.querySelectorAll(".checklist-item")];
+  const newPos = items.indexOf(el);
+  const idsNow = items.map(x => String(x.dataset.item));
+  dragState = null;
+
+  const ev = findEvent(eventId);
+  if (!ev) { renderList(); return; }
+  const oldOrder = ev.checklist.map(x => String(x.id));
+  if (idsNow.join(",") === oldOrder.join(",")) {
+    return; // ничего не поменялось
+  }
+  moveItem(eventId, itemId, newPos);
+}
+
+$("list").addEventListener("pointerdown", onDragStart);
+$("list").addEventListener("pointermove", onDragMove);
+$("list").addEventListener("pointerup", onDragEnd);
+$("list").addEventListener("pointercancel", () => {
+  if (!dragState) return;
+  dragState.el.classList.remove("dragging");
+  dragState = null;
+  renderList();
+});
+
 let reactionPickerEl = null;
 function openReactionPicker(event) {
   closeReactionPicker();
@@ -950,6 +1066,20 @@ $("list").addEventListener("click", async (ev) => {
   const eventId = card.dataset.id;
   const event = findEvent(eventId);
   if (!event) return;
+
+  // Кнопки ↑/↓ перестановки
+  const upBtn = ev.target.closest("[data-cl-up]");
+  const downBtn = ev.target.closest("[data-cl-down]");
+  if (upBtn || downBtn) {
+    const item = ev.target.closest(".checklist-item");
+    const items = [...card.querySelectorAll(".checklist-item")];
+    const curIdx = items.indexOf(item);
+    const newPos = upBtn ? curIdx - 1 : curIdx + 1;
+    if (newPos >= 0 && newPos < items.length) {
+      moveItem(eventId, item.dataset.item, newPos);
+    }
+    return;
+  }
 
   const ideaYes = ev.target.closest("[data-idea-yes]");
   const ideaNo  = ev.target.closest("[data-idea-no]");
@@ -1462,7 +1592,7 @@ $("unlink").onclick = () => {
 
 function startPolling() {
   const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
-    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl;
+    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl && !dragState;
   setInterval(() => { if (canPoll()) load(true); }, 15000);
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
