@@ -489,14 +489,18 @@ def parse_event_payload(body: dict) -> dict:
         if remind_before and not event_time:
             raise ApiError("Напоминание возможно только если указано время")
         visibility = "shared"
-        # date_end для todo разрешён (мультивыделение)
     else:
-        color = ""
         remind_before = 0
         visibility = "shared"
-        # date_end разрешён только для rest; для sex и shop — одиночный день
         if category != "rest":
             date_end = ""
+
+        if category == "rest" and date_end:
+            # при диапазоне rest может иметь цвет заливки
+            if color and color not in db.TODO_COLORS:
+                raise ApiError("Некорректный цвет")
+        else:
+            color = ""
 
     title = CATEGORY_TITLES.get(category, "Событие")
 
