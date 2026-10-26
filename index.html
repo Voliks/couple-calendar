@@ -19,6 +19,9 @@
     --declined: 239, 68, 68;
     --expired: 138, 138, 142;
     --todo: 139, 92, 246;
+    --personal: 99, 102, 241;
+    --multi-color-bg: rgba(99, 102, 241, .25);
+    --multi-color-border: rgb(99, 102, 241);
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--text);
@@ -44,18 +47,27 @@
 
   .weekdays, .grid { display: grid; grid-template-columns: repeat(7, 1fr); }
   .weekdays span { text-align: center; font-size: 12px; color: var(--hint); padding: 4px 0; }
-  .grid { gap: 2px; }
+  .grid { gap: 2px; touch-action: pan-y; }
   .day { position: relative; aspect-ratio: 1 / 1; max-height: 54px; border-radius: 12px;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-    border: 2px solid transparent; font-size: 16px; }
+    border: 2px solid transparent; font-size: 16px; user-select: none; }
   .day.today .num { color: var(--accent); font-weight: 700; }
   .day.selected { border-color: var(--accent); background: var(--bg2); }
+  .day.multi {
+    background: var(--multi-color-bg);
+    border-color: var(--multi-color-border);
+  }
+  .day.multi .num { color: #fff; font-weight: 700; }
+  .day.range-start,
+  .day.range-end { border-radius: 12px; }
 
   .day .todo-bar { position: absolute; top: 2px; left: 6px; right: 6px; height: 4px;
     display: flex; gap: 1px; border-radius: 2px; overflow: hidden; }
   .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
+  .day .personal-bar { position: absolute; bottom: 2px; left: 6px; right: 6px; height: 4px;
+    display: flex; gap: 1px; border-radius: 2px; overflow: hidden; }
+  .day .personal-bar i { flex: 1; min-width: 3px; height: 100%; }
 
-  /* Точки статуса — квадратики */
   .dots { display: flex; gap: 3px; height: 7px; }
   .dot { width: 7px; height: 7px; border-radius: 2px; }
   .dot.pending  { border: 2px solid rgb(var(--pending)); background: transparent; }
@@ -72,6 +84,7 @@
   .card.declined { --c: var(--declined); }
   .card.expired  { --c: var(--expired); }
   .card.todo     { --c: var(--todo); }
+  .card.personal { --c: var(--personal); }
   .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
   .card h3 { margin: 0; font-size: 17px; word-break: break-word; flex: 1; }
   .card .tag { margin-top: 2px; font-size: 13px; color: var(--hint); }
@@ -265,6 +278,11 @@
   .idea-line .idea-no  { background: rgb(var(--declined)); }
   .idea-line .idea-yes:disabled,
   .idea-line .idea-no:disabled { opacity: .5; }
+
+  .public-check { display: flex; align-items: center; gap: 10px; margin-top: 14px;
+    padding: 12px; border-radius: 12px; background: var(--bg2); cursor: pointer; }
+  .public-check input { width: 20px; height: 20px; accent-color: var(--accent); padding: 0; flex-shrink: 0; }
+  .public-check .pc-text { flex: 1; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -325,6 +343,7 @@
       <option value="sex">Секс</option>
       <option value="shop">Магазин</option>
       <option value="todo">Дела</option>
+      <option value="personal">Личное</option>
     </select>
 
     <div id="todoSection" hidden>
@@ -345,6 +364,36 @@
         <option value="2880">2 дня</option>
       </select>
       <div class="hint" id="remindHint">Напоминание работает, только если указано время события.</div>
+    </div>
+
+    <div id="personalSection" hidden>
+      <label>Цвет</label>
+      <div class="todo-colors" id="personalColors"></div>
+
+      <label for="fPersonalRemind">Напомнить за</label>
+      <select id="fPersonalRemind">
+        <option value="0">Не напоминать</option>
+        <option value="5">5 минут</option>
+        <option value="15">15 минут</option>
+        <option value="30">30 минут</option>
+        <option value="60">1 час</option>
+        <option value="120">2 часа</option>
+        <option value="180">3 часа</option>
+        <option value="360">6 часов</option>
+        <option value="720">12 часов</option>
+        <option value="1440">1 день</option>
+        <option value="2880">2 дня</option>
+      </select>
+      <div class="hint" id="personalRemindHint">Напоминание работает, только если указано время события.</div>
+
+      <label for="fPersonalDateEnd">Дата окончания (если несколько дней)</label>
+      <input type="date" id="fPersonalDateEnd">
+
+      <label class="public-check">
+        <input type="checkbox" id="fPersonalPublic">
+        <span class="pc-text">Публичное — партнёр увидит и получит уведомление</span>
+      </label>
+      <div class="hint">Если снять галочку — событие видите только вы.</div>
     </div>
 
     <div id="sexIdeasSection" hidden>
@@ -437,12 +486,14 @@ const CATEGORIES = {
   sex:  { label: "Секс",    icon: "🔥" },
   shop: { label: "Магазин", icon: "🛒" },
   todo: { label: "Дела",    icon: "📌" },
+  personal: { label: "Личное", icon: "📝" },
 };
 const STATUS_TEXT = {
   pending: "⏳ Ждёт ответа", accepted: "✓ Принято", declined: "✕ Отклонено", expired: "Просрочено",
 };
 const MONTHS_FORMAT = new Intl.DateTimeFormat("ru", { month: "long", year: "numeric" });
 const DAY_FORMAT = new Intl.DateTimeFormat("ru", { day: "numeric", month: "long" });
+const RANGE_FORMAT = new Intl.DateTimeFormat("ru", { day: "numeric", month: "short" });
 
 const pad = (n) => String(n).padStart(2, "0");
 const fmt = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
@@ -456,13 +507,18 @@ function hexToRgb(hex) {
 }
 function humanizeMinutes(m) {
   if (m < 60) return `${m} мин`;
-  if (m < 1440) return `${m / 60} ч`;
-  return `${m / 1440} дн`;
+  if (m < 1440) { const h = m / 60; return h % 1 === 0 ? `${h} ч` : `${h.toFixed(1)} ч`; }
+  const d = m / 1440; return d % 1 === 0 ? `${d} дн` : `${d.toFixed(1)} дн`;
+}
+function fmtRange(start, end) {
+  if (!end || end === start) return DAY_FORMAT.format(parse(start));
+  return RANGE_FORMAT.format(parse(start)) + " – " + RANGE_FORMAT.format(parse(end));
 }
 
 let state = {
   has_partner: false, invite_link: "", events: [], sex_ideas: [],
   stats: null, todo_colors: [], allowed_reactions: [], allowed_remind_before: [],
+  multi_select: new Set(),
 };
 let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
@@ -552,7 +608,9 @@ async function load(silent = false) {
     const r = await request("/state?month=" + key, { etag: etagKey === key ? etag : null });
     if (key !== monthKey()) return;
     if (r.status === 304) return;
-    state = r.data; etag = r.etag; etagKey = key;
+    state = { ...state, ...r.data };
+    if (!(state.multi_select instanceof Set)) state.multi_select = new Set();
+    etag = r.etag; etagKey = key;
     monthCache[key] = state.events;
     render();
   } catch (e) {
@@ -586,8 +644,10 @@ async function bootstrap() {
 
 function render() {
   $("welcome").hidden = state.has_partner;
-  $("app").hidden = !state.has_partner;
-  if (state.has_partner) { renderCalendar(); renderList(); renderStats(); }
+  // Приложение показываем всегда, если есть партнёр или личные события без пары.
+  const canShowApp = state.has_partner || (state.events && state.events.length > 0);
+  $("app").hidden = !canShowApp;
+  if (canShowApp) { renderCalendar(); renderList(); renderStats(); }
 }
 
 function renderStats() {
@@ -608,15 +668,33 @@ function renderStats() {
 
 function statusKey(e) { return e.status === "pending" && e.date < todayStr() ? "expired" : e.status; }
 
+function dayHasDate(event, date) {
+  const end = event.date_end || event.date;
+  return date >= event.date && date <= end;
+}
+
 function renderCalendar() {
   $("title").textContent = MONTHS_FORMAT.format(new Date(view.y, view.m, 1));
 
+  // Раскладываем события по дням с учётом диапазона
   const byDay = {};
-  for (const e of state.events) (byDay[e.date] ||= []).push(e);
+  for (const e of state.events) {
+    const start = e.date;
+    const end = e.date_end || e.date;
+    if (!start || !end) continue;
+    const startD = parse(start), endD = parse(end);
+    const cur = new Date(startD);
+    while (cur <= endD) {
+      const key = fmt(cur.getFullYear(), cur.getMonth(), cur.getDate());
+      (byDay[key] ||= []).push(e);
+      cur.setDate(cur.getDate() + 1);
+    }
+  }
 
   const offset = (new Date(view.y, view.m, 1).getDay() + 6) % 7;
   const days = new Date(view.y, view.m + 1, 0).getDate();
   const today = todayStr();
+  const multi = state.multi_select || new Set();
   let html = "";
   for (let i = 0; i < offset; i++) html += "<div></div>";
   for (let d = 1; d <= days; d++) {
@@ -629,17 +707,30 @@ function renderCalendar() {
           `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
       : "";
 
-    const nonTodos = list.filter(x => x.category !== "todo");
+    const personals = list.filter(x => x.category === "personal").slice().sort((a, b) => a.id - b.id);
+    const personalBar = personals.length
+      ? `<span class="personal-bar" aria-hidden="true">${personals.map(t =>
+          `<i style="background:${esc(t.color || "#6366f1")}"></i>`).join("")}</span>`
+      : "";
+
+    const nonTodos = list.filter(x => x.category !== "todo" && x.category !== "personal");
     const st = new Set(nonTodos.map(statusKey));
     const dots = ["pending", "accepted", "declined", "expired"]
       .filter((s) => st.has(s)).map((s) => `<i class="dot ${s}"></i>`).join("");
 
-    const cls = ["day", date === today && "today", date === selected && "selected"].filter(Boolean).join(" ");
+    const isMulti = multi.has(date);
+    const cls = ["day",
+      date === today && "today",
+      date === selected && "selected",
+      isMulti && "multi",
+    ].filter(Boolean).join(" ");
     const label = DAY_FORMAT.format(new Date(view.y, view.m, d))
       + (list.length ? `, событий: ${list.length}` : "");
-    html += `<button class="${cls}" data-date="${date}" aria-pressed="${date === selected}" aria-label="${esc(label)}">
+    html += `<button class="${cls}" data-date="${date}" aria-pressed="${isMulti}" aria-label="${esc(label)}">
                ${todoBar}
-               <span class="num">${d}</span><span class="dots" aria-hidden="true">${dots}</span></button>`;
+               <span class="num">${d}</span><span class="dots" aria-hidden="true">${dots}</span>
+               ${personalBar}
+             </button>`;
   }
   $("grid").innerHTML = html;
 }
@@ -660,7 +751,7 @@ function checklistHtml(e) {
 }
 
 function answerHtml(e, expired) {
-  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
   if (e.is_creator) return "";
   if (e.status === "pending") {
     return expired ? "" : `<div class="answer">
@@ -674,7 +765,7 @@ function answerHtml(e, expired) {
 }
 
 function reactionHtml(e) {
-  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
   if (e.status !== "accepted" && e.status !== "declined") return "";
   const mine = e.reaction_mine || "";
   const partner = e.reaction_partner || "";
@@ -711,7 +802,7 @@ function ideasHtml(e) {
 }
 
 function declineCommentHtml(e) {
-  if (e.category === "shop" || e.category === "todo") return "";
+  if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
   if (e.status !== "declined") return "";
 
   const cCreator = e.decline_comment_creator || "";
@@ -734,25 +825,36 @@ function cardHtml(e) {
   const sk = statusKey(e);
   const isShop = e.category === "shop";
   const isTodo = e.category === "todo";
-  const remindText = (isTodo && e.remind_before && e.time)
+  const isPersonal = e.category === "personal";
+  const isRange = (e.date_end && e.date_end !== e.date);
+  const remindText = ((isTodo || isPersonal) && e.remind_before && e.time)
     ? ` · 🔔 за ${humanizeMinutes(e.remind_before)}`
     : "";
-  const tag = `${cat.icon} ${cat.label}${e.time ? " · " + esc(e.time) : ""}${remindText}`;
+  const dateLabel = fmtRange(e.date, e.date_end);
+  const tag = `${cat.icon} ${cat.label} · ${dateLabel}${e.time ? " · " + esc(e.time) : ""}${remindText}`;
 
-  const cardCls = isTodo ? "todo" : (isShop ? "accepted" : sk);
-  const cardStyle = isTodo && e.color ? ` style="--c: ${hexToRgb(e.color)};"` : "";
+  const cardCls = isPersonal ? "personal" : (isTodo ? "todo" : (isShop ? "accepted" : sk));
+  const cardStyle = ((isTodo || isPersonal) && e.color) ? ` style="--c: ${hexToRgb(e.color)};"` : "";
 
-  const actions = (e.is_creator || isTodo)
+  const canEdit = e.can_edit !== undefined ? e.can_edit : e.is_creator;
+  const actions = (canEdit)
     ? `<div class="card-actions">
          <button class="icon-btn edit-btn" aria-label="Редактировать" title="Редактировать">✏️</button>
          <button class="icon-btn delete-btn" aria-label="Удалить" title="Удалить">🗑️</button>
        </div>` : "";
 
-  const statusLabel = (isShop || isTodo) ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
+  const statusLabel = (isShop || isTodo || isPersonal) ? "" : `<b>${STATUS_TEXT[sk]}</b>`;
+
+  let privacy = "";
+  if (isPersonal) {
+    privacy = e.visibility === "private"
+      ? `<div class="tag" style="margin-top:2px;color:rgb(var(--personal));font-weight:600;">🔒 Только для вас</div>`
+      : `<div class="tag" style="margin-top:2px;color:rgb(var(--personal));font-weight:600;">🌐 Общее с партнёром</div>`;
+  }
 
   return `<article class="card ${cardCls}" data-id="${e.id}"${cardStyle}>
     <div class="card-header">
-      <div style="flex:1;min-width:0"><h3>${esc(e.title)}</h3><div class="tag">${tag}</div></div>
+      <div style="flex:1;min-width:0"><h3>${esc(e.title)}</h3><div class="tag">${tag}</div>${privacy}</div>
       ${actions}
     </div>
     ${isShop ? checklistHtml(e) : (e.description ? `<p>${esc(e.description)}</p>` : "")}
@@ -804,21 +906,121 @@ function reconcile(container, items) {
 
 function renderList() {
   $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
-  const items = state.events.filter((e) => e.date === selected)
+  const items = state.events
+    .filter((e) => dayHasDate(e, selected))
     .map((e) => ({ id: String(e.id), html: cardHtml(e) }));
   if (!reconcile($("list"), items)) {
     $("list").innerHTML = `<div class="empty">На этот день ничего нет. Нажмите «+», чтобы добавить событие.</div>`;
   }
 }
 
-$("grid").addEventListener("click", (ev) => {
-  const btn = ev.target.closest(".day");
-  if (!btn) return;
-  selected = btn.dataset.date;
-  tg.HapticFeedback?.selectionChanged();
+// === Мультивыделение + свайп на календаре ===
+let gridDrag = null; // { pointerId, anchor, swiping }
+
+function dayElFromPoint(x, y) {
+  const el = document.elementFromPoint(x, y);
+  return el ? el.closest(".day") : null;
+}
+
+function applyMultiSelect(dates) {
+  state.multi_select = new Set(dates);
+  updateMultiColorPreview();
   renderCalendar();
-  renderList();
-  $("grid").querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+}
+
+function clearMultiSelect() {
+  state.multi_select = new Set();
+  updateMultiColorPreview();
+  renderCalendar();
+}
+
+function updateMultiColorPreview() {
+  const hex = formColor || "";
+  if (hex) {
+    const rgb = hexToRgb(hex);
+    document.documentElement.style.setProperty("--multi-color-bg", `rgba(${rgb}, .35)`);
+    document.documentElement.style.setProperty("--multi-color-border", `rgb(${rgb})`);
+  } else {
+    document.documentElement.style.setProperty("--multi-color-bg", "rgba(99, 102, 241, .25)");
+    document.documentElement.style.setProperty("--multi-color-border", "rgb(99, 102, 241)");
+  }
+}
+
+$("grid").addEventListener("pointerdown", (ev) => {
+  if (ev.button !== undefined && ev.button !== 0) return;
+  const day = ev.target.closest(".day");
+  if (!day) return;
+  if (!$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden) return;
+
+  gridDrag = {
+    pointerId: ev.pointerId,
+    anchor: day.dataset.date,
+    swiping: false,
+    moved: false,
+    startX: ev.clientX,
+    startY: ev.clientY,
+  };
+  applyMultiSelect([day.dataset.date]);
+  try { $("grid").setPointerCapture(ev.pointerId); } catch (e) {}
+});
+
+$("grid").addEventListener("pointermove", (ev) => {
+  if (!gridDrag || gridDrag.pointerId !== ev.pointerId) return;
+  const dx = Math.abs(ev.clientX - gridDrag.startX);
+  const dy = Math.abs(ev.clientY - gridDrag.startY);
+  if (!gridDrag.moved && (dx > 6 || dy > 6)) gridDrag.moved = true;
+
+  // Свайп по горизонтали — мультивыделение; вертикаль отдаём браузеру (скролл).
+  if (dx <= dy && dy > 6) return;
+
+  const day = dayElFromPoint(ev.clientX, ev.clientY);
+  if (!day) return;
+
+  const a = gridDrag.anchor;
+  const b = day.dataset.date;
+  if (!a || !b) return;
+  const [lo, hi] = a <= b ? [a, b] : [b, a];
+
+  const dates = [];
+  const cur = parse(lo), end = parse(hi);
+  while (cur <= end) {
+    dates.push(fmt(cur.getFullYear(), cur.getMonth(), cur.getDate()));
+    cur.setDate(cur.getDate() + 1);
+  }
+  if (dates.length > 1) gridDrag.swiping = true;
+  applyMultiSelect(dates);
+});
+
+function endGridDrag(ev) {
+  if (!gridDrag || gridDrag.pointerId !== ev.pointerId) return;
+  const wasSwipe = gridDrag.swiping;
+  const dates = [...state.multi_select];
+  const moved = gridDrag.moved;
+  gridDrag = null;
+
+  if (!dates.length) return;
+
+  if (wasSwipe && dates.length > 0) {
+    // свайп → открываем форму personal с диапазоном
+    openFormForRange(dates);
+    return;
+  }
+  // обычный тап — переключаем selected (показываем список)
+  if (!moved) {
+    selected = dates[0];
+    tg.HapticFeedback?.selectionChanged();
+    renderCalendar();
+    renderList();
+  } else {
+    // сброс, если это был не свайп и не тап
+    clearMultiSelect();
+  }
+}
+$("grid").addEventListener("pointerup", endGridDrag);
+$("grid").addEventListener("pointercancel", (ev) => {
+  if (!gridDrag || gridDrag.pointerId !== ev.pointerId) return;
+  gridDrag = null;
+  clearMultiSelect();
 });
 
 function shiftMonth(delta) {
@@ -828,6 +1030,7 @@ function shiftMonth(delta) {
   const sameAsToday = view.y === t.getFullYear() && view.m === t.getMonth();
   selected = sameAsToday ? todayStr() : fmt(view.y, view.m, 1);
   state.events = monthCache[monthKey()] || [];
+  clearMultiSelect();
   renderCalendar();
   renderList();
   load();
@@ -840,6 +1043,7 @@ function goToday() {
   view = { y: t.getFullYear(), m: t.getMonth() };
   selected = todayStr();
   state.events = monthCache[monthKey()] || [];
+  clearMultiSelect();
   renderCalendar();
   renderList();
   load();
@@ -1046,7 +1250,7 @@ function openReactionPicker(event) {
     } catch (err) { toast(err.message); }
   });
   setTimeout(() => {
-    document.addEventListener("pointerdown", outsideCloseReaction, { once: true });
+    document.addEventListener("pointerdown", outsideCloseReaction);
   }, 0);
 }
 function outsideCloseReaction(e) {
@@ -1054,6 +1258,7 @@ function outsideCloseReaction(e) {
 }
 function closeReactionPicker() {
   if (reactionPickerEl) { reactionPickerEl.remove(); reactionPickerEl = null; }
+  document.removeEventListener("pointerdown", outsideCloseReaction);
 }
 
 $("list").addEventListener("click", async (ev) => {
@@ -1083,14 +1288,14 @@ $("list").addEventListener("click", async (ev) => {
   }
 
   if (ev.target.closest("[data-reaction-open]") || ev.target.closest("[data-reaction-toggle]")) {
-    if (event.category === "shop" || event.category === "todo") return;
+    if (event.category === "shop" || event.category === "todo" || event.category === "personal") return;
     if (event.status !== "accepted") return;
     openReactionPicker(event);
     return;
   }
 
   if (ev.target.closest("[data-comment-open]")) {
-    if (event.category === "shop" || event.category === "todo") return;
+    if (event.category === "shop" || event.category === "todo" || event.category === "personal") return;
     if (event.status !== "declined") return;
     openCommentDialog(event.my_decline_comment || "", async (comment) => {
       try {
@@ -1168,12 +1373,21 @@ function updateRemindAvailability() {
   const cat = $("fCategory").value;
   const hasTime = !!$("fTime").value;
   const isTodo = cat === "todo";
+  const isPersonal = cat === "personal";
   const sel = $("fRemindBefore");
-  if (!sel) return;
-  sel.disabled = !isTodo || !hasTime;
+  if (sel) {
+    sel.disabled = !isTodo || !hasTime;
+    if (!hasTime) sel.value = "0";
+  }
+  const selP = $("fPersonalRemind");
+  if (selP) {
+    selP.disabled = !isPersonal || !hasTime;
+    if (!hasTime) selP.value = "0";
+  }
   const hint = $("remindHint");
   if (hint) hint.hidden = !isTodo || hasTime;
-  if (!hasTime) sel.value = "0";
+  const hintP = $("personalRemindHint");
+  if (hintP) hintP.hidden = !isPersonal || hasTime;
 }
 
 function updateFormSections() {
@@ -1181,13 +1395,16 @@ function updateFormSections() {
   const isShop = cat === "shop";
   const isSex = cat === "sex";
   const isTodo = cat === "todo";
+  const isPersonal = cat === "personal";
 
   $("checklistSection").hidden = !(isShop && !editingEvent);
   $("sexIdeasSection").hidden = !isSex;
   $("todoSection").hidden = !isTodo;
+  $("personalSection").hidden = !isPersonal;
 
   if (isShop && !editingEvent) renderFormChecklist();
   if (isTodo) renderTodoSection();
+  if (isPersonal) renderPersonalSection();
   updateRemindAvailability();
 
   if (!isSex) {
@@ -1207,11 +1424,31 @@ function renderTodoSection() {
   ).join("");
 }
 
+function renderPersonalSection() {
+  const box = $("personalColors");
+  if (!box) return;
+  const colors = availableTodoColors();
+  box.innerHTML = colors.map(c =>
+    `<button type="button" class="todo-color${c === formColor ? " selected" : ""}"
+             data-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
+  ).join("");
+}
+
 $("todoColors").addEventListener("click", (e) => {
   const b = e.target.closest("[data-color]");
   if (!b) return;
   formColor = b.dataset.color;
   renderTodoSection();
+  updateMultiColorPreview();
+  tg.HapticFeedback?.selectionChanged();
+});
+
+$("personalColors").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-color]");
+  if (!b) return;
+  formColor = b.dataset.color;
+  renderPersonalSection();
+  updateMultiColorPreview();
   tg.HapticFeedback?.selectionChanged();
 });
 
@@ -1408,25 +1645,50 @@ function openForm(event = null) {
   currentCategoryTitle = "";
   renderChosen();
 
-  if (event && event.category === "todo") {
+  if (event && (event.category === "todo" || event.category === "personal")) {
     formColor = event.color || availableTodoColors()[6];
-    $("fRemindBefore").value = String(event.remind_before || 0);
+    if (event.category === "todo") {
+      $("fRemindBefore").value = String(event.remind_before || 0);
+    } else {
+      $("fPersonalRemind").value = String(event.remind_before || 0);
+      $("fPersonalDateEnd").value = event.date_end && event.date_end !== event.date ? event.date_end : "";
+      $("fPersonalPublic").checked = event.visibility === "shared";
+    }
   } else {
     formColor = availableTodoColors()[6];
     $("fRemindBefore").value = "0";
+    $("fPersonalRemind").value = "0";
+    $("fPersonalDateEnd").value = "";
+    $("fPersonalPublic").checked = false;
   }
 
-  $("fHint").hidden = !event || (event && (event.category === "shop" || event.category === "todo"));
+  $("fHint").hidden = !event || (event && (event.category === "shop" || event.category === "todo" || event.category === "personal"));
   $("fError").textContent = "";
   formChecklist = [];
+  updateMultiColorPreview();
   updateFormSections();
   $("overlay").hidden = false;
   tg.BackButton?.show();
 }
 
+function openFormForRange(dates) {
+  if (!dates.length) return;
+  const sorted = [...dates].sort();
+  const start = sorted[0];
+  const end = sorted[sorted.length - 1];
+  openForm();
+  $("fCategory").value = "personal";
+  $("fDate").value = start;
+  $("fPersonalDateEnd").value = end !== start ? end : "";
+  updateFormSections();
+  // Прокрутить к форме
+  $("sheetTitle").textContent = `Новое личное событие · ${fmtRange(start, end)}`;
+}
+
 function closeForm() {
   $("overlay").hidden = true;
   tg.BackButton?.hide();
+  clearMultiSelect();
 }
 
 $("add").onclick = () => openForm();
@@ -1488,12 +1750,32 @@ $("fSave").onclick = async () => {
     date,
     time: $("fTime").value,
   };
+
   if (category === "todo") {
     if (!formColor) { $("fError").textContent = "Выберите цвет"; return; }
     payload.color = formColor;
     const rb = parseInt($("fRemindBefore").value, 10) || 0;
     payload.remind_before = ($("fTime").value ? rb : 0);
+    payload.visibility = "shared";
+    payload.date_end = "";
   }
+
+  if (category === "personal") {
+    if (!formColor) { $("fError").textContent = "Выберите цвет"; return; }
+    payload.color = formColor;
+    const rb = parseInt($("fPersonalRemind").value, 10) || 0;
+    payload.remind_before = ($("fTime").value ? rb : 0);
+    payload.visibility = $("fPersonalPublic").checked ? "shared" : "private";
+
+    const de = $("fPersonalDateEnd").value || "";
+    if (de) {
+      if (de < date) { $("fError").textContent = "Дата окончания раньше даты начала"; return; }
+      payload.date_end = de;
+    } else {
+      payload.date_end = "";
+    }
+  }
+
   if (!editingEvent && category === "shop") payload.checklist = formChecklist;
 
   const btn = $("fSave");
@@ -1561,7 +1843,7 @@ $("copy").onclick = async () => {
   catch { toast(state.invite_link); }
 };
 $("unlink").onclick = () => {
-  confirmDialog("Отвязать партнёра? Все общие события будут удалены безвозвратно.", async () => {
+  confirmDialog("Отвязать партнёра? Все общие события будут удалены безвозвратно. Личные (приватные) события останутся у вас.", async () => {
     try {
       await api("/unlink", { method: "POST" });
       toast("Партнёр отвязан");
@@ -1610,7 +1892,7 @@ $("unlink").onclick = () => {
 
 function startPolling() {
   const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
-    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl && !dragState;
+    && $("archiveOverlay").hidden && pendingOps === 0 && !reactionPickerEl && !dragState && !gridDrag;
   setInterval(() => { if (canPoll()) load(true); }, 15000);
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
