@@ -54,7 +54,7 @@
   .day.today .num { color: var(--accent); font-weight: 700; }
   .day.selected { border-color: var(--accent); background: var(--bg2); }
 
-  /* заливка плитки дня (personal, а также todo/rest при диапазоне) */
+  /* заливка плитки дня (personal / todo-диапазон / rest-диапазон) */
   .day.has-personal {
     background: var(--personal-bg);
     border-color: var(--personal-border);
@@ -385,6 +385,12 @@
       <option value="todo">Дела</option>
       <option value="personal">Личное</option>
     </select>
+
+    <div id="restSection" hidden>
+      <label>Цвет заливки</label>
+      <div class="todo-colors" id="restColors"></div>
+      <div class="hint">Цвет применяется, когда выбрано несколько дней (диапазон).</div>
+    </div>
 
     <div id="todoSection" hidden>
       <label>Цвет</label>
@@ -749,7 +755,7 @@ function renderCalendar() {
       .sort((a, b) => a.id - b.id);
     const todoRangeLast = todoRange.length ? todoRange[todoRange.length - 1] : null;
 
-    // 3. rest с диапазоном — заливка зелёным (accepted)
+    // 3. rest с диапазоном — заливка своим цветом (или зелёный по умолчанию)
     const restRange = list
       .filter(x => x.category === "rest" && x.date_end && x.date_end !== x.date)
       .sort((a, b) => a.id - b.id);
@@ -766,7 +772,7 @@ function renderCalendar() {
       fillColor = hexToRgb(todoRangeLast.color || "#8b5cf6");
     } else if (restRangeLast) {
       hasPersonal = true;
-      fillColor = "34, 197, 94"; // зелёный accepted
+      fillColor = hexToRgb(restRangeLast.color || "#22c55e");
     }
     if (hasPersonal) {
       personalStyle = ` style="--personal-bg: rgba(${fillColor}, .28); --personal-border: rgba(${fillColor}, .55); --personal-fg: var(--text);"`;
@@ -907,7 +913,9 @@ function cardHtml(e) {
   const tag = `${cat.icon} ${cat.label} · ${dateLabel}${e.time ? " · " + esc(e.time) : ""}${remindText}`;
 
   const cardCls = isPersonal ? "personal" : (isTodo ? "todo" : (isShop ? "accepted" : sk));
-  const cardStyle = ((isTodo || isPersonal) && e.color) ? ` style="--c: ${hexToRgb(e.color)};"` : "";
+  // цвет для карточки: todo/personal — своим цветом, rest-диапазон — своим
+  const hasColor = (isTodo || isPersonal || (e.category === "rest" && isRange)) && e.color;
+  const cardStyle = hasColor ? ` style="--c: ${hexToRgb(e.color)};"` : "";
 
   const canEdit = e.can_edit !== undefined ? e.can_edit : e.is_creator;
   const actions = (canEdit)
@@ -1102,7 +1110,6 @@ function openCategoryPicker(dates) {
     ? DAY_FORMAT.format(parse(start))
     : `${fmtRange(start, end)} · ${sorted.length} ${pluralDays(sorted.length)}`;
 
-  // Для диапазона (2+ дня) полностью скрываем sex и shop
   document.querySelectorAll(".cat-btn").forEach(btn => {
     const cat = btn.dataset.cat;
     btn.hidden = isRange && (cat === "sex" || cat === "shop");
@@ -1513,15 +1520,19 @@ function updateFormSections() {
   const isSex = cat === "sex";
   const isTodo = cat === "todo";
   const isPersonal = cat === "personal";
+  const isRest = cat === "rest";
+  const isRange = !!formDateEnd;
 
   $("checklistSection").hidden = !(isShop && !editingEvent);
   $("sexIdeasSection").hidden = !isSex;
   $("todoSection").hidden = !isTodo;
   $("personalSection").hidden = !isPersonal;
+  $("restSection").hidden = !(isRest && isRange);
 
   if (isShop && !editingEvent) renderFormChecklist();
   if (isTodo) renderTodoSection();
   if (isPersonal) renderPersonalSection();
+  if (isRest && isRange) renderRestSection();
   updateRemindAvailability();
 
   if (!isSex) {
@@ -1551,6 +1562,16 @@ function renderPersonalSection() {
   ).join("");
 }
 
+function renderRestSection() {
+  const box = $("restColors");
+  if (!box) return;
+  const colors = availableTodoColors();
+  box.innerHTML = colors.map(c =>
+    `<button type="button" class="todo-color${c === formColor ? " selected" : ""}"
+             data-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
+  ).join("");
+}
+
 $("todoColors").addEventListener("click", (e) => {
   const b = e.target.closest("[data-color]");
   if (!b) return;
@@ -1565,6 +1586,15 @@ $("personalColors").addEventListener("click", (e) => {
   if (!b) return;
   formColor = b.dataset.color;
   renderPersonalSection();
+  updateMultiColorPreview();
+  tg.HapticFeedback?.selectionChanged();
+});
+
+$("restColors").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-color]");
+  if (!b) return;
+  formColor = b.dataset.color;
+  renderRestSection();
   updateMultiColorPreview();
   tg.HapticFeedback?.selectionChanged();
 });
@@ -1772,6 +1802,12 @@ function openForm(event = null) {
       $("fPersonalDateEnd").value = event.date_end && event.date_end !== event.date ? event.date_end : "";
       $("fPersonalPublic").checked = event.visibility === "shared";
     }
+  } else if (event && event.category === "rest" && event.date_end && event.date_end !== event.date) {
+    formColor = event.color || availableTodoColors()[3];
+    $("fRemindBefore").value = "0";
+    $("fPersonalRemind").value = "0";
+    $("fPersonalDateEnd").value = "";
+    $("fPersonalPublic").checked = false;
   } else {
     formColor = availableTodoColors()[6];
     $("fRemindBefore").value = "0";
@@ -1809,6 +1845,12 @@ function openFormForRange(dates, category) {
   formDateEnd = end !== start ? end : "";
   if (category === "personal") {
     $("fPersonalDateEnd").value = formDateEnd;
+  }
+  if (category === "rest" && formDateEnd) {
+    // при диапазоне rest — предзаполняем цвет по умолчанию
+    if (!formColor || formColor === availableTodoColors()[6]) {
+      formColor = availableTodoColors()[3]; // зелёный
+    }
   }
   updateFormSections();
 
@@ -1917,6 +1959,10 @@ $("fSave").onclick = async () => {
   // Диапазон разрешён только для rest. sex и shop — только один день.
   if (category === "rest") {
     payload.date_end = formDateEnd || "";
+    if (formDateEnd) {
+      if (!formColor) { $("fError").textContent = "Выберите цвет заливки"; return; }
+      payload.color = formColor;
+    }
   }
 
   if (!editingEvent && category === "shop") payload.checklist = formChecklist;
