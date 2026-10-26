@@ -33,12 +33,11 @@ load_dotenv()
 import db
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-blue.vercel.app").rstrip("/")
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-ycu9.onrender.com").rstrip("/")
 PORT = int(os.getenv("PORT", "8080"))
-WEBAPP_DIR = Path(__file__).parent / "webapp"
-INDEX_FILE = WEBAPP_DIR / "index.html"
-STYLES_FILE = WEBAPP_DIR / "styles.css"
-APP_JS_FILE = WEBAPP_DIR / "app.js"
+
+# Жёстко фиксируем путь к папке webapp относительно main.py
+WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
 
 REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
 SHOW_TITLES = os.getenv("NOTIFY_SHOW_TITLES", "0") == "1"
@@ -1087,16 +1086,24 @@ async def api_unlink(request: web.Request) -> web.Response:
     return web.json_response({"status": "unlinked"})
 
 
-async def index(_: web.Request) -> web.FileResponse:
-    return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
+# --- Отдача статики с проверкой существования файлов ---
+
+def _serve_file(path: Path):
+    if not path.is_file():
+        raise web.HTTPNotFound(text=f"File not found: {path.name}")
+    return web.FileResponse(path, headers={"Cache-Control": "no-cache"})
 
 
-async def styles(_: web.Request) -> web.FileResponse:
-    return web.FileResponse(STYLES_FILE, headers={"Cache-Control": "no-cache"})
+async def index(_: web.Request) -> web.Response:
+    return _serve_file(WEBAPP_DIR / "index.html")
 
 
-async def app_js(_: web.Request) -> web.FileResponse:
-    return web.FileResponse(APP_JS_FILE, headers={"Cache-Control": "no-cache"})
+async def styles(_: web.Request) -> web.Response:
+    return _serve_file(WEBAPP_DIR / "styles.css")
+
+
+async def app_js(_: web.Request) -> web.Response:
+    return _serve_file(WEBAPP_DIR / "app.js")
 
 
 async def send_due_reminders() -> None:
@@ -1226,6 +1233,10 @@ async def main() -> None:
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     logging.info("Web app: http://0.0.0.0:%s  (public: %s)", PORT, WEBAPP_URL)
+    logging.info("Serving static from: %s", WEBAPP_DIR)
+    logging.info("index.html exists: %s", (WEBAPP_DIR / "index.html").is_file())
+    logging.info("styles.css exists: %s", (WEBAPP_DIR / "styles.css").is_file())
+    logging.info("app.js exists: %s", (WEBAPP_DIR / "app.js").is_file())
 
     reminders = asyncio.create_task(reminder_loop())
     try:
