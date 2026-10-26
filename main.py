@@ -14,6 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -180,7 +181,105 @@ async def cmd_unlink(message: Message):
         await message.answer("У вас нет партнёра — отвязывать нечего.")
         return
     await message.answer("Отвязать партнёра? Все общие события будут удалены безвозвратно. Личные (приватные) события останутся у вас.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Да, отвязать", callback_data="unlink:yes"), InlineKeyboardButton(text="Отмена", callback_data="unlink:no")]]))
+@router.message(F.voice)
+async def handle_voice_message(message: Message):
+    await message.answer("🎤 Слушаю и распознаю...")
+    
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        await message.answer("Ошибка: не настроен ключ GROQ_API_KEY.")
+        return
 
+    # Скачиваем голосовое из Telegram
+    file = await bot.get_file(message.voice.file_id)
+    voice_bytes = await bot.download_file(file.file_path)
+    
+    # Готовим запрос в Groq (Whisper) для перевода голоса в текст
+    form = aiohttp.FormData()
+    form.add_field('file', voice_bytes.getvalue(), filename='voice.ogg', content_type='audio/ogg')
+    form.add_field('model', 'whisper-large-v3')
+    form.add_field('language', 'ru')
+
+    headers_groq = {"Authorization": f"Bearer {api_key}"}
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post("https://api.groq.com/openai/v1/audio/transcriptions", data=form, headers=headers_groq) as resp:
+                if resp.status != 200:
+                    logging.error(f"Groq STT error: {await resp.text()}")
+                    await message.answer("Не удалось распознать голос.")
+                    return
+                data = await resp.json()
+                text = data.get("text", "")
+                
+        if not text:
+            await message.answer("Я ничего не расслышал.")
+            return
+            
+        await message.answer(f"Вы сказали: «{text}»\n\n⏳ Определяю дату и категорию...")
+
+        # Отправляем текст в LLM, чтобы она поняла, куда записать событие
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        prompt = f"""
+        Сегодня {today}. Пользователь сказал: "{text}"
+        Преврати это в JSON для календаря. Выбери одну категорию из: rest, sex, shop, todo, personal.
+        Верни СТРОГО JSON без лишнего текста:
+        {{"category": "todo", "date": "{today}", "time": "", "title": "Купить хлеб"}}
+        Если время не указано, оставь "". Если дата не указана, используй сегодняшнюю.
+        """
+        
+        payload = {
+            "model": "llama-3.1-8b-instant",
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"}
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers) as resp:
+                if resp.status != 200:
+                    logging.error(f"Groq LLM error: {await resp.text()}")
+                    await message.answer("Не удалось разобрать смысл.")
+                    return
+                
+                data = await resp.json()
+                answer = data["choices"][0]["message"]["content"]
+                ev = json.loads(answer)
+                
+        # Сохраняем в базу
+        user = await db.get_or_create_user(message.from_user.id)
+        if not user["partner_id"]:
+            await message.answer("Сначала привяжите партнера.")
+            return
+            
+        cat = ev.get("category", "rest")
+        if cat not in CATEGORIES:
+            cat = "rest"
+            
+        color = "#8b5cf6" if cat == "todo" else ""
+        
+        await db.create_event(
+            created_by=message.from_user.id,
+            target_user=user["partner_id"],
+            title=ev.get("title", "Событие")[:100],
+            description="Добавлено голосом",
+            date=ev.get("date", today),
+            event_time=ev.get("time", ""),
+            category=cat,
+            color=color,
+            items=None
+        )
+        
+        cat_name = CATEGORY_TITLES.get(cat, "Событие")
+        await message.answer(f"✅ Добавлено в «{cat_name}»:\n📅 {ev.get('date')} {ev.get('time')}\n📝 {ev.get('title')}")
+        
+    except Exception as e:
+        logging.exception("Ошибка при обработке голоса")
+        await message.answer("Произошла ошибка при обработке голоса.")
 @router.callback_query(lambda c: c.data == "unlink:no")
 async def unlink_cancel(call: CallbackQuery):
     await call.message.edit_text("Отменено.")
