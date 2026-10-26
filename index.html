@@ -51,21 +51,28 @@
     border: 2px solid transparent; font-size: 16px;
     user-select: none; -webkit-user-select: none;
     touch-action: pan-y;
-    transition: background-color .12s ease; }
+    transition: background-color .12s ease;
+    background: transparent; }
   .day.today .num { color: var(--accent); font-weight: 700; }
-  .day.selected { border-color: var(--accent); background: var(--bg2); }
+  .day.selected { border-color: var(--accent); }
 
   .day .todo-bar { position: absolute; top: 2px; left: 6px; right: 6px; height: 4px;
     display: flex; gap: 1px; border-radius: 2px; overflow: hidden; z-index: 1; }
   .day .todo-bar i { flex: 1; min-width: 3px; height: 100%; }
 
-  /* Личные записи: заливка дня + лёгкий маркер, чтобы отличать от «Дел» */
-  .day.has-personal { background: rgba(var(--personal), .22); }
-  .day.has-personal.selected { background: rgba(var(--personal), .32); border-color: var(--accent); }
+  /* Личные записи: фон дня заливается цветом записи через inline-стиль --personal-bg */
+  .day.has-personal {
+    background: rgba(var(--personal-bg, var(--personal)), .25);
+  }
+  .day.has-personal.selected {
+    background: rgba(var(--personal-bg, var(--personal)), .35);
+    border-color: var(--accent);
+  }
   .day.has-personal .num { position: relative; z-index: 2; }
 
   .day.multi-selected { border-color: rgb(var(--personal)); background: rgba(var(--personal), .35); }
   .day.multi-selected .num { color: var(--text); font-weight: 700; }
+  .day.multi-selected.has-personal { background: rgba(var(--personal-bg, var(--personal)), .35); }
 
   body.multi-dragging .grid { touch-action: none; }
   body.multi-dragging { overflow: hidden; }
@@ -510,7 +517,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
 function hexToRgb(hex) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
-  return m ? `${parseInt(m[1],16)}, ${parseInt(m[2],16)}, ${parseInt(m[3],16)}` : "139, 92, 246";
+  return m ? `${parseInt(m[1],16)}, ${parseInt(m[2],16)}, ${parseInt(m[3],16)}` : "100, 116, 139";
 }
 function humanizeMinutes(m) {
   if (m < 60) return `${m} мин`;
@@ -702,8 +709,14 @@ function renderCalendar() {
           `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
       : "";
 
+    // Личные записи: берём цвет ПЕРВОЙ записи дня и заливаем им весь день
     const personals = list.filter(x => x.category === "personal");
     const hasPersonal = personals.length > 0;
+    let personalStyle = "";
+    if (hasPersonal) {
+      const rgb = hexToRgb(personals[0].color || "#64748b");
+      personalStyle = `--personal-bg: ${rgb};`;
+    }
 
     const nonTodos = list.filter(x => x.category !== "todo" && x.category !== "personal");
     const st = new Set(nonTodos.map(statusKey));
@@ -722,7 +735,7 @@ function renderCalendar() {
     const label = DAY_FORMAT.format(new Date(view.y, view.m, d))
       + (list.length ? `, событий: ${list.length}` : "");
 
-    html += `<button class="${cls}" data-date="${date}" aria-pressed="${date === selected}" aria-label="${esc(label)}">
+    html += `<button class="${cls}" data-date="${date}" style="${personalStyle}" aria-pressed="${date === selected}" aria-label="${esc(label)}">
                ${todoBar}
                <span class="num">${d}</span><span class="dots" aria-hidden="true">${dots}</span></button>`;
   }
