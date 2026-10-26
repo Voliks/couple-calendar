@@ -439,6 +439,11 @@ async def _m13_idea_responses() -> None:
     )
 
 
+async def _m14_checklist_position() -> None:
+    await _add_column("checklist_items", "position", "INTEGER NOT NULL DEFAULT 0")
+    await _exec("UPDATE checklist_items SET position = id WHERE position = 0")
+
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -453,6 +458,7 @@ MIGRATIONS = [
     (11, _m11_reactions_table),
     (12, _m12_todo_remind_before),
     (13, _m13_idea_responses),
+    (14, _m14_checklist_position),
 ]
 
 
@@ -617,7 +623,7 @@ async def _attach_items(events: list[dict]) -> list[dict]:
         marks = ",".join("?" * len(by_id))
         rs = await _exec(
             f"SELECT id, event_id, text, checked FROM checklist_items "
-            f"WHERE event_id IN ({marks}) ORDER BY id",
+            f"WHERE event_id IN ({marks}) ORDER BY position, id",
             tuple(by_id),
         )
         for item_id, event_id, text, checked in rs.rows:
@@ -666,8 +672,9 @@ async def create_event(created_by, target_user, title, description, date, event_
     if items and category == "shop":
         try:
             await _batch(
-                [("INSERT INTO checklist_items (event_id, text, checked) VALUES (?, ?, ?)",
-                  (event_id, it["text"], int(it["checked"]))) for it in items]
+                [("INSERT INTO checklist_items (event_id, text, checked, position) VALUES (?, ?, ?, ?)",
+                  (event_id, it["text"], int(it["checked"]), i + 1))
+                 for i, it in enumerate(items)]
             )
         except DbError:
             await _exec("DELETE FROM events WHERE id = ?", (event_id,))
@@ -730,9 +737,11 @@ async def delete_event(event_id: int) -> None:
 
 async def add_item(event_id: int, text: str) -> bool:
     rs = await _exec(
-        "INSERT INTO checklist_items (event_id, text, checked) "
-        "SELECT ?, ?, 0 WHERE (SELECT COUNT(*) FROM checklist_items WHERE event_id = ?) < ?",
-        (event_id, text, event_id, MAX_ITEMS_PER_EVENT),
+        "INSERT INTO checklist_items (event_id, text, checked, position) "
+        "SELECT ?, ?, 0, "
+        "COALESCE((SELECT MAX(position) FROM checklist_items WHERE event_id = ?), 0) + 1 "
+        "WHERE (SELECT COUNT(*) FROM checklist_items WHERE event_id = ?) < ?",
+        (event_id, text, event_id, event_id, MAX_ITEMS_PER_EVENT),
     )
     return rs.affected == 1
 
@@ -748,6 +757,28 @@ async def set_item_checked(event_id: int, item_id: int, checked: bool) -> bool:
 async def delete_item(event_id: int, item_id: int) -> bool:
     rs = await _exec("DELETE FROM checklist_items WHERE id = ? AND event_id = ?", (item_id, event_id))
     return rs.affected == 1
+
+
+async def move_item(event_id: int, item_id: int, new_position: int) -> bool:
+    rs = await _exec(
+        "SELECT id FROM checklist_items WHERE event_id = ? ORDER BY position, id",
+        (event_id,),
+    )
+    ids = [r[0] for r in rs.rows]
+    if item_id not in ids:
+        return False
+
+    ids.remove(item_id)
+    new_position = max(0, min(new_position, len(ids)))
+    ids.insert(new_position, item_id)
+
+    await _batch(
+        [
+            ("UPDATE checklist_items SET position = ? WHERE id = ?", (i + 1, cid))
+            for i, cid in enumerate(ids)
+        ]
+    )
+    return True
 
 
 async def set_reaction(event_id: int, emoji: str, by_user_id: int) -> None:
