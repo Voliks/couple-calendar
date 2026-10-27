@@ -198,7 +198,10 @@ async def handle_voice_message(message: Message):
     form = aiohttp.FormData()
     form.add_field('file', voice_bytes.getvalue(), filename='voice.ogg', content_type='audio/ogg')
     form.add_field('model', 'whisper-large-v3')
-    form.add_field('language', 'ru')
+     form = aiohttp.FormData()
+    form.add_field('file', voice_bytes.getvalue(), filename='voice.ogg', content_type='audio/ogg')
+    form.add_field('model', 'whisper-large-v3')
+    
 
     headers_groq = {"Authorization": f"Bearer {api_key}"}
     
@@ -221,18 +224,24 @@ async def handle_voice_message(message: Message):
         # Отправляем текст в LLM, чтобы она поняла, куда записать событие
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         prompt = f"""
-        Сегодня {today}. Пользователь сказал: "{text}"
-        Твоя задача — извлечь событие для календаря. Выбери категорию из: rest, sex, shop, todo, personal.
+        Today is {today} ({datetime.now(timezone.utc).strftime('%A')}).
+        The user said (in any language): "{text}"
         
-        Если пользователь упоминает "ближайший список" или "текущий список", оставь в поле "date" строку "nearest".
-        Если категория shop, выдели продукты в массив "items".
+        Your task:
+        1. Determine the category: rest, sex, shop, todo, personal.
+        2. Calculate the EXACT date (YYYY-MM-DD) based on the text. 
+           - "in 2 weeks" / "kahden viikon päästä" / "через 2 недели" -> add 14 days.
+           - "next Wednesday" / "ensi keskiviikkona" / "в следующую среду" -> calculate the exact date.
+           - If no date is mentioned, use today's date {today}.
+        3. If the category is "shop", extract the products into an "items" array.
+        4. If the user says "nearest list" (or similar in any language), set "date": "nearest".
         
-        Верни СТРОГО JSON без лишнего текста:
+        Return STRICTLY JSON:
         {{
-          "category": "shop", 
-          "date": "{today}", 
-          "title": "Список покупок", 
-          "items": ["хлеб"]
+          "category": "shop",
+          "date": "2026-11-15",
+          "title": "Список покупок",
+          "items": ["bread", "milk"]
         }}
         """
         
@@ -258,72 +267,46 @@ async def handle_voice_message(message: Message):
                 answer = data["choices"][0]["message"]["content"]
                 ev = json.loads(answer)
                 
-                # --- УМНЫЙ РАСЧЕТ ДАТ НА PYTHON ---
+                # --- СТРАХОВКА ДЛЯ РУССКОГО ЯЗЫКА ---
                 import re
                 from datetime import timedelta
                 
                 lower_text = text.lower()
                 current_dt = datetime.now(timezone.utc)
-                target_date = ev.get("date", today) # По умолчанию берем из нейросети
                 
-                # 1. Обработка "через X недель/месяцев" и "следующая/эта неделя"
-                week_offset = 0
-                month_offset = 0
-                
-                if "через неделю" in lower_text:
-                    week_offset = 1
-                elif "через две недели" in lower_text or "через 2 недели" in lower_text:
-                    week_offset = 2
-                elif "через три недели" in lower_text or "через 3 недели" in lower_text:
-                    week_offset = 3
-                elif "через месяц" in lower_text:
-                    month_offset = 1
-                elif "следующая неделя" in lower_text or "следующей неделе" in lower_text or "на следующую неделю" in lower_text:
-                    week_offset = 1
-                
-                # 2. Обработка дней недели
-                days_map = {
-                    "понедельник": 0, "вторник": 1, "среда": 2, "четверг": 3,
-                    "пятница": 4, "суббота": 5, "воскресенье": 6,
-                    "понедельникам": 0, "вторникам": 1, "средам": 2, "четвергам": 3,
-                    "пятницам": 4, "субботам": 5, "воскресеньям": 6,
-                    "понедельника": 0, "вторника": 1, "среды": 2, "четверга": 3,
-                    "пятницы": 4, "субботы": 5, "воскресенья": 6,
-                    "понедельнику": 0, "вторнику": 1, "среде": 2, "четвергу": 3,
-                    "пятнице": 4, "субботе": 5, "воскресенью": 6,
-                    "понедельник": 0, "среду": 2, "пятницу": 4, "субботу": 5
-                }
-                
-                found_day = None
-                for day_name, day_num in days_map.items():
-                    if re.search(r'\b' + day_name + r'\b', lower_text):
-                        found_day = day_num
-                        break
-                
-                # 3. Вычисляем итоговую дату
-                if month_offset > 0:
-                    # Прибавляем месяц (упрощенно 30 дней)
-                    target_date = (current_dt + timedelta(days=30 * month_offset)).strftime("%Y-%m-%d")
-                elif found_day is not None:
-                    current_weekday = current_dt.weekday()
-                    days_ahead = found_day - current_weekday
-                    
-                    # Если указано "следующая неделя", добавляем 7 дней к расчету
-                    if week_offset > 0 and days_ahead <= 0:
-                        days_ahead += 7
-                    elif days_ahead <= 0 and week_offset == 0:
-                        days_ahead += 7 # Берем ближайший будущий день
-                    elif week_offset > 0:
-                        # Если день впереди, но сказано "следующая неделя", всё равно прыгаем на неделю
-                        days_ahead += 7 * week_offset
+                # Берем дату, которую вычислила нейросеть (она теперь умеет считать на любом языке)
+                target_date = ev.get("date", today)
 
-                    target_date = (current_dt + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-                elif week_offset > 0 and found_day is None:
-                    # Просто "через неделю" без дня
-                    target_date = (current_dt + timedelta(days=7 * week_offset)).strftime("%Y-%m-%d")
-                
-                ev["date"] = target_date  # Принудительно ставим правильную дату!
-                # ------------------------------------------
+                # Проверяем, русский ли текст (ищем русские буквы)
+                if re.search('[а-яА-Я]', text):
+                    # Применяем жесткие правила ТОЛЬКО для русского, чтобы исправить косяки нейросети
+                    days_map = {
+                        "понедельник": 0, "вторник": 1, "среда": 2, "среду": 2, "четверг": 3,
+                        "пятница": 4, "пятницу": 4, "суббота": 5, "субботу": 5, "воскресенье": 6
+                    }
+                    
+                    found_day = None
+                    for day_name, day_num in days_map.items():
+                        if re.search(r'\b' + day_name + r'\b', lower_text):
+                            found_day = day_num
+                            break
+                    
+                    if "через месяц" in lower_text:
+                        target_date = (current_dt + timedelta(days=30)).strftime("%Y-%m-%d")
+                    elif "через две недели" in lower_text or "через 2 недели" in lower_text:
+                        target_date = (current_dt + timedelta(days=14)).strftime("%Y-%m-%d")
+                    elif "через неделю" in lower_text:
+                        target_date = (current_dt + timedelta(days=7)).strftime("%Y-%m-%d")
+                    elif found_day is not None:
+                        current_weekday = current_dt.weekday()
+                        days_ahead = found_day - current_weekday
+                        if days_ahead <= 0: days_ahead += 7
+                        if "следующ" in lower_text:
+                            days_ahead += 7
+                        target_date = (current_dt + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+                ev["date"] = target_date  # Устанавливаем финальную дату
+                # ------------------------------------
                 
                 
         # Сохраняем в базу
