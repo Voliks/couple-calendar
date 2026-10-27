@@ -815,8 +815,10 @@ async def get_event(event_id: int) -> dict | None:
         return None
     return (await _attach_items([_event(rs.rows[0])]))[0]
 
-
 async def set_status(event_id: int, status: str) -> None:
+    # Разрешаем новый статус 'done'
+    if status not in ("pending", "accepted", "declined", "done"):
+        raise ValueError("bad status")
     await _exec("UPDATE events SET status = ? WHERE id = ?", (status, event_id))
 
 
