@@ -457,23 +457,41 @@ async def api_respond(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
     body = await read_json(request)
-    if event["category"] in ("shop", "todo", "personal"): raise ApiError("Это не требует ответа")
+
+    if event["category"] in ("shop", "todo", "personal"):
+        raise ApiError("Это не требует ответа")
+
     status = body.get("status")
-   status = body.get("status")
     if status not in ("accepted", "declined", "done"):
         raise ApiError("Некорректный статус")
-    if event["target_user"] != tg_user.id: raise ApiError("Отвечать на событие может только приглашённый", 403)
+        
+    if event["target_user"] != tg_user.id:
+        raise ApiError("Отвечать на событие может только приглашённый", 403)
+
     comment = str(body.get("comment") or "").strip()[:500]
     slot = "creator" if event["created_by"] == tg_user.id else "target"
+
     if event["status"] != status or comment != event.get(f"decline_comment_{slot}", ""):
         await db.set_status(event["id"], status)
-        if status == "declined": await db.set_decline_comment_slot(event["id"], slot, comment)
-        else: await db.set_decline_comment_slot(event["id"], slot, "")
+        if status == "declined":
+            await db.set_decline_comment_slot(event["id"], slot, comment)
+        else:
+            await db.set_decline_comment_slot(event["id"], slot, "")
+
         what = "принял(а)" if status == "accepted" else "отклонил(а)"
-        icon = "✅" if status == "accepted" else "❌"
+        if status == "done":
+            what = "выполнил(а)"
+            
+        icon = "✅" if status in ("accepted", "done") else "❌"
         extra = f"\n💬 {comment}" if status == "declined" and comment else ""
-        notify(event["created_by"], f"{icon} {tg_user.first_name} {what} событие на {fmt_range(event['date'], event.get('date_end', ''))}{title_part(event['title'])}.{extra}")
+        
+        notify(
+            event["created_by"],
+            f"{icon} {tg_user.first_name} {what} событие на "
+            f"{fmt_range(event['date'], event.get('date_end', ''))}{title_part(event['title'])}.{extra}",
+        )
         event = await db.get_event(event["id"])
+        
     return web.json_response(event_to_dict(event, tg_user.id))
 
 async def api_set_idea_response(request: web.Request) -> web.Response:
