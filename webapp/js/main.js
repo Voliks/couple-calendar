@@ -1,4 +1,17 @@
+let sessionDead = false;
+
+function showSessionExpired() {
+  if (sessionDead) return;
+  sessionDead = true;
+  $("app").hidden = true;
+  $("welcome").hidden = true;
+  $("loadingSpinner").hidden = true;
+  $("loadingHint").textContent = "Сессия истекла. Закройте и снова откройте приложение через бота.";
+  $("loading").hidden = false;
+}
+
 async function load(silent = false) {
+  if (sessionDead) return;
   const key = monthKey();
   try {
     const r = await request("/state?month=" + key, { etag: etagKey === key ? etag : null });
@@ -10,6 +23,7 @@ async function load(silent = false) {
     monthCache[key] = state.events;
     render();
   } catch (e) {
+    if (e.status === 401 && loaded) { showSessionExpired(); return; }
     if (!loaded) throw e;
     if (!silent) toast(e.message);
   }
@@ -147,7 +161,7 @@ $("unlink").onclick = () => {
 })();
 
 function startPolling() {
-  const canPoll = () => !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
+  const canPoll = () => !sessionDead && !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
     && $("archiveOverlay").hidden && $("catOverlay").hidden
     && pendingOps === 0 && !reactionPickerEl && !dragState && !gridDrag;
   setInterval(() => { if (canPoll()) load(true); }, 15000);

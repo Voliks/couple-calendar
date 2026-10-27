@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -168,6 +171,8 @@ class _SqliteBackend:
     def __init__(self, path: str):
         self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._lock = threading.Lock()
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
 
     async def start(self) -> None:
         return None
@@ -238,6 +243,7 @@ async def init_db() -> None:
         _backend = _SqliteBackend(DB_PATH)
         log.warning("БД: локальный файл %s", DB_PATH)
     await _backend.start()
+    _json_ideas()  # прогрев кэша встроенных идей
     await _migrate()
     try:
         cols = await _columns("events")
@@ -458,6 +464,26 @@ async def _m15_personal_section() -> None:
     )
 
 
+async def _m16_indexes_and_idea_keys() -> None:
+    await _exec("CREATE INDEX IF NOT EXISTS idx_events_created ON events (created_by, date)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_events_target ON events (target_user, date)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_checklist_event ON checklist_items (event_id)")
+    # старые ключи json_N (позиция в файле) -> стабильные ключи по хэшу текста
+    raw = _read_json_ideas_raw()
+    rs = await _exec("SELECT user_id, idea_key FROM hidden_ideas")
+    stmts = []
+    for user_id, key in rs.rows:
+        m = re.fullmatch(r"json_(\d+)", key)
+        if not m:
+            continue
+        n = int(m.group(1))
+        if 1 <= n <= len(raw):
+            stmts.append(("INSERT OR IGNORE INTO hidden_ideas (user_id, idea_key) VALUES (?, ?)",
+                          (user_id, _idea_key(*raw[n - 1]))))
+        stmts.append(("DELETE FROM hidden_ideas WHERE user_id = ? AND idea_key = ?", (user_id, key)))
+    await _batch(stmts)
+
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -474,6 +500,7 @@ MIGRATIONS = [
     (13, _m13_idea_responses),
     (14, _m14_checklist_position),
     (15, _m15_personal_section),
+    (16, _m16_indexes_and_idea_keys),
 ]
 
 
@@ -526,20 +553,45 @@ async def _migrate() -> None:
     await _ensure_required_columns()
 
 
-def _load_json_ideas_sync() -> dict:
+def _idea_key(category: str, text: str) -> str:
+    """Стабильный ключ встроенной идеи: не зависит от порядка строк в sex_ideas.json."""
+    return "json_h" + hashlib.sha1(f"{category}\n{text}".encode("utf-8")).hexdigest()[:12]
+
+
+def _read_json_ideas_raw() -> list[tuple[str, str]]:
     path = Path(__file__).parent / "sex_ideas.json"
     if not path.exists():
-        return {}
+        return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
     except Exception:
         log.exception("Не удалось прочитать sex_ideas.json")
-        return {}
+        return []
+    if not isinstance(data, dict):
+        return []
+    out = []
+    for category, texts in data.items():
+        if category == ARCHIVE_KEY or not isinstance(texts, list):
+            continue
+        out.extend((category, t) for t in texts if isinstance(t, str))
+    return out
 
 
-async def _load_json_ideas() -> dict:
-    return await asyncio.to_thread(_load_json_ideas_sync)
+_ideas_cache: list[dict] | None = None
+
+
+def _json_ideas() -> list[dict]:
+    """Встроенные идеи (читаются один раз). Одинаковый текст в нескольких категориях остаётся один раз."""
+    global _ideas_cache
+    if _ideas_cache is None:
+        raw = _read_json_ideas_raw()
+        last = {t.strip().lower(): i for i, (_, t) in enumerate(raw)}
+        _ideas_cache = [
+            {"id": _idea_key(c, t), "category_title": c, "text": t}
+            for i, (c, t) in enumerate(raw)
+            if last[t.strip().lower()] == i
+        ]
+    return _ideas_cache
 
 
 USER_COLS = "telegram_id, partner_id, invite_code, invite_expires, tz"
@@ -768,8 +820,6 @@ async def set_status(event_id: int, status: str) -> None:
     await _exec("UPDATE events SET status = ? WHERE id = ?", (status, event_id))
 
 
-async def set_visibility(event_id: int, visibility: str) -> None:
-    await _exec("UPDATE events SET visibility = ? WHERE id = ?", (visibility, event_id))
 
 
 async def set_target_user(event_id: int, target_user: int) -> None:
@@ -778,7 +828,8 @@ async def set_target_user(event_id: int, target_user: int) -> None:
 
 async def update_event(event_id, title, description, date, event_time, category, reset_status: bool,
                        color: str = "", remind_before: int = 0,
-                       date_end: str = "", visibility: str | None = None):
+                       date_end: str = "", visibility: str | None = None,
+                       reset_reminders: bool = False):
     stmts = [
         (
             "UPDATE events SET title = ?, description = ?, date = ?, date_end = ?, time = ?, "
@@ -790,8 +841,9 @@ async def update_event(event_id, title, description, date, event_time, category,
     ]
     if visibility is not None:
         stmts.append(("UPDATE events SET visibility = ? WHERE id = ?", (visibility, event_id)))
-    if reset_status:
+    if reset_status or reset_reminders:
         stmts.append(("DELETE FROM reminders WHERE event_id = ?", (event_id,)))
+    if reset_status:
         stmts.append(("DELETE FROM idea_responses WHERE event_id = ?", (event_id,)))
     if category != "shop":
         stmts.append(("DELETE FROM checklist_items WHERE event_id = ?", (event_id,)))
@@ -871,11 +923,6 @@ async def set_reaction(event_id: int, emoji: str, by_user_id: int) -> None:
     )
 
 
-async def get_event_reactions(event_id: int) -> dict[int, str]:
-    rs = await _exec(
-        "SELECT user_id, emoji FROM reactions WHERE event_id = ?", (event_id,)
-    )
-    return {r[0]: r[1] for r in rs.rows}
 
 
 async def set_idea_response(event_id: int, idea_idx: int, status: str, user_id: int) -> None:
@@ -890,23 +937,10 @@ async def set_idea_response(event_id: int, idea_idx: int, status: str, user_id: 
     )
 
 
-async def get_idea_responses(event_id: int) -> dict[int, dict]:
-    rs = await _exec(
-        "SELECT idea_idx, status, user_id, ts FROM idea_responses WHERE event_id = ?",
-        (event_id,),
-    )
-    return {r[0]: {"status": r[1], "user_id": r[2], "ts": r[3]} for r in rs.rows}
 
 
-async def clear_idea_responses(event_id: int) -> None:
-    await _exec("DELETE FROM idea_responses WHERE event_id = ?", (event_id,))
 
 
-async def set_decline_comment(event_id: int, comment: str) -> None:
-    await _exec(
-        "UPDATE events SET decline_comment = ? WHERE id = ?",
-        (comment, event_id),
-    )
 
 
 async def set_decline_comment_slot(event_id: int, slot: str, comment: str) -> None:
@@ -930,22 +964,8 @@ async def _hidden_idea_keys(user_id: int, partner_id: int | None) -> set[str]:
 
 
 async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
-    ideas = []
     hidden = await _hidden_idea_keys(user_id, partner_id)
-
-    data = await _load_json_ideas()
-    idx = 1
-    for category_title, texts in data.items():
-        if category_title == ARCHIVE_KEY:
-            continue
-        if not isinstance(texts, list):
-            continue
-        for txt in texts:
-            key = f"json_{idx}"
-            idx += 1
-            if key in hidden:
-                continue
-            ideas.append({"id": key, "category_title": category_title, "text": txt})
+    ideas = [dict(i) for i in _json_ideas() if i["id"] not in hidden]
 
     if partner_id:
         rs = await _exec(
@@ -999,24 +1019,11 @@ async def delete_sex_idea(idea_id: int, archived_by: int | None = None) -> bool:
 
 
 async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key: str) -> None:
+    idea = next((i for i in _json_ideas() if i["id"] == idea_key), None)
+    if idea is None:
+        return  # неизвестный ключ — ничего не скрываем
     try:
-        data = await _load_json_ideas()
-        idx = 1
-        found_title = None
-        found_text = None
-        for category_title, texts in data.items():
-            if category_title == ARCHIVE_KEY or not isinstance(texts, list):
-                continue
-            for txt in texts:
-                key = f"json_{idx}"
-                idx += 1
-                if key == idea_key:
-                    found_title, found_text = category_title, txt
-                    break
-            if found_text is not None:
-                break
-        if found_text is not None:
-            await archive_idea(found_title, found_text, "builtin", user_id)
+        await archive_idea(idea["category_title"], idea["text"], "builtin", user_id)
     except Exception:
         log.exception("Не удалось архивировать JSON-идею (не критично)")
 
@@ -1087,26 +1094,29 @@ async def purge_old_reminders(date_before: str) -> int:
 
 
 async def purge_old_todos(date_before: str) -> int:
+    old = (
+        "SELECT id FROM events WHERE category = 'todo' "
+        "AND COALESCE(NULLIF(date_end, ''), date) < ?"
+    )
+    a = (date_before,)
     rs = await _batch(
         [
-            ("DELETE FROM checklist_items WHERE event_id IN "
-             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
-            ("DELETE FROM reminders WHERE event_id IN "
-             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
-            ("DELETE FROM reactions WHERE event_id IN "
-             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
-            ("DELETE FROM idea_responses WHERE event_id IN "
-             "(SELECT id FROM events WHERE category = 'todo' AND date < ?)", (date_before,)),
-            ("DELETE FROM events WHERE category = 'todo' "
-             "AND COALESCE(NULLIF(date_end, ''), date) < ?", (date_before,)),
+            (f"DELETE FROM checklist_items WHERE event_id IN ({old})", a),
+            (f"DELETE FROM reminders WHERE event_id IN ({old})", a),
+            (f"DELETE FROM reactions WHERE event_id IN ({old})", a),
+            (f"DELETE FROM idea_responses WHERE event_id IN ({old})", a),
+            (
+                "DELETE FROM events WHERE category = 'todo' "
+                "AND COALESCE(NULLIF(date_end, ''), date) < ?",
+                a,
+            ),
         ]
     )
     return rs[4].affected
 
 
 async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
-    from datetime import date as _d, timedelta as _td
-    cutoff = (_d.today() - _td(days=31)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=31)).strftime("%Y-%m-%d")
     rs = await _exec(
         f"SELECT {EVENT_COLS} FROM events "
         "WHERE category = 'todo' AND COALESCE(NULLIF(date_end, ''), date) < ? "
@@ -1118,30 +1128,24 @@ async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
 
 
 async def pair_stats(user_id: int, partner_id: int) -> dict:
-    """Статистика пары. Private personal-события не учитываются."""
-    pair = (
-        "((created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)) "
-        "AND visibility = 'shared'"
+    """Статистика пары по событиям, на которые нужен ответ (rest/sex).
+
+    Дела, покупки и личное создаются сразу «принятыми» и в счёт не идут.
+    """
+    rs = await _exec(
+        "SELECT category, status, COUNT(*) FROM events "
+        "WHERE ((created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)) "
+        "AND visibility = 'shared' AND category IN ('rest', 'sex') "
+        "GROUP BY category, status",
+        (user_id, partner_id, partner_id, user_id),
     )
-    pargs = (user_id, partner_id, partner_id, user_id)
-
-    rs_total = await _exec(f"SELECT COUNT(*) FROM events WHERE {pair}", pargs)
-    total = rs_total.rows[0][0] if rs_total.rows else 0
-
-    rs_status = await _exec(
-        f"SELECT status, COUNT(*) FROM events WHERE {pair} GROUP BY status",
-        pargs,
-    )
-    by_status = {row[0]: row[1] for row in rs_status.rows}
-
-    rs_cat = await _exec(
-        f"SELECT category, COUNT(*) FROM events WHERE {pair} GROUP BY category",
-        pargs,
-    )
-    by_category = {row[0]: row[1] for row in rs_cat.rows}
-
+    by_status: dict[str, int] = {}
+    by_category: dict[str, int] = {}
+    for category, status, n in rs.rows:
+        by_status[status] = by_status.get(status, 0) + n
+        by_category[category] = by_category.get(category, 0) + n
     return {
-        "total": total,
+        "total": sum(by_status.values()),
         "pending": by_status.get("pending", 0),
         "accepted": by_status.get("accepted", 0),
         "declined": by_status.get("declined", 0),

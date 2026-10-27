@@ -6,7 +6,10 @@ function dayElFromPoint(x, y) {
 }
 
 function applyMultiSelect(dates) {
-  state.multi_select = new Set(dates);
+  const next = new Set(dates);
+  const cur = state.multi_select;
+  if (cur && cur.size === next.size && [...next].every((d) => cur.has(d))) return;
+  state.multi_select = next;
   updateMultiColorPreview();
   renderCalendar();
 }
@@ -127,20 +130,42 @@ function renderCalendar() {
   $("grid").innerHTML = html;
 }
 
+const LONG_PRESS_MS = 350;
+const MOVE_SLOP = 8;
+
+function cancelLongPress() {
+  if (gridDrag && gridDrag.timer) { clearTimeout(gridDrag.timer); gridDrag.timer = null; }
+}
+
+// Мышь: тянем сразу. Палец: горизонтальный свайп или долгое нажатие включают выбор диапазона,
+// а обычное вертикальное движение остаётся прокруткой страницы.
 $("grid").addEventListener("pointerdown", (ev) => {
   if (ev.button !== undefined && ev.button !== 0) return;
   const day = ev.target.closest(".day");
   if (!day) return;
   if (!$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden || !$("catOverlay").hidden) return;
 
+  const isTouch = ev.pointerType === "touch";
   gridDrag = {
     pointerId: ev.pointerId,
     anchor: day.dataset.date,
+    active: !isTouch,
     swiping: false,
     moved: false,
     startX: ev.clientX,
     startY: ev.clientY,
+    timer: null,
   };
+  if (isTouch) {
+    const id = ev.pointerId;
+    gridDrag.timer = setTimeout(() => {
+      if (gridDrag && gridDrag.pointerId === id) {
+        gridDrag.timer = null;
+        gridDrag.active = true;
+        tg.HapticFeedback?.impactOccurred?.("light");
+      }
+    }, LONG_PRESS_MS);
+  }
   applyMultiSelect([day.dataset.date]);
   try { $("grid").setPointerCapture(ev.pointerId); } catch (e) {}
 });
@@ -149,9 +174,14 @@ $("grid").addEventListener("pointermove", (ev) => {
   if (!gridDrag || gridDrag.pointerId !== ev.pointerId) return;
   const dx = Math.abs(ev.clientX - gridDrag.startX);
   const dy = Math.abs(ev.clientY - gridDrag.startY);
-  if (!gridDrag.moved && (dx > 6 || dy > 6)) gridDrag.moved = true;
+  if (!gridDrag.moved && (dx > MOVE_SLOP || dy > MOVE_SLOP)) gridDrag.moved = true;
 
-  if (dx <= dy && dy > 6) return;
+  if (!gridDrag.active) {
+    if (!gridDrag.moved) return;
+    cancelLongPress();
+    if (dx <= dy) return;       // вертикальное движение — это прокрутка
+    gridDrag.active = true;     // горизонтальный свайп — выбираем диапазон
+  }
 
   const day = dayElFromPoint(ev.clientX, ev.clientY);
   if (!day) return;
@@ -171,11 +201,16 @@ $("grid").addEventListener("pointermove", (ev) => {
   applyMultiSelect(dates);
 });
 
+// Пока идёт выбор диапазона пальцем, страница не должна прокручиваться
+$("grid").addEventListener("touchmove", (ev) => {
+  if (gridDrag && gridDrag.active) ev.preventDefault();
+}, { passive: false });
+
 function endGridDrag(ev) {
   if (!gridDrag || gridDrag.pointerId !== ev.pointerId) return;
+  cancelLongPress();
   const wasSwipe = gridDrag.swiping;
   const dates = [...state.multi_select];
-  const moved = gridDrag.moved;
   gridDrag = null;
 
   if (!dates.length) return;
@@ -195,8 +230,20 @@ function endGridDrag(ev) {
 $("grid").addEventListener("pointerup", endGridDrag);
 $("grid").addEventListener("pointercancel", (ev) => {
   if (!gridDrag || gridDrag.pointerId !== ev.pointerId) return;
+  cancelLongPress();
   gridDrag = null;
   clearMultiSelect();
+});
+
+// Клавиатура и скринридеры: Enter/Space на кнопке дня даёт click без pointer-событий
+$("grid").addEventListener("click", (ev) => {
+  if (ev.detail !== 0) return;
+  const day = ev.target.closest(".day");
+  if (!day) return;
+  selected = day.dataset.date;
+  clearMultiSelect();
+  renderList();
+  $("grid").querySelector(`[data-date="${selected}"]`)?.focus();
 });
 
 let pendingRange = [];

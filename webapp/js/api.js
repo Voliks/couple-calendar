@@ -74,6 +74,7 @@ async function request(path, { method = "GET", body, etag } = {}) {
     });
     if (res.status === 304) return { status: 304 };
     const data = await res.json().catch(() => ({}));
+    if (res.status === 401) throw new HttpError("Сессия истекла. Закройте и снова откройте приложение через бота.", 401);
     if (!res.ok) throw new HttpError(data.error || "Что-то пошло не так", res.status);
     return { status: res.status, data, etag: res.headers.get("ETag") };
   } catch (e) {

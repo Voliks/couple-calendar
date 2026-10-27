@@ -6,17 +6,12 @@ import logging
 import os
 import re
 import time
-import base64
-import aiohttp
 from collections import deque
 from datetime import date as date_cls, datetime, timedelta, timezone
-from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
-from zoneinfo import ZoneInfo
-from datetime import datetime, timezone
 
-from aiogram import Bot, Dispatcher, Router, F
+from aiogram import Dispatcher, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     BotCommand,
@@ -25,50 +20,61 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
-    WebAppInfo,
 )
 from aiogram.utils.web_app import safe_parse_webapp_init_data
 from aiohttp import web
-from dotenv import load_dotenv
 
-load_dotenv()
-
+# common импортируем первым: он читает .env до импорта db
+from common import (
+    BOT_TOKEN,
+    CATEGORIES,
+    CATEGORY_ICONS,
+    CATEGORY_TITLES,
+    TIME_RE,
+    WEBAPP_URL,
+    bot,
+    event_reply_keyboard,
+    fmt_range,
+    get_zone,
+    humanize_minutes as _humanize_minutes,
+    notify,
+    open_app_keyboard,
+    safe_send,
+    valid_date,
+)
 import db
+from voice import router as voice_router
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://couple-calendar-ycu9.onrender.com").rstrip("/")
 PORT = int(os.getenv("PORT", "8080"))
 INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
 
 REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
 SHOW_TITLES = os.getenv("NOTIFY_SHOW_TITLES", "0") == "1"
 
-CATEGORY_TITLES = {"rest": "Отдых", "sex": "Секс", "shop": "Магазин", "todo": "Дела", "personal": "Личное"}
-CATEGORY_ICONS = {"rest": "🌿", "sex": "🔥", "shop": "🛒", "todo": "📌", "personal": "📝"}
 SEX_IDEA_CATEGORIES = {"🔥 Страстная ночь", "🌹 Романтический вечер", "✨ Эксперименты и фантазии"}
 ALLOWED_REACTIONS = ["❤️", "🔥", "😍", "😂", "👍", "🎉", "😮", "🥰"]
 ALLOWED_REMIND_BEFORE = {0, 5, 15, 30, 60, 120, 180, 360, 720, 1440, 2880}
+
 
 def _origin(url: str) -> str:
     p = urlsplit(url)
     return f"{p.scheme}://{p.netloc}"
 
+
 ALLOWED_ORIGINS = {_origin(WEBAPP_URL)} | {o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()}
 
-DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
-CATEGORIES = {"rest", "sex", "shop", "todo", "personal"}
 INIT_DATA_MAX_AGE = 24 * 3600
 RATE_LIMIT = 40
 RATE_WINDOW = 60
 
-bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
+dp.include_router(voice_router)
 
 bot_username: str = ""
+
 
 class ApiError(Exception):
     def __init__(self, message: str, status: int = 400):
@@ -79,57 +85,12 @@ class ApiError(Exception):
 def invite_link(code: str) -> str:
     return f"https://t.me/{bot_username}?start=ref_{code}"
 
-def open_app_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))]])
-
-def event_reply_keyboard(event_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Принять", callback_data=f"ev:accept:{event_id}"), InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ev:decline:{event_id}")],
-        [InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))]
-    ])
-
-async def safe_send(chat_id: int, text: str, reply_markup=None) -> None:
-    try:
-        await bot.send_message(chat_id, text, reply_markup=reply_markup or open_app_keyboard())
-    except Exception:
-        logging.exception("Не удалось отправить сообщение %s", chat_id)
-
-_bg_tasks: set = set()
-
-def notify(chat_id: int, text: str, reply_markup=None) -> None:
-    task = asyncio.create_task(safe_send(chat_id, text, reply_markup))
-    _bg_tasks.add(task)
-    task.add_done_callback(_bg_tasks.discard)
-
-def fmt_date(s: str) -> str:
-    try:
-        return date_cls.fromisoformat(s).strftime("%d.%m.%Y")
-    except ValueError:
-        return s
-
-def fmt_range(date_start: str, date_end: str) -> str:
-    if not date_end or date_end == date_start:
-        return fmt_date(date_start)
-    return f"{fmt_date(date_start)} – {fmt_date(date_end)}"
-
 def title_part(title: str) -> str:
     return f" «{title}»" if SHOW_TITLES else ""
 
-def _humanize_minutes(m: int) -> str:
-    if m < 60: return f"{m} мин"
-    if m < 1440:
-        h = m // 60
-        return f"{h} ч"
-    d = m // 1440
-    return f"{d} дн"
-
-@lru_cache(maxsize=256)
-def get_zone(name: str):
-    if not name or len(name) > 64: return None
-    try: return ZoneInfo(name)
-    except Exception: return None
 
 _rate_hits: dict[int, deque] = {}
+
 
 def rate_limit(uid: int) -> None:
     now = time.monotonic()
@@ -139,7 +100,10 @@ def rate_limit(uid: int) -> None:
     if len(q) >= RATE_LIMIT:
         raise ApiError("Слишком много запросов, подождите минуту", 429)
     q.append(now)
-    if not q: _rate_hits.pop(uid, None)
+    if len(_rate_hits) > 1000:  # чистим тех, кто давно не писал
+        for k in [k for k, v in _rate_hits.items() if not v or now - v[-1] > RATE_WINDOW]:
+            del _rate_hits[k]
+
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject):
@@ -181,225 +145,6 @@ async def cmd_unlink(message: Message):
         await message.answer("У вас нет партнёра — отвязывать нечего.")
         return
     await message.answer("Отвязать партнёра? Все общие события будут удалены безвозвратно. Личные (приватные) события останутся у вас.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Да, отвязать", callback_data="unlink:yes"), InlineKeyboardButton(text="Отмена", callback_data="unlink:no")]]))
-@router.message(F.voice)
-async def handle_voice_message(message: Message):
-    await message.answer("🎤 Слушаю и распознаю...")
-    
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        await message.answer("Ошибка: не настроен ключ GROQ_API_KEY.")
-        return
-
-    # Скачиваем голосовое из Telegram
-    file = await bot.get_file(message.voice.file_id)
-    voice_bytes = await bot.download_file(file.file_path)
-    
-    # Готовим запрос в Groq (Whisper) для перевода голоса в текст
-    form = aiohttp.FormData()
-    form.add_field('file', voice_bytes.getvalue(), filename='voice.ogg', content_type='audio/ogg')
-    form.add_field('model', 'whisper-large-v3')
-    form = aiohttp.FormData()
-    form.add_field('file', voice_bytes.getvalue(), filename='voice.ogg', content_type='audio/ogg')
-    form.add_field('model', 'whisper-large-v3')
-    
-
-    headers_groq = {"Authorization": f"Bearer {api_key}"}
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post("https://api.groq.com/openai/v1/audio/transcriptions", data=form, headers=headers_groq) as resp:
-                if resp.status != 200:
-                    logging.error(f"Groq STT error: {await resp.text()}")
-                    await message.answer("Не удалось распознать голос.")
-                    return
-                data = await resp.json()
-                text = data.get("text", "")
-                
-        if not text:
-            await message.answer("Я ничего не расслышал.")
-            return
-            
-        await message.answer(f"Вы сказали: «{text}»\n\n⏳ Определяю дату и категорию...")
-
-        # Отправляем текст в LLM, чтобы она поняла, куда записать событие
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        prompt = f"""
-        Today is {today} ({datetime.now(timezone.utc).strftime('%A')}).
-        The user said (in any language): "{text}"
-        
-        Your task:
-        1. Determine the category: rest, sex, shop, todo, personal.
-        2. Calculate the EXACT date (YYYY-MM-DD) based on the text. 
-           - "in 2 weeks" / "kahden viikon päästä" / "через 2 недели" -> add 14 days.
-           - "next Wednesday" / "ensi keskiviikkona" / "в следующую среду" -> calculate the exact date.
-           - If no date is mentioned, use today's date {today}.
-        3. If the category is "shop", extract the products into an "items" array.
-        4. If the user says "nearest list" (or similar in any language), set "date": "nearest".
-        
-        Return STRICTLY JSON:
-        {{
-          "category": "shop",
-          "date": "2026-11-15",
-          "title": "Список покупок",
-          "items": ["bread", "milk"]
-        }}
-        """
-        
-        payload = {
-            "model": "openai/gpt-oss-20b",
-            "messages": [{"role": "user", "content": prompt}],
-            "response_format": {"type": "json_object"}
-        }
-        
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers) as resp:
-                if resp.status != 200:
-                    logging.error(f"Groq LLM error: {await resp.text()}")
-                    await message.answer("Не удалось разобрать смысл.")
-                    return
-                
-                data = await resp.json()
-                answer = data["choices"][0]["message"]["content"]
-                ev = json.loads(answer)
-                
-                # --- СТРАХОВКА ДЛЯ РУССКОГО ЯЗЫКА ---
-                import re
-                from datetime import timedelta
-                
-                lower_text = text.lower()
-                current_dt = datetime.now(timezone.utc)
-                
-                # Берем дату, которую вычислила нейросеть (она теперь умеет считать на любом языке)
-                target_date = ev.get("date", today)
-
-                # Проверяем, русский ли текст (ищем русские буквы)
-                if re.search('[а-яА-Я]', text):
-                    # Применяем жесткие правила ТОЛЬКО для русского, чтобы исправить косяки нейросети
-                    days_map = {
-                        "понедельник": 0, "вторник": 1, "среда": 2, "среду": 2, "четверг": 3,
-                        "пятница": 4, "пятницу": 4, "суббота": 5, "субботу": 5, "воскресенье": 6
-                    }
-                    
-                    found_day = None
-                    for day_name, day_num in days_map.items():
-                        if re.search(r'\b' + day_name + r'\b', lower_text):
-                            found_day = day_num
-                            break
-                    
-                    if "через месяц" in lower_text:
-                        target_date = (current_dt + timedelta(days=30)).strftime("%Y-%m-%d")
-                    elif "через две недели" in lower_text or "через 2 недели" in lower_text:
-                        target_date = (current_dt + timedelta(days=14)).strftime("%Y-%m-%d")
-                    elif "через неделю" in lower_text:
-                        target_date = (current_dt + timedelta(days=7)).strftime("%Y-%m-%d")
-                    elif found_day is not None:
-                        current_weekday = current_dt.weekday()
-                        days_ahead = found_day - current_weekday
-                        if days_ahead <= 0: days_ahead += 7
-                        if "следующ" in lower_text:
-                            days_ahead += 7
-                        target_date = (current_dt + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
-                ev["date"] = target_date  # Устанавливаем финальную дату
-                # ------------------------------------
-                
-                
-        # Сохраняем в базу
-        user = await db.get_or_create_user(message.from_user.id)
-        if not user["partner_id"]:
-            await message.answer("Сначала привяжите партнера.")
-            return
-            
-        cat = ev.get("category", "rest")
-        if cat not in CATEGORIES:
-            cat = "rest"
-            
-        color = "#8b5cf6" if cat == "todo" else ""
-                # Если это покупки
-        if cat == "shop":
-            raw_items = ev.get("items", [])
-            new_items = [str(x)[:200] for x in raw_items] if isinstance(raw_items, list) else []
-            
-            if not new_items:
-                await message.answer("Я не понял, какие продукты добавить.")
-                return
-
-            target_date = ev.get("date", today)
-            
-            # Если нейросеть поняла, что нужен ближайший список, она вернет "nearest"
-            if target_date == "nearest" or target_date == "ближайший":
-                from datetime import timedelta
-                start_date = today
-                end_date = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")
-                
-                events = await db.list_events_range(message.from_user.id, start_date, end_date)
-                shops = [e for e in events if e["category"] == "shop"]
-                shops.sort(key=lambda x: x["date"])
-
-                if shops:
-                    nearest_shop = shops[0]
-                    for item_text in new_items:
-                        await db.add_item(nearest_shop["id"], item_text)
-                    await message.answer(f"✅ Добавил в ближайший список (на {fmt_date(nearest_shop['date'])})!")
-                    return
-                else:
-                    # Если ближайшего нет, создаем на сегодня
-                    target_date = today
-
-            # Если дата конкретная (или "nearest" не сработал), ищем на эту дату
-            if target_date != "nearest" and target_date != "ближайший":
-                events = await db.list_events_range(message.from_user.id, target_date, target_date)
-                shops = [e for e in events if e["category"] == "shop"]
-
-                if shops:
-                    nearest_shop = shops[0]
-                    for item_text in new_items:
-                        await db.add_item(nearest_shop["id"], item_text)
-                    await message.answer(f"✅ Добавил {len(new_items)} продуктов в список на {fmt_date(target_date)}!")
-                    return
-
-            # Создаем новый (если не нашли)
-            items_list = [{"text": t, "checked": False} for t in new_items]
-            await db.create_event(
-                created_by=message.from_user.id,
-                target_user=user["partner_id"],
-                title="Список покупок",
-                description="Создано голосом",
-                date=target_date,
-                event_time="",
-                category="shop",
-                color="",
-                items=items_list
-            )
-            await message.answer(f"✅ Создал новый список на {fmt_date(target_date)} и добавил {len(new_items)} продуктов!")
-
-        else:
-            # Для остальных категорий (Дела, Отдых и т.д.) создаем обычное событие
-            await db.create_event(
-                created_by=message.from_user.id,
-                target_user=user["partner_id"],
-                title=ev.get("title", "Событие")[:100],
-                description="Добавлено голосом",
-                date=ev.get("date", today),
-                event_time=ev.get("time", ""),
-                category=cat,
-                color=color if cat == "todo" else "",
-                items=None
-            )
-            cat_name = CATEGORY_TITLES.get(cat, "Событие")
-            await message.answer(f"✅ Добавлено в «{cat_name}»:\n📅 {ev.get('date', today)} {ev.get('time', '')}\n📝 {ev.get('title')}")
-        
-        cat_name = CATEGORY_TITLES.get(cat, "Событие")
-        await message.answer(f"✅ Добавлено в «{cat_name}»:\n📅 {ev.get('date')} {ev.get('time')}\n📝 {ev.get('title')}")
-        
-    except Exception as e:
-        logging.exception("Ошибка при обработке голоса")
-        await message.answer("Произошла ошибка при обработке голоса.")
 @router.callback_query(lambda c: c.data == "unlink:no")
 async def unlink_cancel(call: CallbackQuery):
     await call.message.edit_text("Отменено.")
@@ -449,63 +194,6 @@ async def event_inline_action(call: CallbackQuery):
     except Exception: pass
     await call.answer("Готово")
 
-@router.message(F.voice)
-async def handle_voice_message(message: Message):
-    await message.answer("🎤 Слушаю и распознаю...")
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        await message.answer("Ошибка: не настроен ключ GROQ_API_KEY.")
-        return
-    file = await bot.get_file(message.voice.file_id)
-    voice_bytes = await bot.download_file(file.file_path)
-    form = aiohttp.FormData()
-    form.add_field('file', voice_bytes.getvalue(), filename='voice.ogg', content_type='audio/ogg')
-    form.add_field('model', 'whisper-large-v3')
-    form.add_field('language', 'ru')
-    headers_groq = {"Authorization": f"Bearer {api_key}"}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post("https://api.groq.com/openai/v1/audio/transcriptions", data=form, headers=headers_groq) as resp:
-                if resp.status != 200:
-                    logging.error(f"Groq STT error: {await resp.text()}")
-                    await message.answer("Не удалось распознать голос.")
-                    return
-                data = await resp.json()
-                text = data.get("text", "")
-        if not text:
-            await message.answer("Я ничего не расслышал.")
-            return
-        await message.answer(f"Вы сказали: «{text}»\n\n⏳ Определяю дату и категорию...")
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        prompt = f'Сегодня {today}. Пользователь сказал: "{text}". Преврати это в JSON для календаря. Выбери одну категорию из: rest, sex, shop, todo, personal. Верни СТРОГО JSON: {{"category": "todo", "date": "{today}", "time": "", "title": "Купить хлеб"}}'
-        payload = {"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        async with aiohttp.ClientSession() as session:
-            async with session.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers) as resp:
-                if resp.status != 200:
-                    logging.error(f"Groq LLM error: {await resp.text()}")
-                    await message.answer("Не удалось разобрать смысл.")
-                    return
-                data = await resp.json()
-                ev = json.loads(data["choices"][0]["message"]["content"])
-        user = await db.get_or_create_user(message.from_user.id)
-        if not user["partner_id"]:
-            await message.answer("Сначала привяжите партнера.")
-            return
-        cat = ev.get("category", "rest")
-        if cat not in CATEGORIES: cat = "rest"
-        color = "#8b5cf6" if cat == "todo" else ""
-        await db.create_event(
-            created_by=message.from_user.id, target_user=user["partner_id"],
-            title=ev.get("title", "Событие")[:100], description="Добавлено голосом",
-            date=ev.get("date", today), event_time=ev.get("time", ""),
-            category=cat, color=color, items=None
-        )
-        await message.answer(f"✅ Добавлено в «{CATEGORY_TITLES.get(cat, 'Событие')}»:\n📅 {ev.get('date')} {ev.get('time')}\n📝 {ev.get('title')}")
-    except Exception as e:
-        logging.exception("Ошибка при обработке голоса")
-        await message.answer("Произошла ошибка при обработке голоса.")
-
 @router.error()
 async def on_error(event: ErrorEvent):
     logging.error("Ошибка в обработчике бота", exc_info=event.exception)
@@ -538,6 +226,8 @@ async def api_middleware(request: web.Request, handler):
     except Exception:
         logging.exception("Необработанная ошибка в API")
         response = web.json_response({"error": "Внутренняя ошибка сервера"}, status=500)
+    if request.path.startswith(("/css/", "/js/")):
+        response.headers["Cache-Control"] = "no-cache"  # проверять обновления при каждом открытии
     _add_cors(request, response)
     return response
 
@@ -580,12 +270,6 @@ def _extract_idea_lines(description: str) -> list[str]:
             if t: out.append(t)
     return out
 
-def _valid_date(s: str) -> bool:
-    if not DATE_RE.match(s): return False
-    try: year = date_cls.fromisoformat(s).year
-    except ValueError: return False
-    return 2000 <= year <= 2100
-
 def parse_event_payload(body: dict) -> dict:
     description = str(body.get("description", "")).strip()
     date = str(body.get("date", ""))
@@ -598,9 +282,9 @@ def parse_event_payload(body: dict) -> dict:
     except (TypeError, ValueError): remind_before = 0
     if category not in CATEGORIES: raise ApiError("Неизвестная категория")
     if len(description) > 2000: raise ApiError("Слишком длинный текст")
-    if not _valid_date(date): raise ApiError("Некорректная дата")
+    if not valid_date(date): raise ApiError("Некорректная дата")
     if date_end:
-        if not _valid_date(date_end): raise ApiError("Некорректная дата окончания")
+        if not valid_date(date_end): raise ApiError("Некорректная дата окончания")
         if date_end < date: raise ApiError("Дата окончания раньше даты начала")
         try: span = (date_cls.fromisoformat(date_end) - date_cls.fromisoformat(date)).days
         except ValueError: raise ApiError("Некорректная дата окончания")
@@ -623,7 +307,10 @@ def parse_event_payload(body: dict) -> dict:
         if category == "rest" and date_end:
             if color and color not in db.TODO_COLORS: raise ApiError("Некорректный цвет")
         else: color = ""
-    title = CATEGORY_TITLES.get(category, "Событие")
+    if date_end == date:
+        date_end = ""
+    raw_title = str(body.get("title") or "").strip()[:100]
+    title = raw_title if (category in ("todo", "personal") and raw_title) else CATEGORY_TITLES.get(category, "Событие")
     return {"title": title, "description": description, "date": date, "date_end": date_end, "time": event_time, "category": category, "color": color, "remind_before": remind_before, "visibility": visibility, "items": normalize_items(body.get("checklist")) if category == "shop" else []}
 
 def event_to_dict(e: dict, uid: int) -> dict:
@@ -729,12 +416,20 @@ async def api_update_event(request: web.Request) -> web.Response:
     if event["category"] == "personal" and event["created_by"] != tg_user.id: raise ApiError("Редактировать личное событие может только автор", 403)
     if event["category"] != "todo" and event["category"] != "personal" and event["created_by"] != tg_user.id: raise ApiError("Редактировать событие может только его автор", 403)
     data = parse_event_payload(await read_json(request))
-    identity_changed = (data["date"], data["date_end"], data["time"], data["category"]) != (event["date"], event.get("date_end") or "", event["time"], event["category"])
+    if data["category"] != event["category"]:
+        raise ApiError("Категорию существующего события менять нельзя — создайте новое", 409)
+    other_id = event["target_user"] if event["created_by"] == tg_user.id else event["created_by"]
+    old_end = event.get("date_end") or ""
+    if old_end == event["date"]:
+        old_end = ""
+    schedule_changed = (data["date"], data["date_end"], data["time"], data["remind_before"]) != (event["date"], old_end, event["time"], event.get("remind_before") or 0)
+    identity_changed = (data["date"], data["date_end"], data["time"]) != (event["date"], old_end, event["time"])
+    ideas_changed = data["category"] == "sex" and _extract_idea_lines(data["description"]) != _extract_idea_lines(event["description"])
     visibility_changed = data["visibility"] != event.get("visibility", "shared")
     changed = identity_changed or visibility_changed or data["description"] != event["description"] or data["color"] != event.get("color", "") or data["remind_before"] != (event.get("remind_before") or 0) or data["title"] != event["title"]
     if not changed: return web.json_response(event_to_dict(event, tg_user.id))
-    reset = identity_changed and data["category"] not in ("shop", "todo", "personal")
-    updated = await db.update_event(event["id"], data["title"], data["description"], data["date"], data["time"], data["category"], reset_status=reset, color=data["color"], remind_before=data["remind_before"], date_end=data["date_end"], visibility=data["visibility"])
+    reset = (identity_changed or ideas_changed) and data["category"] not in ("shop", "todo", "personal")
+    updated = await db.update_event(event["id"], data["title"], data["description"], data["date"], data["time"], data["category"], reset_status=reset, color=data["color"], remind_before=data["remind_before"], date_end=data["date_end"], visibility=data["visibility"], reset_reminders=schedule_changed)
     if data["category"] == "personal" and visibility_changed:
         partner_id = user["partner_id"]
         if data["visibility"] == "private": await db.set_target_user(event["id"], tg_user.id)
@@ -742,11 +437,11 @@ async def api_update_event(request: web.Request) -> web.Response:
         if partner_id:
             if data["visibility"] == "shared": notify(partner_id, f"📝 Партнёр сделал личное дело общим: {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])}.")
             else: notify(partner_id, f"📝 Партнёр скрыл личное дело: {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])}.")
-    if data["category"] == "shop": notify(event["target_user"], f"✏️ Список покупок на {fmt_range(data['date'], data['date_end'])} изменён.")
-    elif data["category"] == "todo": notify(event["target_user"], f"📌 Дело на {fmt_range(data['date'], data['date_end'])} изменено.")
+    if data["category"] == "shop": notify(other_id, f"✏️ Список покупок на {fmt_range(data['date'], data['date_end'])} изменён.")
+    elif data["category"] == "todo": notify(other_id, f"📌 Дело на {fmt_range(data['date'], data['date_end'])} изменено.")
     elif data["category"] != "personal":
-        suffix = " Оно снова ждёт вашего ответа." if identity_changed else ""
-        notify(event["target_user"], f"✏️ Событие на {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])} изменено.{suffix}")
+        suffix = " Оно снова ждёт вашего ответа." if reset else ""
+        notify(other_id, f"✏️ Событие на {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])} изменено.{suffix}")
     updated = await db.get_event(event["id"])
     return web.json_response(event_to_dict(updated, tg_user.id))
 
@@ -928,10 +623,12 @@ async def send_due_reminders() -> None:
                 event_dt_local = datetime.fromisoformat(f"{c['date']}T{hh}:{mm}:00").replace(tzinfo=tz)
             except Exception: continue
             remind_at = event_dt_local - timedelta(minutes=c["remind_before"])
-            if not (remind_at <= local_now < remind_at + timedelta(minutes=2)): continue
+            # шлём, как только время подошло и пока событие не началось — пропущенные при простое тоже уйдут
+            if not (remind_at <= local_now < event_dt_local): continue
             if not await db.mark_reminded(c["event_id"], c["user_id"]): continue
+            left = max(1, int((event_dt_local - local_now).total_seconds() // 60))
             prefix = "📝" if c["category"] == "personal" else "📌"
-            await safe_send(c["user_id"], f"{prefix} Напоминание: {c['title']} в {c['time']} (через {_humanize_minutes(c['remind_before'])}).")
+            await safe_send(c["user_id"], f"{prefix} Напоминание: {c['title']} в {c['time']} (через {_humanize_minutes(left)}).")
             continue
         if local_now.strftime("%Y-%m-%d") != c["date"] or local_now.hour < REMINDER_HOUR: continue
         if not await db.mark_reminded(c["event_id"], c["user_id"]): continue
@@ -976,7 +673,7 @@ async def main() -> None:
     bot_username = (await bot.get_me()).username
     with contextlib.suppress(Exception):
         await bot.set_my_commands([BotCommand(command="start", description="Открыть календарь"), BotCommand(command="invite", description="Ссылка-приглашение для партнёра"), BotCommand(command="unlink", description="Отвязать партнёра")])
-    app = web.Application(middlewares=[api_middleware], client_max_size=20 * 1024 * 1024)
+    app = web.Application(middlewares=[api_middleware], client_max_size=1024 * 1024)
     app.router.add_get("/", index)
     app.router.add_get("/health", health_check)
     app.router.add_static("/css", INDEX_FILE.parent / "css")

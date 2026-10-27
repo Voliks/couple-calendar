@@ -1,7 +1,14 @@
 let formChecklist = [];
 let formColor = "";
 let formDateEnd = "";
+let formSpan = 0; // длина диапазона в днях (0 = один день)
 const todoColorsFallback = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
+
+function addDays(dateStr, n) {
+  const d = parse(dateStr);
+  d.setDate(d.getDate() + n);
+  return fmt(d.getFullYear(), d.getMonth(), d.getDate());
+}
 
 function availableTodoColors() {
   return (state.todo_colors && state.todo_colors.length) ? state.todo_colors : todoColorsFallback;
@@ -37,6 +44,7 @@ function updateFormSections() {
   const isRest = cat === "rest";
   const isRange = !!formDateEnd;
 
+  $("titleSection").hidden = !(isTodo || isPersonal);
   $("checklistSection").hidden = !(isShop && !editingEvent);
   $("sexIdeasSection").hidden = !isSex;
   $("todoSection").hidden = !isTodo;
@@ -134,10 +142,22 @@ function openForm(event = null) {
   $("fDate").value = event ? event.date : selected;
   $("fTime").value = event ? event.time : "";
   $("fCategory").value = event ? event.category : "rest";
-  $("fDesc").value = event ? event.description || "" : "";
+  $("fCategory").disabled = !!event; // категорию существующего события менять нельзя
+
+  const hasOwnTitle = event && (event.category === "todo" || event.category === "personal")
+    && event.title !== (CATEGORIES[event.category] || {}).label;
+  $("fTitle").value = hasOwnTitle ? event.title : "";
 
   selectedIdeas = [];
   currentCategoryTitle = "";
+  let desc = event ? event.description || "" : "";
+  if (event && event.category === "sex") {
+    // идеи хранятся в описании строками «• …» — достаём их обратно в чипы
+    const lines = desc.split("\n");
+    selectedIdeas = lines.filter((l) => l.trim().startsWith("• ")).map((l) => l.trim().slice(2).trim()).filter(Boolean);
+    desc = lines.filter((l) => !l.trim().startsWith("• ")).join("\n").trim();
+  }
+  $("fDesc").value = desc;
   renderChosen();
 
   if (event && (event.category === "todo" || event.category === "personal")) {
@@ -164,6 +184,7 @@ function openForm(event = null) {
   }
 
   formDateEnd = event ? (event.date_end && event.date_end !== event.date ? event.date_end : "") : "";
+  formSpan = formDateEnd ? Math.round((parse(formDateEnd) - parse(event.date)) / 86400000) : 0;
   $("fHint").hidden = !event || (event && (event.category === "shop" || event.category === "todo" || event.category === "personal"));
   $("fError").textContent = "";
   formChecklist = [];
@@ -189,6 +210,7 @@ function openFormForRange(dates, category) {
   $("fCategory").value = category;
   $("fDate").value = start;
   formDateEnd = end !== start ? end : "";
+  formSpan = formDateEnd ? sorted.length - 1 : 0;
   if (category === "personal") {
     $("fPersonalDateEnd").value = formDateEnd;
   }
@@ -210,6 +232,7 @@ function closeForm() {
   $("overlay").hidden = true;
   tg.BackButton?.hide();
   formDateEnd = "";
+  formSpan = 0;
   clearMultiSelect();
 }
 
@@ -263,7 +286,8 @@ $("fSave").onclick = async () => {
   const date = $("fDate").value;
   if (!date) { $("fError").textContent = "Выберите дату"; return; }
 
-  const notes = $("fDesc").value.trim();
+  // строки заметки не должны начинаться с «• » — так помечаются идеи
+  const notes = $("fDesc").value.trim().split("\n").map((l) => l.replace(/^(\s*)•\s?/, "$1– ")).join("\n");
   const ideasPart = category === "sex" && selectedIdeas.length
     ? selectedIdeas.map(t => "• " + t).join("\n")
     : "";
@@ -276,13 +300,18 @@ $("fSave").onclick = async () => {
     time: $("fTime").value,
   };
 
+  // при переносе даты диапазон сохраняет свою длину
+  const endForSave = formSpan > 0 ? addDays(date, formSpan) : "";
+
+  if (category === "todo" || category === "personal") payload.title = $("fTitle").value.trim();
+
   if (category === "todo") {
     if (!formColor) { $("fError").textContent = "Выберите цвет"; return; }
     payload.color = formColor;
     const rb = parseInt($("fRemindBefore").value, 10) || 0;
     payload.remind_before = ($("fTime").value ? rb : 0);
     payload.visibility = "shared";
-    payload.date_end = formDateEnd || "";
+    payload.date_end = endForSave;
   }
 
   if (category === "personal") {
@@ -302,8 +331,8 @@ $("fSave").onclick = async () => {
   }
 
   if (category === "rest") {
-    payload.date_end = formDateEnd || "";
-    if (formDateEnd) {
+    payload.date_end = endForSave;
+    if (endForSave) {
       if (!formColor) { $("fError").textContent = "Выберите цвет заливки"; return; }
       payload.color = formColor;
     }

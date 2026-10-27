@@ -105,7 +105,7 @@ $("ideasContainer").addEventListener("click", async (e) => {
   if (del) {
     const item = del.closest("[data-idea-text]");
     const text = item.dataset.ideaText;
-    const idea = (state.sex_ideas || []).find(i => i.text === text);
+    const idea = (state.sex_ideas || []).find(i => String(i.id) === item.dataset.ideaId);
     if (!idea) return;
     confirmDialog("Удалить эту идею? Она пропадёт у вас обоих.", async () => {
       try {
