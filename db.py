@@ -101,23 +101,33 @@ class _TursoBackend:
         self._session = None
 
     async def start(self) -> None:
-        import aiohttp
-        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
+        return None
 
     async def close(self) -> None:
-        if self._session is not None:
-            await self._session.close()
+        return None
 
     async def _pipeline(self, requests: list, retries: int = 0) -> list:
-        import aiohttp
+        import urllib.error
+        import urllib.request
+
         payload = {"requests": requests + [{"type": "close"}]}
         for attempt in range(retries + 1):
             try:
-                async with self._session.post(
-                    self._endpoint, json=payload, headers=self._headers
-                ) as resp:
-                    status, body = resp.status, await resp.text()
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                def send():
+                    request = urllib.request.Request(
+                        self._endpoint,
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers=self._headers,
+                        method="POST",
+                    )
+                    try:
+                        with urllib.request.urlopen(request, timeout=20) as resp:
+                            return resp.status, resp.read().decode("utf-8")
+                    except urllib.error.HTTPError as resp:
+                        return resp.code, resp.read().decode("utf-8", errors="replace")
+
+                status, body = await asyncio.to_thread(send)
+            except (urllib.error.URLError, TimeoutError, asyncio.TimeoutError) as e:
                 err = DbError(f"Нет связи с Turso: {e!r}")
             else:
                 if status == 200:
