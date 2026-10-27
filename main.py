@@ -198,7 +198,7 @@ async def handle_voice_message(message: Message):
     form = aiohttp.FormData()
     form.add_field('file', voice_bytes.getvalue(), filename='voice.ogg', content_type='audio/ogg')
     form.add_field('model', 'whisper-large-v3')
-     form = aiohttp.FormData()
+    form = aiohttp.FormData()
     form.add_field('file', voice_bytes.getvalue(), filename='voice.ogg', content_type='audio/ogg')
     form.add_field('model', 'whisper-large-v3')
     
