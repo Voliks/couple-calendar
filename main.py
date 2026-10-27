@@ -258,35 +258,71 @@ async def handle_voice_message(message: Message):
                 answer = data["choices"][0]["message"]["content"]
                 ev = json.loads(answer)
                 
-                # --- ЖЕЛЕЗОБЕТОННЫЙ РАСЧЕТ ДНЕЙ НЕДЕЛИ ---
+                # --- УМНЫЙ РАСЧЕТ ДАТ НА PYTHON ---
                 import re
                 from datetime import timedelta
+                
+                lower_text = text.lower()
+                current_dt = datetime.now(timezone.utc)
+                target_date = ev.get("date", today) # По умолчанию берем из нейросети
+                
+                # 1. Обработка "через X недель/месяцев" и "следующая/эта неделя"
+                week_offset = 0
+                month_offset = 0
+                
+                if "через неделю" in lower_text:
+                    week_offset = 1
+                elif "через две недели" in lower_text or "через 2 недели" in lower_text:
+                    week_offset = 2
+                elif "через три недели" in lower_text or "через 3 недели" in lower_text:
+                    week_offset = 3
+                elif "через месяц" in lower_text:
+                    month_offset = 1
+                elif "следующая неделя" in lower_text or "следующей неделе" in lower_text or "на следующую неделю" in lower_text:
+                    week_offset = 1
+                
+                # 2. Обработка дней недели
                 days_map = {
-                    "понедельник": 0, "понедельникам": 0, "понедельника": 0,
-                    "вторник": 1, "вторникам": 1, "вторника": 1,
-                    "среда": 2, "среду": 2, "средам": 2, "среды": 2,
-                    "четверг": 3, "четвергам": 3, "четверга": 3,
-                    "пятница": 4, "пятницу": 4, "пятницам": 4, "пятницы": 4,
-                    "суббота": 5, "субботу": 5, "субботам": 5, "субботы": 5,
-                    "воскресенье": 6, "воскресеньям": 6, "воскресенья": 6
+                    "понедельник": 0, "вторник": 1, "среда": 2, "четверг": 3,
+                    "пятница": 4, "суббота": 5, "воскресенье": 6,
+                    "понедельникам": 0, "вторникам": 1, "средам": 2, "четвергам": 3,
+                    "пятницам": 4, "субботам": 5, "воскресеньям": 6,
+                    "понедельника": 0, "вторника": 1, "среды": 2, "четверга": 3,
+                    "пятницы": 4, "субботы": 5, "воскресенья": 6,
+                    "понедельнику": 0, "вторнику": 1, "среде": 2, "четвергу": 3,
+                    "пятнице": 4, "субботе": 5, "воскресенью": 6,
+                    "понедельник": 0, "среду": 2, "пятницу": 4, "субботу": 5
                 }
                 
-                # Ищем день недели в том, что сказал пользователь
-                lower_text = text.lower()
+                found_day = None
                 for day_name, day_num in days_map.items():
                     if re.search(r'\b' + day_name + r'\b', lower_text):
-                        current_dt = datetime.now(timezone.utc)
-                        current_weekday = current_dt.weekday() # 0 = Пн, 6 = Вс
-                        
-                        # Считаем, сколько дней осталось до нужного дня
-                        days_ahead = day_num - current_weekday
-                        # Если день уже прошел на этой неделе, берем следующий
-                        if days_ahead <= 0: 
-                            days_ahead += 7
-                            
-                        target_date = (current_dt + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-                        ev["date"] = target_date  # Принудительно ставим правильную дату!
+                        found_day = day_num
                         break
+                
+                # 3. Вычисляем итоговую дату
+                if month_offset > 0:
+                    # Прибавляем месяц (упрощенно 30 дней)
+                    target_date = (current_dt + timedelta(days=30 * month_offset)).strftime("%Y-%m-%d")
+                elif found_day is not None:
+                    current_weekday = current_dt.weekday()
+                    days_ahead = found_day - current_weekday
+                    
+                    # Если указано "следующая неделя", добавляем 7 дней к расчету
+                    if week_offset > 0 and days_ahead <= 0:
+                        days_ahead += 7
+                    elif days_ahead <= 0 and week_offset == 0:
+                        days_ahead += 7 # Берем ближайший будущий день
+                    elif week_offset > 0:
+                        # Если день впереди, но сказано "следующая неделя", всё равно прыгаем на неделю
+                        days_ahead += 7 * week_offset
+
+                    target_date = (current_dt + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+                elif week_offset > 0 and found_day is None:
+                    # Просто "через неделю" без дня
+                    target_date = (current_dt + timedelta(days=7 * week_offset)).strftime("%Y-%m-%d")
+                
+                ev["date"] = target_date  # Принудительно ставим правильную дату!
                 # ------------------------------------------
                 
                 
