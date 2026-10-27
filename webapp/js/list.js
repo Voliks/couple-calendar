@@ -15,13 +15,33 @@ function checklistHtml(e) {
 
 function answerHtml(e, expired) {
   if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
-  if (e.is_creator) return "";
+  
+  // Если событие уже выполнено, показываем это
+  if (e.status === "done") {
+    return `<div class="answer one"><button class="soft" disabled>✓ Выполнено</button></div>`;
+  }
+
+  // Если событие создал я, я не могу его принять/отклонить, но могу отметить выполненным, если оно прошло
+  if (e.is_creator) {
+    if (e.status === "accepted" && e.date <= todayStr()) {
+      return `<div class="answer one"><button class="soft" data-status="done">✅ Отметить выполненным</button></div>`;
+    }
+    return "";
+  }
+
   if (e.status === "pending") {
     return expired ? "" : `<div class="answer">
       <button class="yes" data-status="accepted">Да</button>
       <button class="no" data-status="declined">Нет</button></div>`;
   }
   if (e.status === "accepted") {
+    // Если принято и дата пришла (или прошла) — можно отметить выполненным
+    if (e.date <= todayStr()) {
+      return `<div class="answer">
+        <button class="yes" data-status="done">✅ Выполнено</button>
+        <button class="soft" data-status="declined">Отказаться</button>
+      </div>`;
+    }
     return `<div class="answer one"><button class="soft" data-status="declined">Отказаться</button></div>`;
   }
   return `<div class="answer one"><button class="soft" data-status="accepted">Всё-таки принять</button></div>`;
