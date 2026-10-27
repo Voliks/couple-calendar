@@ -452,6 +452,15 @@ $("list").addEventListener("click", async (ev) => {
   const statusBtn = ev.target.closest("[data-status]");
   if (statusBtn) {
     const newStatus = statusBtn.dataset.status;
+        if (newStatus === "done") {
+      statusBtn.disabled = true;
+      try {
+        const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: "done" } });
+        replaceEvent(updated);
+        tg.HapticFeedback?.notificationOccurred("success");
+      } catch (e) { toast(e.message); await load(); }
+      return;
+    }
     if (newStatus === "declined") {
       openCommentDialog(event.my_decline_comment || "", async (comment) => {
         try {
