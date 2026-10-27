@@ -459,7 +459,9 @@ async def api_respond(request: web.Request) -> web.Response:
     body = await read_json(request)
     if event["category"] in ("shop", "todo", "personal"): raise ApiError("Это не требует ответа")
     status = body.get("status")
-    if status not in ("accepted", "declined"): raise ApiError("Некорректный статус")
+   status = body.get("status")
+    if status not in ("accepted", "declined", "done"):
+        raise ApiError("Некорректный статус")
     if event["target_user"] != tg_user.id: raise ApiError("Отвечать на событие может только приглашённый", 403)
     comment = str(body.get("comment") or "").strip()[:500]
     slot = "creator" if event["created_by"] == tg_user.id else "target"
