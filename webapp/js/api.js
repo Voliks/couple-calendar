@@ -17,7 +17,7 @@ const CATEGORIES = {
   personal: { label: "Личное", icon: "📝" },
 };
 const STATUS_TEXT = {
-  pending: "⏳ Ждёт ответа", accepted: "✓ Принято", declined: "✕ Отклонено", expired: "Просрочено",
+  pending: "⏳ Ждёт ответа", accepted: "✓ Принято", declined: "✕ Отклонено", expired: "Просрочено", done: "✅ Выполнено",
 };
 const MONTHS_FORMAT = new Intl.DateTimeFormat("ru", { month: "long", year: "numeric" });
 const DAY_FORMAT = new Intl.DateTimeFormat("ru", { day: "numeric", month: "long" });
