@@ -1107,7 +1107,7 @@ async def api_create_challenge(request: web.Request) -> web.Response:
     body = await read_json(request)
     text = str(body.get("text") or "").strip()[:300]
     try:
-        points = int(body.get("points"))
+        points = int(body.get("reward"))
     except (TypeError, ValueError):
         raise ApiError("Некорректное количество очков")
     if not text:
