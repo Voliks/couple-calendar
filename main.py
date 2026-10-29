@@ -1041,6 +1041,48 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
         "catalog": catalog,
         "my_id": tg_user.id
     })
+
+
+async def api_create_challenge(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    user = await db.get_or_create_user(tg_user.id)
+    if not user["partner_id"]:
+        raise ApiError("Сначала свяжитесь с партнёром", 409)
+
+    body = await read_json(request)
+    text = str(body.get("text") or "").strip()[:300]
+    try:
+        points = int(body.get("points"))
+    except (TypeError, ValueError):
+        raise ApiError("Некорректное количество очков")
+    if not text:
+        raise ApiError("Укажите текст задания")
+    if not 1 <= points <= 10:
+        raise ApiError("Количество очков должно быть от 1 до 10")
+
+    challenge = await db.create_challenge(
+        tg_user.id, user["partner_id"], text, points
+    )
+    return web.json_response({"status": "created", "challenge": challenge}, status=201)
+
+
+async def api_challenge_action(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    challenge_id = _int_param(request, "id")
+    if challenge_id <= 0:
+        raise ApiError("Некорректный id задания")
+
+    body = await read_json(request)
+    action = str(body.get("action") or "").strip()
+    if not action:
+        raise ApiError("Не указано действие")
+
+    result = await db.challenge_action(challenge_id, tg_user.id, action)
+    if result is None:
+        raise ApiError("Задание не найдено или действие недоступно", 404)
+    return web.json_response({"status": "ok", "challenge": result})
+
+
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
