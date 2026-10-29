@@ -1,5 +1,6 @@
 let allChallenges = [];
 let catalogData = {};
+let currentChallenge = null;
 
 async function openChallenges() {
   $("challengesOverlay").hidden = false;
@@ -11,116 +12,18 @@ async function openChallenges() {
     allChallenges = res.history || [];
     catalogData = res.catalog || {};
     
-    // Обновляем баланс
     $("challengeBalance").textContent = res.balance;
     
-    // Заполняем категории в форме
     const catSelect = $("challengeCategorySelect");
     catSelect.innerHTML = Object.keys(catalogData).map(cat => 
       `<option value="${esc(cat)}">${esc(cat)}</option>`
     ).join("");
     
-    // Заполняем список идей для первой категории
-    function updateIdeaSelect() {
-      const cat = $("challengeCategorySelect").value;
-      const ideas = catalogData[cat] || [];
-      const select = $("challengeIdeaSelect");
-
-      if (!ideas.length) {
-        select.innerHTML = `<option value="">Нет заданий в этой категории</option>`;
-        $("newChallengeReward").value = 0;
-        return;
-      }
-
-      select.innerHTML = ideas.map(idea => {
-        const text = typeof idea === "object" ? idea.challenge : idea;
-        const points = typeof idea === "object" ? idea.points : 10;
-        return `<option value="${esc(text)}" data-points="${points}">${esc(text)} (${points} б.)</option>`;
-      }).join("");
-      updateRewardInput();
-    }
-
-    function updateRewardInput() {
-      const sel = $("challengeIdeaSelect");
-      const selectedOption = sel.options[sel.selectedIndex];
-      if (selectedOption && selectedOption.dataset.points) {
-        $("newChallengeReward").value = selectedOption.dataset.points;
-      }
-    }
-
-    $("challengeIdeaSelect").onchange = updateRewardInput;
     updateIdeaSelect();
     renderChallenges();
   } catch (e) {
     toast(e.message);
   }
-}
-
-   function renderChallenges() {
-  const list = $("challengesList");
-  if (!allChallenges.length) {
-    list.innerHTML = `<div class="empty">Пока нет вызовов. Брось первый!</div>`;
-    return;
-  }
-
-  list.innerHTML = allChallenges.map(c => {
-    const isCreator = c.is_creator;
-    const isTarget = !isCreator;
-    
-    let statusText = "";
-    let actions = "";
-    
-    // Блок с фото (показываем всегда, если фото есть)
-    let photoHtml = "";
-    if (c.photo_id) {
-      photoHtml = `<button class="btn ghost" style="margin-top:8px; font-size:12px;" onclick="showChallengePhoto('${c.photo_id}')">🖼 Посмотреть фото</button>`;
-    }
-
-    if (c.status === "pending") {
-      statusText = isCreator ? "⏳ Ждёт выполнения" : "⏳ Тебе бросили вызов";
-      if (isTarget) {
-        actions = `<div class="challenge-actions">
-          <button class="primary" onclick="pickPhotoForChallenge(${c.id})">📸 Выполнить</button>
-        </div>`;
-      }
-    } else if (c.status === "submitted") {
-      statusText = "🔍 На проверке";
-      if (isCreator) {
-        actions = `<div class="challenge-actions">
-          <button class="success" onclick="approveChallenge(${c.id})">Засчитать</button>
-          <button class="danger" onclick="rejectChallenge(${c.id})">Отклонить</button>
-        </div>`;
-      }
-    } else if (c.status === "approved") {
-      statusText = "✅ Выполнено";
-    } else if (c.status === "rejected") {
-      statusText = "❌ Отклонено";
-    }
-
-    return `<div class="challenge-card ${c.status === 'approved' ? 'done' : ''}">
-      <div class="challenge-header">
-        <span>${esc(c.category)}</span>
-        <span>${statusText}</span>
-      </div>
-      <div class="challenge-text">${esc(c.text)}</div>
-      <div class="challenge-reward">🏆 ${c.reward} баллов</div>
-      ${photoHtml}
-      ${actions}
-    </div>`;
-  }).join("");
-}
-
-function updateIdeaSelect() {
-  const cat = $("challengeCategorySelect").value;
-  const ideas = catalogData[cat] || [];
-  $("challengeIdeaSelect").innerHTML = ideas.map(idea => 
-    `<option value="${esc(idea)}">${esc(idea)}</option>`
-  ).join("");
-}
-
-function closeChallenges() {
-  $("challengesOverlay").hidden = true;
-  if (!$("overlay").hidden) tg.BackButton?.show(); else tg.BackButton?.hide();
 }
 
 function renderChallenges() {
@@ -132,53 +35,51 @@ function renderChallenges() {
 
   list.innerHTML = allChallenges.map(c => {
     const isCreator = c.is_creator;
-    const isTarget = !isCreator;
-    
     let statusText = "";
-    let actions = "";
     
-    if (c.status === "pending") {
-      statusText = isCreator ? "⏳ Ждёт выполнения" : "⏳ Тебе бросили вызов";
-      if (isTarget) {
-        actions = `<div class="challenge-actions">
-          <button class="primary" onclick="submitChallenge(${c.id})">Сдать</button>
-        </div>`;
-      }
-    } else if (c.status === "submitted") {
-      statusText = "🔍 На проверке";
-      if (isCreator) {
-        actions = `<div class="challenge-actions">
-          <button class="success" onclick="approveChallenge(${c.id})">Засчитать</button>
-          <button class="danger" onclick="rejectChallenge(${c.id})">Отклонить</button>
-        </div>`;
-      }
-    } else if (c.status === "approved") {
-      statusText = "✅ Выполнено";
-    } else if (c.status === "rejected") {
-      statusText = "❌ Отклонено";
-    }
+    if (c.status === "pending") statusText = isCreator ? "⏳ Ждёт выполнения" : "⏳ Тебе бросили вызов";
+    else if (c.status === "submitted") statusText = "🔍 На проверке";
+    else if (c.status === "approved") statusText = "✅ Выполнено";
+    else if (c.status === "rejected") statusText = "❌ Отклонено";
 
-    return `<div class="challenge-card ${c.status === 'approved' ? 'done' : ''}">
+    return `<div class="challenge-card ${c.status === 'approved' ? 'done' : ''}" onclick="openChallengeChat(${c.id})">
       <div class="challenge-header">
         <span>${esc(c.category)}</span>
         <span>${statusText}</span>
       </div>
       <div class="challenge-text">${esc(c.text)}</div>
       <div class="challenge-reward">🏆 ${c.reward} баллов</div>
-      ${actions}
     </div>`;
   }).join("");
 }
+
+function updateIdeaSelect() {
+  const cat = $("challengeCategorySelect").value;
+  const ideas = catalogData[cat] || [];
+  $("challengeIdeaSelect").innerHTML = ideas.map(idea => {
+    const text = typeof idea === 'object' ? idea.challenge : idea;
+    const points = typeof idea === 'object' ? idea.points : 10;
+    return `<option value="${esc(text)}" data-points="${points}">${esc(text)} (${points} б.)</option>`;
+  }).join("");
+  updateRewardInput();
+}
+
+function updateRewardInput() {
+  const sel = $("challengeIdeaSelect");
+  const selectedOption = sel.options[sel.selectedIndex];
+  if (selectedOption && selectedOption.dataset.points) {
+    $("newChallengeReward").value = selectedOption.dataset.points;
+  }
+}
+
+$("challengeIdeaSelect").onchange = () => updateRewardInput();
 
 async function createChallenge() {
   const cat = $("challengeCategorySelect").value;
   const select = $("challengeIdeaSelect");
   const selectedOption = select.options[select.selectedIndex];
   
-  if (!selectedOption || !selectedOption.value) {
-    toast("Выберите задание");
-    return;
-  }
+  if (!selectedOption || !selectedOption.value) return toast("Выберите задание");
 
   const text = selectedOption.value;
   const points = parseInt($("newChallengeReward").value) || parseInt(selectedOption.dataset.points) || 10;
@@ -190,7 +91,7 @@ async function createChallenge() {
   try {
     await api("/challenges", { method: "POST", body: { category: cat, text, reward: points } });
     toast("Вызов брошен партнёру!");
-    await openChallenges(); // перезагружаем
+    await openChallenges();
   } catch (e) {
     toast(e.message);
   } finally {
@@ -199,37 +100,72 @@ async function createChallenge() {
   }
 }
 
-async function submitChallenge(id) {
-  try {
-    await api(`/challenges/${id}/action`, { method: "POST", body: { action: "submit" } });
-    toast("Отправлено на проверку!");
-    await openChallenges();
-  } catch (e) { toast(e.message); }
+// === ОТКРЫТИЕ ЧАТА ЧЕЛЛЕНДЖА ===
+function openChallengeChat(id) {
+  const c = allChallenges.find(x => x.id === id);
+  if (!c) return;
+  currentChallenge = c;
+  
+  $("chatCategory").textContent = c.category;
+  $("chatTaskText").textContent = c.text;
+  $("chatReward").textContent = `🏆 ${c.reward} баллов`;
+  
+  // Сбрасываем видимость
+  $("chatPhotoBlock").style.display = "none";
+  $("chatActionBlock").style.display = "none";
+  $("chatCreatorActions").style.display = "none";
+  
+  // Логика отображения кнопок
+  const isCreator = c.is_creator;
+  
+  if (c.status === "pending") {
+    $("chatStatus").textContent = isCreator ? "Ожидаем выполнения партнёром" : "Прикрепите фото для выполнения";
+    if (!isCreator) {
+      $("chatActionBlock").style.display = "block";
+      $("chatAttachBtn").onclick = () => pickPhotoForChallenge(c.id);
+    }
+  } 
+  else if (c.status === "submitted") {
+    $("chatStatus").textContent = "Партнер выполнил задание. Ожидает вашей проверки.";
+    if (c.photo_id) {
+      $("chatPhotoBlock").style.display = "block";
+      $("chatViewPhotoBtn").onclick = () => showChallengePhoto(c.photo_id);
+    }
+    if (isCreator) {
+      $("chatCreatorActions").style.display = "flex";
+      $("chatApproveBtn").onclick = () => approveChallenge(c.id);
+      $("chatRejectBtn").onclick = () => rejectChallenge(c.id);
+    }
+  }
+  else if (c.status === "approved") {
+    $("chatStatus").textContent = "Челлендж успешно выполнен!";
+    if (c.photo_id) {
+      $("chatPhotoBlock").style.display = "block";
+      $("chatViewPhotoBtn").onclick = () => showChallengePhoto(c.photo_id);
+    }
+  }
+  else if (c.status === "rejected") {
+    $("chatStatus").textContent = "Челлендж отклонен.";
+    if (c.photo_id) {
+      $("chatPhotoBlock").style.display = "block";
+      $("chatViewPhotoBtn").onclick = () => showChallengePhoto(c.photo_id);
+    }
+  }
+  
+  $("challengeChatOverlay").hidden = false;
+  $("challengesOverlay").hidden = true; // Скрываем список
+  tg.BackButton?.show();
 }
 
-async function approveChallenge(id) {
-  try {
-    await api(`/challenges/${id}/action`, { method: "POST", body: { action: "approve" } });
-    toast("Баллы начислены!");
-    await openChallenges();
-  } catch (e) { toast(e.message); }
+function closeChallengeChat() {
+  $("challengeChatOverlay").hidden = true;
+  $("challengesOverlay").hidden = false;
+  tg.BackButton?.show();
 }
 
-async function rejectChallenge(id) {
-  try {
-    await api(`/challenges/${id}/action`, { method: "POST", body: { action: "reject" } });
-    toast("Челлендж отклонен");
-    await openChallenges();
-  } catch (e) { toast(e.message); }
-}
+$("chatBackBtn").onclick = closeChallengeChat;
 
-// Привязка событий
-$("challengeBtn").onclick = openChallenges;
-$("challengesClose").onclick = closeChallenges;
-$("challengeCategorySelect").onchange = updateIdeaSelect;
-$("createChallengeBtn").onclick = createChallenge;
-
-// Функция для сжатия фото в браузере (чтобы не грузить 5 МБ)
+// === ФОТО ===
 async function compressImage(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -253,13 +189,12 @@ async function compressImage(file) {
         canvas.height = height;
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, width, height);
-        canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.7); // Сжимаем на 70%
+        canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.7);
       };
     };
   });
 }
 
-// Открываем галерею при клике на кнопку "Прикрепить фото"
 function pickPhotoForChallenge(challengeId) {
   $("challengePhotoInput").onchange = async (e) => {
     const file = e.target.files[0];
@@ -269,16 +204,13 @@ function pickPhotoForChallenge(challengeId) {
     toast("Сжимаем и загружаем фото...");
     
     try {
-      // 1. Сжимаем
       const compressedBlob = await compressImage(file);
       
-      // 2. Получаем ссылку на загрузку у нашего сервера
       const res = await api("/challenges/upload-url", {
         method: "POST",
         body: { challenge_id: challengeId, filename: "photo.jpg" }
       });
       
-      // 3. Грузим фото НАПРЯМУЮ в Supabase
       const uploadRes = await fetch(res.upload_url, {
         method: "PUT",
         body: compressedBlob,
@@ -287,13 +219,13 @@ function pickPhotoForChallenge(challengeId) {
       
       if (!uploadRes.ok) throw new Error("Ошибка загрузки в облако");
 
-      // 4. Сохраняем путь в БД (через наш API)
       await api(`/challenges/${challengeId}/photo`, {
         method: "POST",
         body: { path: res.path }
       });
 
       toast("✅ Фото загружено и отправлено на проверку!");
+      closeChallengeChat();
       await openChallenges();
       
     } catch (err) {
@@ -303,13 +235,43 @@ function pickPhotoForChallenge(challengeId) {
   $("challengePhotoInput").click();
 }
 
-// Функция для получения ссылки на просмотр фото
 async function showChallengePhoto(path) {
   try {
     const res = await api(`/challenges/photo-url?path=${encodeURIComponent(path)}`);
-    // Открываем фото в новой вкладке/просмотрщике
     window.open(res.view_url, "_blank");
   } catch (e) {
     toast("Не удалось открыть фото: " + e.message);
   }
 }
+
+async function submitChallenge(id) {
+  try {
+    await api(`/challenges/${id}/action`, { method: "POST", body: { action: "submit" } });
+    toast("Отправлено на проверку!");
+    closeChallengeChat();
+    await openChallenges();
+  } catch (e) { toast(e.message); }
+}
+
+async function approveChallenge(id) {
+  try {
+    await api(`/challenges/${id}/action`, { method: "POST", body: { action: "approve" } });
+    toast("Баллы начислены!");
+    closeChallengeChat();
+    await openChallenges();
+  } catch (e) { toast(e.message); }
+}
+
+async function rejectChallenge(id) {
+  try {
+    await api(`/challenges/${id}/action`, { method: "POST", body: { action: "reject" } });
+    toast("Челлендж отклонен");
+    closeChallengeChat();
+    await openChallenges();
+  } catch (e) { toast(e.message); }
+}
+
+$("challengeBtn").onclick = openChallenges;
+$("challengesClose").onclick = () => { $("challengesOverlay").hidden = true; tg.BackButton?.hide(); };
+$("challengeCategorySelect").onchange = updateIdeaSelect;
+$("createChallengeBtn").onclick = createChallenge;

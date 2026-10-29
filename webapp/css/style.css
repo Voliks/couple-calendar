@@ -315,3 +315,11 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
 .challenge-actions .primary { background: var(--accent); color: #fff; }
 .challenge-actions .success { background: rgb(var(--accepted)); color: #fff; }
 .challenge-actions .danger { background: rgb(var(--declined)); color: #fff; }
+.challenge-card {
+  cursor: pointer;
+  transition: transform 0.1s, background 0.1s;
+}
+.challenge-card:active {
+  transform: scale(0.98);
+  background: rgba(0, 0, 0, 0.1);
+}
