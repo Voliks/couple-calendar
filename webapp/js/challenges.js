@@ -12,9 +12,17 @@ async function openChallenges() {
 
   try {
     const res = await api("/challenges");
-    allChallenges = res.history || [];
+    
+    // Сортируем: сначала активные (pending, submitted), затем выполненные (approved), затем отклоненные
+    const statusWeight = { pending: 1, submitted: 2, approved: 3, rejected: 4 };
+    allChallenges = (res.history || []).sort((a, b) => {
+      const wA = statusWeight[a.status] || 0;
+      const wB = statusWeight[b.status] || 0;
+      if (wA !== wB) return wA - wB;
+      return b.created_at - a.created_at; // Внутри группы новые сверху
+    });
+    
     catalogData = res.catalog || {};
-
     $("challengeBalance").textContent = res.balance ?? 0;
 
     const catSelect = $("challengeCategorySelect");
@@ -55,15 +63,16 @@ function renderChallenges() {
       "challenge-card",
       c.is_creator ? "" : "them",
       c.status === "approved" ? "done" : "",
+      c.status === "rejected" ? "rejected" : ""
     ].filter(Boolean).join(" ");
-    const reward = `🏆 ${c.reward} баллов`;
+    
     return `<div class="${cls}" data-challenge-id="${c.id}">
       <div class="challenge-header">
         <span>${esc(c.category)}</span>
         <span>${statusLabel(c)}</span>
       </div>
       <div class="challenge-text">${esc(c.text)}</div>
-      <div class="challenge-reward">${reward}</div>
+      <div class="challenge-reward">🏆 ${c.reward} баллов</div>
     </div>`;
   }).join("");
 }
@@ -98,7 +107,7 @@ async function createChallenge() {
 
   const text = opt.value;
   const points = parseInt($("newChallengeReward").value, 10) || parseInt(opt.dataset.points, 10) || 10;
-  const hours = parseInt($("challengeDeadlineSelect").value, 10) || 24; // Читаем время
+  const hours = parseInt($("challengeDeadlineSelect").value, 10) || 24;
 
   const btn = $("createChallengeBtn");
   btn.disabled = true;

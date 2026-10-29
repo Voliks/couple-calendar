@@ -323,3 +323,15 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
   transform: scale(0.98);
   background: rgba(0, 0, 0, 0.1);
 }
+/* Выполненные челленджи */
+.challenge-card.done {
+  background: rgba(0, 0, 0, 0.04);
+  border-left-color: rgb(var(--accepted));
+}
+.challenge-card.done .challenge-text {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+.challenge-card.done .challenge-reward {
+  color: rgb(var(--accepted));
+}

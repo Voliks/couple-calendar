@@ -1149,12 +1149,25 @@ async def api_create_challenge(request: web.Request) -> web.Response:
     if not user["partner_id"]:
         raise ApiError("Сначала свяжитесь с партнёром", 409)
 
+    # Проверяем, сколько активных челленджей создано сегодня
+    # (Берем начало текущего дня по UTC)
+    now = int(time.time())
+    start_of_day = now - (now % 86400)
+    rs = await db._exec(
+        "SELECT COUNT(*) FROM user_challenges "
+        "WHERE creator_id = ? AND created_at >= ? AND status IN ('pending', 'submitted')",
+        (tg_user.id, start_of_day)
+    )
+    active_today = rs.rows[0][0]
+    if active_today >= 3:
+        raise ApiError("Лимит на сегодня: можно создать не более 3 активных челленджей.", 429)
+
     body = await read_json(request)
     text = str(body.get("text") or "").strip()[:300]
     category = str(body.get("category") or "").strip()[:50] or "Своё"
     try:
         points = int(body.get("reward"))
-        hours = int(body.get("hours", 24)) # по умолчанию 24 часа
+        hours = int(body.get("hours", 24))
     except (TypeError, ValueError):
         raise ApiError("Некорректное количество очков или времени")
         
