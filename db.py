@@ -1260,10 +1260,14 @@ async def update_user_challenge(challenge_id: int, status: str, photo_id: str | 
 async def get_challenges_json() -> dict:
     """Читает файл challenges.json с категориями и заданиями."""
     path = Path(__file__).parent / "challenges.json"
-    if not path.exists(): return {}
+    if not path.exists(): 
+        logging.error("ФАЙЛ challenges.json НЕ НАЙДЕН ПО ПУТИ: %s", path)
+        return {}
     try:
         import json
         data = json.loads(path.read_text(encoding="utf-8"))
+        logging.info("УСПЕХ: прочитано %s категорий из challenges.json", len(data))
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except Exception as e:
+        logging.error("ОШИБКА ЧТЕНИЯ challenges.json: %s", e)
         return {}
