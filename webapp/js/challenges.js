@@ -22,11 +22,64 @@ async function openChallenges() {
     
     // Заполняем список идей для первой категории
     updateIdeaSelect();
-
     renderChallenges();
   } catch (e) {
-    $("challengesList").innerHTML = `<div class="empty">Ошибка загрузки: ${e.message}</div>`;
+    toast(e.message);
   }
+}
+
+   function renderChallenges() {
+  const list = $("challengesList");
+  if (!allChallenges.length) {
+    list.innerHTML = `<div class="empty">Пока нет вызовов. Брось первый!</div>`;
+    return;
+  }
+
+  list.innerHTML = allChallenges.map(c => {
+    const isCreator = c.is_creator;
+    const isTarget = !isCreator;
+    
+    let statusText = "";
+    let actions = "";
+    
+    // Блок с фото
+    let photoHtml = "";
+    if (c.photo_id) {
+      photoHtml = `<button class="btn ghost" style="margin-top:8px; font-size:12px;" onclick="showChallengePhoto('${c.photo_id}')">🖼 Посмотреть фото</button>`;
+    }
+
+    if (c.status === "pending") {
+      statusText = isCreator ? "⏳ Ждёт выполнения" : "⏳ Тебе бросили вызов";
+      if (isTarget) {
+        actions = `<div class="challenge-actions">
+          <button class="primary" onclick="pickPhotoForChallenge(${c.id})">📸 Прикрепить фото</button>
+        </div>`;
+      }
+    } else if (c.status === "submitted") {
+      statusText = "🔍 На проверке";
+      if (isCreator) {
+        actions = `<div class="challenge-actions">
+          <button class="success" onclick="approveChallenge(${c.id})">Засчитать</button>
+          <button class="danger" onclick="rejectChallenge(${c.id})">Отклонить</button>
+        </div>`;
+      }
+    } else if (c.status === "approved") {
+      statusText = "✅ Выполнено";
+    } else if (c.status === "rejected") {
+      statusText = "❌ Отклонено";
+    }
+
+    return `<div class="challenge-card ${c.status === 'approved' ? 'done' : ''}">
+      <div class="challenge-header">
+        <span>${esc(c.category)}</span>
+        <span>${statusText}</span>
+      </div>
+      <div class="challenge-text">${esc(c.text)}</div>
+      <div class="challenge-reward">🏆 ${c.reward} баллов</div>
+      ${photoHtml}
+      ${actions}
+    </div>`;
+  }).join("");
 }
 
 function updateIdeaSelect() {
@@ -144,3 +197,88 @@ $("challengeBtn").onclick = openChallenges;
 $("challengesClose").onclick = closeChallenges;
 $("challengeCategorySelect").onchange = updateIdeaSelect;
 $("createChallengeBtn").onclick = createChallenge;
+
+// Функция для сжатия фото в браузере (чтобы не грузить 5 МБ)
+async function compressImage(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX_WIDTH = 1024;
+        const MAX_HEIGHT = 1024;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+        } else {
+          if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.7); // Сжимаем на 70%
+      };
+    };
+  });
+}
+
+// Открываем галерею при клике на кнопку "Прикрепить фото"
+function pickPhotoForChallenge(challengeId) {
+  $("challengePhotoInput").onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    $("challengePhotoInput").value = "";
+
+    toast("Сжимаем и загружаем фото...");
+    
+    try {
+      // 1. Сжимаем
+      const compressedBlob = await compressImage(file);
+      
+      // 2. Получаем ссылку на загрузку у нашего сервера
+      const res = await api("/challenges/upload-url", {
+        method: "POST",
+        body: { challenge_id: challengeId, filename: "photo.jpg" }
+      });
+      
+      // 3. Грузим фото НАПРЯМУЮ в Supabase
+      const uploadRes = await fetch(res.upload_url, {
+        method: "PUT",
+        body: compressedBlob,
+        headers: { "Content-Type": "image/jpeg" }
+      });
+      
+      if (!uploadRes.ok) throw new Error("Ошибка загрузки в облако");
+
+      // 4. Сохраняем путь в БД (через наш API)
+      await api(`/challenges/${challengeId}/photo`, {
+        method: "POST",
+        body: { path: res.path }
+      });
+
+      toast("✅ Фото загружено и отправлено на проверку!");
+      await openChallenges();
+      
+    } catch (err) {
+      toast(err.message);
+    }
+  };
+  $("challengePhotoInput").click();
+}
+
+// Функция для получения ссылки на просмотр фото
+async function showChallengePhoto(path) {
+  try {
+    const res = await api(`/challenges/photo-url?path=${encodeURIComponent(path)}`);
+    // Открываем фото в новой вкладке/просмотрщике
+    window.open(res.view_url, "_blank");
+  } catch (e) {
+    toast("Не удалось открыть фото: " + e.message);
+  }
+}

@@ -10,7 +10,7 @@ from collections import deque
 from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
-
+from supabase import create_client, Client
 from aiogram import Dispatcher, Router  # type: ignore[reportMissingImports]
 from aiogram.filters import Command, CommandObject, CommandStart  # type: ignore[reportMissingImports]
 from aiogram.types import (  # type: ignore[reportMissingImports]
@@ -1004,6 +1004,74 @@ async def api_unlink(request: web.Request) -> web.Response:
         raise ApiError("У вас нет партнёра", 409)
     notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
     return web.json_response({"status": "unlinked"})
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+
+def get_supabase() -> Client:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise ApiError("Ошибка настройки Supabase", 500)
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+async def api_upload_photo_url(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    body = await read_json(request)
+    filename = str(body.get("filename") or "photo.jpg")[:100]
+    challenge_id = int(body.get("challenge_id"))
+    
+    challenge = await db.get_user_challenge(challenge_id)
+    if not challenge or (challenge["creator_id"] != tg_user.id and challenge["target_id"] != tg_user.id):
+        raise ApiError("Челлендж не найден", 404)
+
+    supabase = get_supabase()
+    path = f"challenge_{challenge_id}_{int(time.time())}_{filename}"
+    
+    # Создаем подписанную ссылку для загрузки (живет 5 минут)
+    try:
+        res = supabase.storage.from_("challenges").create_signed_upload_url(path)
+        upload_url = res["signedURL"]
+    except Exception as e:
+        logging.error(f"Supabase upload url error: {e}")
+        raise ApiError("Ошибка создания ссылки для загрузки", 500)
+
+    return web.json_response({"upload_url": upload_url, "path": path})
+
+async def api_challenge_photo_url(request: web.Request) -> web.Response:
+    tg_user = authenticate(request)
+    path = request.query.get("path", "").strip()
+    if not path:
+        raise ApiError("Путь не указан", 400)
+
+    supabase = get_supabase()
+    try:
+        # Создаем ссылку на просмотр (живет 1 час)
+        res = supabase.storage.from_("challenges").create_signed_url(path, 3600)
+        view_url = res["signedURL"]
+    except Exception as e:
+        logging.error(f"Supabase view url error: {e}")
+        raise ApiError("Ошибка получения ссылки на фото", 500)
+
+    return web.json_response({"view_url": view_url})
+
+async def api_set_challenge_photo(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    challenge_id = _int_param(request, "id")
+    challenge = await db.get_user_challenge(challenge_id)
+    
+    if not challenge or challenge["target_id"] != tg_user.id:
+        raise ApiError("Челлендж не найден или вы не исполнитель", 403)
+        
+    body = await read_json(request)
+    path = str(body.get("path") or "").strip()
+    if not path:
+        raise ApiError("Некорректный путь", 400)
+        
+    # Сохраняем в базу и меняем статус на "submitted"
+    await db.update_user_challenge(challenge_id, "submitted", photo_path=path)
+    
+    # Уведомляем автора
+    notify(challenge["creator_id"], f"🔥 Партнер выполнил челлендж: «{challenge['text']}». Зайди в календарь, чтобы проверить!")
+    
+    return web.json_response({"status": "ok"})
 
 async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
@@ -1209,6 +1277,9 @@ async def main() -> None:
     app.router.add_get("/api/challenges", api_get_challenges_data)
     app.router.add_post("/api/challenges", api_create_challenge)
     app.router.add_post("/api/challenges/{id}/action", api_challenge_action)
+    app.router.add_post("/api/challenges/upload-url", api_upload_photo_url)
+    app.router.add_get("/api/challenges/photo-url", api_challenge_photo_url)
+    app.router.add_post("/api/challenges/{id}/photo", api_set_challenge_photo)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
