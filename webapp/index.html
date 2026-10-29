@@ -44,6 +44,7 @@
   </div>
 
   <button class="link-btn" id="unlink">Отвязать партнёра</button>
+  <button class="fab" id="challengeBtn" aria-label="Челленджи" style="right: 86px; background: #eab308; font-size: 26px;">⚔️</button>
   <button class="fab" id="add" aria-label="Добавить событие">+</button>
 </main>
 
@@ -217,6 +218,35 @@
     </div>
   </div>
 </div>
+<!-- Окно Челленджей -->
+<div class="overlay" id="challengesOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" style="height: 85vh; display: flex; flex-direction: column;">
+    
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+      <h2 style="margin: 0;">⚔️ Челленджи</h2>
+      <div style="font-size: 16px; font-weight: bold; color: #eab308;">Баллы: <span id="challengeBalance">0</span></div>
+      <button class="icon-btn" id="challengesClose" aria-label="Закрыть">✖️</button>
+    </div>
+    
+    <!-- Лента челленджей -->
+    <div id="challengesList" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 10px;">
+      <div class="spinner" style="margin: 20px auto;"></div>
+    </div>
+
+    <!-- Форма создания нового вызова -->
+    <div id="challengeCreateForm" style="margin-top: auto; border-top: 1px solid rgba(0,0,0,0.1); padding-top: 15px;">
+      <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">Бросить вызов:</div>
+      <select id="challengeCategorySelect" style="margin-bottom: 8px;"></select>
+      <select id="challengeIdeaSelect" style="margin-bottom: 8px;"></select>
+      
+      <div style="display: flex; gap: 8px;">
+        <input type="number" id="newChallengeReward" value="10" min="1" style="width: 80px;" title="Баллы за выполнение">
+        <button class="btn primary" id="createChallengeBtn" style="flex: 1;">Отправить партнёру</button>
+      </div>
+    </div>
+    
+  </div>
+</div>
 
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
@@ -225,6 +255,7 @@
 <script src="js/list.js"></script>
 <script src="js/ideas.js"></script>
 <script src="js/form.js"></script>
+<script src="js/challenges.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

@@ -1018,6 +1018,10 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
     # 3. Получаем список предложенных челленджей из JSON
     catalog = await db.get_challenges_json()
     
+        # Добавляем флаг is_creator для каждого челленджа
+    for h in history:
+        h["is_creator"] = (h["creator_id"] == tg_user.id)
+        
     return web.json_response({
         "balance": balance,
         "history": history,
