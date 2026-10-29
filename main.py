@@ -572,6 +572,7 @@ async def api_state(request: web.Request) -> web.Response:
             "todo_colors": db.TODO_COLORS,
             "allowed_reactions": ALLOWED_REACTIONS,
             "allowed_remind_before": sorted(ALLOWED_REMIND_BEFORE),
+            "my_id": tg_user.id,  # <--- ДОБАВИТЬ ВОТ ЭТО
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -1208,6 +1209,7 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
     challenge = await db.get_user_challenge(challenge_id)
+    
     if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Челлендж не найден", 404)
         
@@ -1220,8 +1222,10 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
         "INSERT INTO challenge_messages (challenge_id, sender_id, text, created_at) VALUES (?, ?, ?, ?)",
         (challenge_id, tg_user.id, text, int(time.time()))
     )
+    
+    # Отправляем пуш партнёру
     partner_id = challenge["target_id"] if tg_user.id == challenge["creator_id"] else challenge["creator_id"]
-    notify(partner_id, f"💬 Новое сообщение по челленджу: {text}")
+    notify(partner_id, f"💬 Новое сообщение по челленджу «{challenge['text']}»:\n\n{text}")
     
     return web.json_response({"status": "ok"})
 

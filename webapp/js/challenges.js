@@ -1,6 +1,7 @@
 let allChallenges = [];
 let catalogData = {};
 let currentChallenge = null;
+let chatPollTimer = null;
 
 /* ---------- Список ---------- */
 
@@ -152,34 +153,55 @@ function openChallengeDetails(id) {
 
   // Загружаем историю сообщений
   loadMessages(id);
+
+  // Запускаем автообновление чата каждые 4 секунды
+  if (chatPollTimer) clearInterval(chatPollTimer);
+  chatPollTimer = setInterval(() => {
+    if (!$("challengeChatOverlay").hidden && currentChallenge?.id === id) {
+      loadMessages(id, true); // true = тихая загрузка
+    }
+  }, 4000);
 }
 
 function closeChallengeDetails() {
   $("challengeChatOverlay").hidden = true;
   currentChallenge = null;
+  
+  // Останавливаем автообновление
+  if (chatPollTimer) {
+    clearInterval(chatPollTimer);
+    chatPollTimer = null;
+  }
+
   if (!$("challengesOverlay").hidden) tg.BackButton?.show();
   else tg.BackButton?.hide();
 }
 
 /* ---------- Логика чата (сообщения) ---------- */
 
-async function loadMessages(challengeId) {
+async function loadMessages(challengeId, silent = false) {
   const list = $("chatMessagesList");
   if (!list) return;
-  list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Загрузка...</div>`;
+  
+  if (!silent) {
+    list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Загрузка...</div>`;
+  }
   
   try {
     const res = await api(`/challenges/${challengeId}/messages`);
     const msgs = res.messages || [];
     
     if (!msgs.length) {
-      list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Сообщений пока нет. Напишите первым!</div>`;
+      if (!silent) list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Сообщений пока нет. Напишите первым!</div>`;
       return;
     }
     
-    // Если в state нет my_id, берем его из ответа сервера (в api_state он есть)
     const myId = state?.my_id || 0; 
     
+    // Проверяем, изменилось ли количество сообщений
+    const currentCount = list.querySelectorAll('div').length;
+    if (silent && currentCount === msgs.length) return;
+
     list.innerHTML = msgs.map(m => {
       const isMine = m.sender_id === myId;
       const align = isMine ? "align-self: flex-end; background: var(--accent); color: #fff;" : "align-self: flex-start; background: var(--bg2); color: var(--text);";
@@ -188,10 +210,9 @@ async function loadMessages(challengeId) {
       </div>`;
     }).join("");
     
-    // Скролл вниз к последнему сообщению
     list.scrollTop = list.scrollHeight;
   } catch (e) {
-    list.innerHTML = `<div style="text-align:center; color:rgb(var(--declined)); font-size:12px; padding:10px;">Ошибка загрузки: ${esc(e.message)}</div>`;
+    if (!silent) list.innerHTML = `<div style="text-align:center; color:rgb(var(--declined)); font-size:12px; padding:10px;">Ошибка: ${esc(e.message)}</div>`;
   }
 }
 
@@ -259,7 +280,7 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
     // 2. Заливаем файл напрямую в Supabase (multipart/form-data)
     const form = new FormData();
     form.append("cacheControl", "3600");
-    form.append("file", file);
+    form.append("", file);
     const resp = await fetch(up.upload_url, { method: "PUT", body: form });
     if (!resp.ok) {
       console.error("Supabase upload", resp.status, await resp.text().catch(() => ""));
