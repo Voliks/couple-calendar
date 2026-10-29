@@ -160,8 +160,6 @@ function closeChallengeDetails() {
 
 /* ---------- Загрузка фото в Supabase (signed upload URL) ---------- */
 
-// Фото с телефона весят 5–10 МБ: уменьшаем до 1600px и пережимаем в JPEG.
-// Если не получилось (например, HEIC) — отправляем оригинал.
 async function prepareImage(file) {
   try {
     const bmp = await createImageBitmap(file);
@@ -198,8 +196,7 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
       body: { filename: file.name || "photo.jpg", challenge_id: c.id },
     });
 
-    // 2. Заливаем файл напрямую в Supabase тем же форматом (multipart), что и их JS-клиент.
-    //    Content-Type вручную не ставим — браузер сам добавит boundary.
+    // 2. Заливаем файл напрямую в Supabase (multipart/form-data)
     const form = new FormData();
     form.append("cacheControl", "3600");
     form.append("", file);
@@ -251,7 +248,6 @@ async function viewChallengePhoto() {
   try {
     const res = await api(`/challenges/photo-url?path=${encodeURIComponent(currentChallenge.photo_id)}`);
     if (!res.view_url) throw new Error("Ссылка не получена");
-    // Telegram WebApp умеет открывать ссылки; в браузере — новая вкладка
     if (tg.openLink) tg.openLink(res.view_url);
     else window.open(res.view_url, "_blank");
   } catch (e) {

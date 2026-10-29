@@ -218,6 +218,7 @@
     </div>
   </div>
 </div>
+
 <!-- Окно со списком челленджей -->
 <div class="overlay" id="challengesOverlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true">
@@ -225,6 +226,42 @@
       <h2 style="margin:0;">Челленджи</h2>
       <div style="font-weight:700;">🏆 <span id="challengeBalance">0</span></div>
     </div>
+
+    <!-- Окно деталей челленджа (Чат) -->
+<div class="overlay" id="challengeChatOverlay" hidden style="z-index: 25;">
+  <div class="sheet" role="dialog" aria-modal="true" style="height: 80vh; display: flex; flex-direction: column;">
+    
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+      <button class="icon-btn" id="chatBackBtn" aria-label="Назад" style="font-size: 20px;">←</button>
+      <h2 style="margin: 0; font-size: 18px;">Детали вызова</h2>
+      <div style="width: 24px;"></div>
+    </div>
+
+    <div style="flex: 1; overflow-y: auto; background: var(--bg2); border-radius: 12px; padding: 15px; margin-bottom: 15px;">
+      <div style="font-size: 14px; color: var(--hint); margin-bottom: 8px;" id="chatCategory">Категория</div>
+      <div style="font-size: 18px; font-weight: 600; margin-bottom: 15px;" id="chatTaskText">Задание...</div>
+      <div style="font-size: 16px; font-weight: bold; color: #eab308;" id="chatReward">🏆 0 баллов</div>
+      
+      <!-- Блок с фото -->
+      <div id="chatPhotoBlock" style="margin-top: 20px; display: none;">
+        <button class="btn primary" id="chatViewPhotoBtn" style="width: 100%;">🖼 Посмотреть прикрепленное фото</button>
+      </div>
+      
+      <!-- Кнопка прикрепить фото (если ты исполнитель и еще не сдал) -->
+      <div id="chatActionBlock" style="margin-top: 20px; display: none;">
+        <button class="btn primary" id="chatAttachBtn" style="width: 100%; font-size: 16px; padding: 15px;">📸 Прикрепить фото</button>
+      </div>
+      
+      <!-- Кнопки оценки (для создателя) -->
+      <div id="chatCreatorActions" style="margin-top: 20px; display: flex; gap: 10px; display: none;">
+        <button class="btn primary" id="chatApproveBtn" style="flex: 1; background: rgb(var(--accepted));">Засчитать</button>
+        <button class="btn ghost" id="chatRejectBtn" style="flex: 1; background: rgb(var(--declined)); color: #fff;">Отклонить</button>
+      </div>
+    </div>
+
+    <div style="font-size: 13px; color: var(--hint); text-align: center;" id="chatStatus">Статус</div>
+  </div>
+</div>
 
     <div id="challengesList"></div>
 
@@ -289,7 +326,7 @@
 <script src="js/list.js"></script>
 <script src="js/ideas.js"></script>
 <script src="js/form.js"></script>
-<script src="js/challenges.js?v=5"></script>
+<script src="js/challenges.js?v=6"></script>
 <script src="js/main.js"></script>
 </body>
 </html>
