@@ -5,12 +5,13 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 from collections import deque
 from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
-from supabase import create_client, Client
+from supabase import create_client
 from aiogram import Dispatcher, Router  # type: ignore[reportMissingImports]
 from aiogram.filters import Command, CommandObject, CommandStart  # type: ignore[reportMissingImports]
 from aiogram.types import (  # type: ignore[reportMissingImports]
@@ -1004,97 +1005,126 @@ async def api_unlink(request: web.Request) -> web.Response:
         raise ApiError("У вас нет партнёра", 409)
     notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
     return web.json_response({"status": "unlinked"})
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+PHOTO_BUCKET = os.getenv("SUPABASE_BUCKET", "challenges").strip() or "challenges"
+PHOTO_EXTS = ("jpg", "jpeg", "png", "webp", "gif", "heic", "heif")
+CHALLENGE_MAX_POINTS = 20  # в challenges.json есть задания до 20 баллов
+_supabase = None
 
-def get_supabase() -> Client:
+
+def get_supabase():
+    global _supabase
     if not SUPABASE_URL or not SUPABASE_KEY:
-        raise ApiError("Ошибка настройки Supabase", 500)
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+        raise ApiError(
+            "Хранилище фото не настроено (нужны SUPABASE_URL и SUPABASE_SERVICE_KEY)", 503
+        )
+    if _supabase is None:
+        _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _supabase
+
+
+def _storage_url(url: str) -> str:
+    """Разные версии supabase-py отдают то полную, то относительную ссылку."""
+    if not url:
+        return ""
+    if url.startswith("http"):
+        return url
+    return f"{SUPABASE_URL}/storage/v1{url if url.startswith('/') else '/' + url}"
+
+
+def _photo_path_ok(path: str, challenge_id: int) -> bool:
+    exts = "|".join(PHOTO_EXTS)
+    return re.fullmatch(rf"challenge_{challenge_id}_\d+_[0-9a-f]{{8}}\.({exts})", path) is not None
+
 
 async def api_upload_photo_url(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     body = await read_json(request)
-    filename = str(body.get("filename") or "photo.jpg")[:100]
-    challenge_id = int(body.get("challenge_id"))
-    
-    challenge = await db.get_user_challenge(challenge_id)
-    if not challenge or (challenge["creator_id"] != tg_user.id and challenge["target_id"] != tg_user.id):
-        raise ApiError("Челлендж не найден", 404)
-
-    supabase = get_supabase()
-    path = f"challenge_{challenge_id}_{int(time.time())}_{filename}"
-    
-    # Создаем подписанную ссылку для загрузки (живет 5 минут)
     try:
-        res = supabase.storage.from_("challenges").create_signed_upload_url(path)
-        upload_url = res["signedURL"]
-    except Exception as e:
-        logging.error(f"Supabase upload url error: {e}")
-        raise ApiError("Ошибка создания ссылки для загрузки", 500)
+        challenge_id = int(body.get("challenge_id"))
+    except (TypeError, ValueError):
+        raise ApiError("Некорректный запрос")
 
+    challenge = await db.get_user_challenge(challenge_id)
+    if not challenge or challenge["target_id"] != tg_user.id:
+        raise ApiError("Челлендж не найден", 404)
+    if challenge["status"] not in ("pending", "rejected"):
+        raise ApiError("Фото сейчас прикрепить нельзя", 409)
+
+    # Имя файла от клиента в путь не берём (кириллица/пробелы/«..» ломают ключ в Supabase) — только расширение
+    name = str(body.get("filename") or "")
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in PHOTO_EXTS:
+        ext = "jpg"
+    path = f"challenge_{challenge_id}_{int(time.time())}_{secrets.token_hex(4)}.{ext}"
+
+    sb = get_supabase()
+    try:
+        # supabase-py синхронный — выносим в поток, чтобы не вешать бота и API
+        res = await asyncio.to_thread(sb.storage.from_(PHOTO_BUCKET).create_signed_upload_url, path)
+        upload_url = _storage_url(res.get("signed_url") or res.get("signedUrl") or res.get("signedURL"))
+    except Exception:
+        logging.exception("Supabase: не удалось создать ссылку для загрузки")
+        raise ApiError(f"Не удалось подготовить загрузку. Проверьте, что в Supabase есть бакет «{PHOTO_BUCKET}».", 502)
+    if not upload_url:
+        raise ApiError("Supabase не вернул ссылку для загрузки", 502)
     return web.json_response({"upload_url": upload_url, "path": path})
+
 
 async def api_challenge_photo_url(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     path = request.query.get("path", "").strip()
     if not path:
         raise ApiError("Путь не указан", 400)
+    # смотреть фото могут только двое участников этого челленджа
+    challenge = await db.get_challenge_by_photo(path)
+    if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
+        raise ApiError("Фото не найдено", 404)
 
-    supabase = get_supabase()
+    sb = get_supabase()
     try:
-        # Создаем ссылку на просмотр (живет 1 час)
-        res = supabase.storage.from_("challenges").create_signed_url(path, 3600)
-        view_url = res["signedURL"]
-    except Exception as e:
-        logging.error(f"Supabase view url error: {e}")
-        raise ApiError("Ошибка получения ссылки на фото", 500)
-
+        res = await asyncio.to_thread(sb.storage.from_(PHOTO_BUCKET).create_signed_url, path, 3600)
+        view_url = _storage_url(res.get("signedURL") or res.get("signedUrl"))
+    except Exception:
+        logging.exception("Supabase: не удалось создать ссылку на просмотр")
+        raise ApiError("Ошибка получения ссылки на фото", 502)
+    if not view_url:
+        raise ApiError("Ошибка получения ссылки на фото", 502)
     return web.json_response({"view_url": view_url})
+
 
 async def api_set_challenge_photo(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
     challenge = await db.get_user_challenge(challenge_id)
-    
     if not challenge or challenge["target_id"] != tg_user.id:
         raise ApiError("Челлендж не найден или вы не исполнитель", 403)
-        
+
     body = await read_json(request)
     path = str(body.get("path") or "").strip()
-    if not path:
-        raise ApiError("Некорректный путь", 400)
-        
-    # Сохраняем в базу и меняем статус на "submitted"
-    await db.update_user_challenge(challenge_id, "submitted", photo_path=path)
-    
-    # Уведомляем автора
-    notify(challenge["creator_id"], f"🔥 Партнер выполнил челлендж: «{challenge['text']}». Зайди в календарь, чтобы проверить!")
-    
+    if not _photo_path_ok(path, challenge_id):
+        raise ApiError("Некорректный путь к фото", 400)
+
+    if not await db.transition_challenge(challenge_id, ("pending", "rejected"), "submitted", photo_id=path):
+        raise ApiError("Этот вызов уже отправлен на проверку", 409)
+
+    notify(challenge["creator_id"], f"🔥 Партнёр выполнил челлендж: «{challenge['text']}». Зайди в календарь, чтобы проверить!")
     return web.json_response({"status": "ok"})
+
 
 async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
-    user = await db.get_or_create_user(tg_user.id)
-    
-    # 1. Получаем баланс
     balance = await db.get_user_balance(tg_user.id)
-    
-    # 2. Получаем историю личных челленджей
     history = await db.get_all_user_challenges(tg_user.id)
-    
-    # 3. Получаем список предложенных челленджей из JSON
     catalog = await db.get_challenges_json()
-    
-    # Добавляем флаг is_creator для каждого челленджа
     for h in history:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
-        
     return web.json_response({
         "balance": balance,
         "history": history,
         "catalog": catalog,
-        "my_id": tg_user.id
+        "my_id": tg_user.id,
     })
 
 
@@ -1106,18 +1136,18 @@ async def api_create_challenge(request: web.Request) -> web.Response:
 
     body = await read_json(request)
     text = str(body.get("text") or "").strip()[:300]
+    category = str(body.get("category") or "").strip()[:50] or "Своё"
     try:
         points = int(body.get("reward"))
     except (TypeError, ValueError):
         raise ApiError("Некорректное количество очков")
     if not text:
         raise ApiError("Укажите текст задания")
-    if not 1 <= points <= 10:
-        raise ApiError("Количество очков должно быть от 1 до 10")
+    if not 1 <= points <= CHALLENGE_MAX_POINTS:
+        raise ApiError(f"Количество очков должно быть от 1 до {CHALLENGE_MAX_POINTS}")
 
-    challenge = await db.create_user_challenge(
-        tg_user.id, user["partner_id"], "Свое", text, points
-    )
+    challenge = await db.create_user_challenge(tg_user.id, user["partner_id"], category, text, points)
+    notify(user["partner_id"], f"⚔️ Тебе бросили вызов: «{text}» ({points} б.). Открой календарь → ⚔️")
     return web.json_response({"status": "created", "challenge": challenge}, status=201)
 
 
@@ -1125,26 +1155,24 @@ async def api_challenge_action(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
     challenge = await db.get_user_challenge(challenge_id)
-    
-    if not challenge or (challenge["creator_id"] != tg_user.id and challenge["target_id"] != tg_user.id):
+    if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Челлендж не найден", 404)
-        
-    body = await read_json(request)
-    action = body.get("action")
-    
-    if action == "submit" and tg_user.id == challenge["target_id"]:
-        await db.update_user_challenge(challenge_id, "submitted")
-        notify(challenge["creator_id"], f"🔥 Партнер выполнил челлендж: «{challenge['text']}». Зайди в календарь, чтобы проверить!")
-    elif action == "approve" and tg_user.id == challenge["creator_id"]:
-        await db.update_user_challenge(challenge_id, "approved")
+
+    action = (await read_json(request)).get("action")
+    is_creator = tg_user.id == challenge["creator_id"]
+
+    # переход статуса атомарный: повторное нажатие «Засчитать» не начислит баллы дважды
+    if action == "approve" and is_creator:
+        if not await db.transition_challenge(challenge_id, ("submitted",), "approved"):
+            raise ApiError("Этот вызов нельзя засчитать в текущем статусе", 409)
         await db.add_balance(challenge["target_id"], challenge["reward"])
         notify(challenge["target_id"], f"✅ Твой челлендж засчитан! Тебе начислено {challenge['reward']} баллов.")
-    elif action == "reject" and tg_user.id == challenge["creator_id"]:
-        await db.update_user_challenge(challenge_id, "rejected")
-        notify(challenge["target_id"], f"❌ Челлендж отклонен: «{challenge['text']}».")
+    elif action == "reject" and is_creator:
+        if not await db.transition_challenge(challenge_id, ("submitted",), "rejected"):
+            raise ApiError("Этот вызов нельзя отклонить в текущем статусе", 409)
+        notify(challenge["target_id"], f"❌ Челлендж отклонён: «{challenge['text']}». Можно прислать другое фото.")
     else:
         raise ApiError("Недопустимое действие", 400)
-        
     return web.json_response({"status": "ok"})
 
 
