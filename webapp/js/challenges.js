@@ -21,7 +21,31 @@ async function openChallenges() {
     ).join("");
     
     // Заполняем список идей для первой категории
-    updateIdeaSelect();
+function updateIdeaSelect() {
+  const cat = $("challengeCategorySelect").value;
+  const ideas = catalogData[cat] || [];
+  
+  $("challengeIdeaSelect").innerHTML = ideas.map(idea => {
+    // Теперь idea - это объект {challenge, points}
+    return `<option value="${esc(idea.challenge)}" data-points="${idea.points}">${esc(idea.challenge)} (${idea.points} б.)</option>`;
+  }).join("");
+  
+  // Автоматически обновляем поле с очками при выборе задания
+  updateRewardInput();
+}
+
+function updateRewardInput() {
+  const sel = $("challengeIdeaSelect");
+  const selectedOption = sel.options[sel.selectedIndex];
+  if (selectedOption && selectedOption.dataset.points) {
+    $("newChallengeReward").value = selectedOption.dataset.points;
+  }
+}
+
+// Добавь вызов этой функции при изменении селекта
+$("challengeIdeaSelect").onchange = () => {
+  updateRewardInput();
+};
     renderChallenges();
   } catch (e) {
     toast(e.message);
@@ -144,20 +168,20 @@ function renderChallenges() {
 
 async function createChallenge() {
   const cat = $("challengeCategorySelect").value;
-  const text = $("challengeIdeaSelect").value;
-  const reward = parseInt($("newChallengeReward").value) || 10;
+  const select = $("challengeIdeaSelect");
+  const selectedOption = select.options[select.selectedIndex];
+  
+  if (!selectedOption) return;
 
-  if (!text) {
-    toast("Выберите задание");
-    return;
-  }
+  const text = selectedOption.value;
+  const points = parseInt($("newChallengeReward").value) || parseInt(selectedOption.dataset.points) || 10;
 
   const btn = $("createChallengeBtn");
   btn.disabled = true;
   btn.textContent = "Отправка...";
 
   try {
-    await api("/challenges", { method: "POST", body: { category: cat, text, reward } });
+    await api("/challenges", { method: "POST", body: { category: cat, text, reward: points } });
     toast("Вызов брошен партнёру!");
     await openChallenges(); // перезагружаем
   } catch (e) {
