@@ -21,59 +21,35 @@ async function openChallenges() {
     ).join("");
     
     // Заполняем список идей для первой категории
-function updateIdeaSelect() {
-  const cat = $("challengeCategorySelect").value;
-  const ideas = catalogData[cat] || [];
-  
-  const select = $("challengeIdeaSelect");
-  
-  if (!ideas.length) {
-    select.innerHTML = `<option value="">Нет заданий в этой категории</option>`;
-    $("newChallengeReward").value = 0;
-    return;
-  }
+    function updateIdeaSelect() {
+      const cat = $("challengeCategorySelect").value;
+      const ideas = catalogData[cat] || [];
+      const select = $("challengeIdeaSelect");
 
-  select.innerHTML = ideas.map(idea => {
-    // Проверяем: если это объект (новый формат), берем .challenge и .points. Если строка — берем как есть.
-    const text = typeof idea === 'object' ? idea.challenge : idea;
-    const points = typeof idea === 'object' ? idea.points : 10;
-    return `<option value="${esc(text)}" data-points="${points}">${esc(text)} (${points} б.)</option>`;
-  }).join("");
-  
-  // Автоматически подставляем очки для первого задания
-  updateRewardInput();
-}
+      if (!ideas.length) {
+        select.innerHTML = `<option value="">Нет заданий в этой категории</option>`;
+        $("newChallengeReward").value = 0;
+        return;
+      }
 
-// Эту функцию тоже нужно добавить, если её нет
-function updateRewardInput() {
-  const sel = $("challengeIdeaSelect");
-  const selectedOption = sel.options[sel.selectedIndex];
-  if (selectedOption && selectedOption.dataset.points) {
-    $("newChallengeReward").value = selectedOption.dataset.points;
-  }
-}
+      select.innerHTML = ideas.map(idea => {
+        const text = typeof idea === "object" ? idea.challenge : idea;
+        const points = typeof idea === "object" ? idea.points : 10;
+        return `<option value="${esc(text)}" data-points="${points}">${esc(text)} (${points} б.)</option>`;
+      }).join("");
+      updateRewardInput();
+    }
 
-// Добавь привязку события, чтобы при смене задания очки менялись
-$("challengeIdeaSelect").onchange = () => {
-  updateRewardInput();
-};
-  
-  // Автоматически обновляем поле с очками при выборе задания
-  updateRewardInput();
-}
+    function updateRewardInput() {
+      const sel = $("challengeIdeaSelect");
+      const selectedOption = sel.options[sel.selectedIndex];
+      if (selectedOption && selectedOption.dataset.points) {
+        $("newChallengeReward").value = selectedOption.dataset.points;
+      }
+    }
 
-function updateRewardInput() {
-  const sel = $("challengeIdeaSelect");
-  const selectedOption = sel.options[sel.selectedIndex];
-  if (selectedOption && selectedOption.dataset.points) {
-    $("newChallengeReward").value = selectedOption.dataset.points;
-  }
-}
-
-// Добавь вызов этой функции при изменении селекта
-$("challengeIdeaSelect").onchange = () => {
-  updateRewardInput();
-};
+    $("challengeIdeaSelect").onchange = updateRewardInput;
+    updateIdeaSelect();
     renderChallenges();
   } catch (e) {
     toast(e.message);
