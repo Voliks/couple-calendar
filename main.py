@@ -1005,7 +1005,25 @@ async def api_unlink(request: web.Request) -> web.Response:
     notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
     return web.json_response({"status": "unlinked"})
 
-
+async def api_get_challenges_data(request: web.Request) -> web.Response:
+    tg_user = authenticate(request)
+    user = await db.get_or_create_user(tg_user.id)
+    
+    # 1. Получаем баланс
+    balance = await db.get_user_balance(tg_user.id)
+    
+    # 2. Получаем историю личных челленджей
+    history = await db.get_all_user_challenges(tg_user.id)
+    
+    # 3. Получаем список предложенных челленджей из JSON
+    catalog = await db.get_challenges_json()
+    
+    return web.json_response({
+        "balance": balance,
+        "history": history,
+        "catalog": catalog,
+        "my_id": tg_user.id
+    })
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
@@ -1142,6 +1160,7 @@ async def main() -> None:
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
+    app.router.add_get("/api/challenges", api_get_challenges_data)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()

@@ -523,7 +523,24 @@ async def _m16_add_done_status() -> None:
     await _exec("INSERT INTO events_new SELECT id, created_by, target_user, title, description, date, date_end, time, category, status, checklist, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility FROM events")
     await _exec("DROP TABLE events")
     await _exec("ALTER TABLE events_new RENAME TO events")
+async def _m17_challenges() -> None:
+    # 1. Добавляем баланс пользователям
+    await _add_column("users", "balance", "INTEGER NOT NULL DEFAULT 0")
 
+    # 2. Таблица для выданных челленджей
+    await _exec("""
+        CREATE TABLE IF NOT EXISTS user_challenges (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            creator_id  INTEGER NOT NULL,
+            target_id   INTEGER NOT NULL,
+            category    TEXT NOT NULL,
+            text        TEXT NOT NULL,
+            reward      INTEGER NOT NULL DEFAULT 10,
+            status      TEXT NOT NULL DEFAULT 'pending', -- pending, submitted, approved, rejected
+            photo_id    TEXT NOT NULL DEFAULT '',        -- ID фото в Telegram (безопасно)
+            created_at  INTEGER NOT NULL
+        )
+    """)
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -542,6 +559,7 @@ MIGRATIONS = [
     (15, _m15_personal_section),
     (16, _m16_indexes_and_idea_keys),
     (16, _m16_add_done_status),
+    (17, _m17_challenges),
 ]
 
 
@@ -1195,3 +1213,57 @@ async def pair_stats(user_id: int, partner_id: int) -> dict:
         "declined": by_status.get("declined", 0),
         "by_category": by_category,
     }
+# === ЧЕЛЛЕНДЖИ И БАЛЛЫ ===
+
+async def get_user_balance(user_id: int) -> int:
+    rs = await _exec("SELECT balance FROM users WHERE telegram_id = ?", (user_id,))
+    return rs.rows[0][0] if rs.rows else 0
+
+async def add_balance(user_id: int, amount: int) -> None:
+    await _exec("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (amount, user_id))
+
+async def create_user_challenge(creator_id: int, target_id: int, category: str, text: str, reward: int) -> dict:
+    rs = await _exec(
+        "INSERT INTO user_challenges (creator_id, target_id, category, text, reward, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (creator_id, target_id, category, text, reward, int(time.time()))
+    )
+    return await get_user_challenge(rs.last_id)
+
+async def get_user_challenge(challenge_id: int) -> dict | None:
+    rs = await _exec("SELECT * FROM user_challenges WHERE id = ?", (challenge_id,))
+    if not rs.rows: return None
+    r = rs.rows[0]
+    return {
+        "id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3],
+        "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8]
+    }
+
+async def get_all_user_challenges(user_id: int) -> list[dict]:
+    rs = await _exec(
+        "SELECT * FROM user_challenges WHERE creator_id = ? OR target_id = ? ORDER BY created_at DESC",
+        (user_id, user_id)
+    )
+    return [
+        {
+            "id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3],
+            "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8]
+        } for r in rs.rows
+    ]
+
+async def update_user_challenge(challenge_id: int, status: str, photo_id: str | None = None) -> None:
+    if photo_id is not None:
+        await _exec("UPDATE user_challenges SET status = ?, photo_id = ? WHERE id = ?", (status, photo_id, challenge_id))
+    else:
+        await _exec("UPDATE user_challenges SET status = ? WHERE id = ?", (status, challenge_id))
+
+async def get_challenges_json() -> dict:
+    """Читает файл challenges.json с категориями и заданиями."""
+    path = Path(__file__).parent / "challenges.json"
+    if not path.exists(): return {}
+    try:
+        import json
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
