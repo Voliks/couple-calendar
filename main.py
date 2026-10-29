@@ -1020,7 +1020,14 @@ def get_supabase():
             "Хранилище фото не настроено (нужны SUPABASE_URL и SUPABASE_SERVICE_KEY)", 503
         )
     if _supabase is None:
-        _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        import httpx
+        from supabase import create_client, ClientOptions
+
+        # Supabase отваливается по HTTP/2 с RemoteProtocolError -> принудительно HTTP/1.1
+        options = ClientOptions(
+            httpx_client=httpx.Client(http2=False, timeout=30.0)
+        )
+        _supabase = create_client(SUPABASE_URL, SUPABASE_KEY, options=options)
     return _supabase
 
 
