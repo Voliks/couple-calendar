@@ -15,33 +15,13 @@ function checklistHtml(e) {
 
 function answerHtml(e, expired) {
   if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
-  
-  // Если событие уже выполнено, показываем это
-  if (e.status === "done") {
-    return `<div class="answer one"><button class="soft" disabled>✓ Выполнено</button></div>`;
-  }
-
-  // Если событие создал я, я не могу его принять/отклонить, но могу отметить выполненным, если оно прошло
-  if (e.is_creator) {
-    if (e.status === "accepted" && e.date <= todayStr()) {
-      return `<div class="answer one"><button class="soft" data-status="done">✅ Отметить выполненным</button></div>`;
-    }
-    return "";
-  }
-
+  if (e.is_creator) return "";
   if (e.status === "pending") {
     return expired ? "" : `<div class="answer">
       <button class="yes" data-status="accepted">Да</button>
       <button class="no" data-status="declined">Нет</button></div>`;
   }
   if (e.status === "accepted") {
-    // Если принято и дата пришла (или прошла) — можно отметить выполненным
-    if (e.date <= todayStr()) {
-      return `<div class="answer">
-        <button class="yes" data-status="done">✅ Выполнено</button>
-        <button class="soft" data-status="declined">Отказаться</button>
-      </div>`;
-    }
     return `<div class="answer one"><button class="soft" data-status="declined">Отказаться</button></div>`;
   }
   return `<div class="answer one"><button class="soft" data-status="accepted">Всё-таки принять</button></div>`;
@@ -452,15 +432,7 @@ $("list").addEventListener("click", async (ev) => {
   const statusBtn = ev.target.closest("[data-status]");
   if (statusBtn) {
     const newStatus = statusBtn.dataset.status;
-        if (newStatus === "done") {
-      statusBtn.disabled = true;
-      try {
-        const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: "done" } });
-        replaceEvent(updated);
-        tg.HapticFeedback?.notificationOccurred("success");
-      } catch (e) { toast(e.message); await load(); }
-      return;
-    }
+       
     if (newStatus === "declined") {
       openCommentDialog(event.my_decline_comment || "", async (comment) => {
         try {
