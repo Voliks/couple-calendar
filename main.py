@@ -1009,29 +1009,16 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     user = await db.get_or_create_user(tg_user.id)
     
+    # 1. Получаем баланс
     balance = await db.get_user_balance(tg_user.id)
+    
+    # 2. Получаем историю личных челленджей
     history = await db.get_all_user_challenges(tg_user.id)
     
-    # ЖЕСТКО ЗАДАЕМ КАТАЛОГ В КОДЕ (для проверки)
-    catalog = {
-        "Лёгкие (1–2 очка)": [
-            "Пришли фото своего текущего вида «как есть»",
-            "Пришли фото губ крупным планом",
-            "Пришли фото рук"
-        ],
-        "Средние (3–4 очка)": [
-            "Пришли фото в обычной домашней одежде крупнее",
-            "Пришли фото своей спины в одежде"
-        ],
-        "Сложные (5–6 очков)": [
-            "Честно расскажи, чего тебе сейчас не хватает в нашей близости"
-        ],
-        "18+ (6–10 очков)": [
-            "Пришли фото в нижнем белье",
-            "Пришли фото в нижнем белье с разных ракурсов"
-        ]
-    }
+    # 3. Получаем список предложенных челленджей из JSON
+    catalog = await db.get_challenges_json()
     
+    # Добавляем флаг is_creator для каждого челленджа
     for h in history:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
         
