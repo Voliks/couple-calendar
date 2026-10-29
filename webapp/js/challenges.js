@@ -70,7 +70,7 @@ async function openChallenges() {
     let statusText = "";
     let actions = "";
     
-    // Блок с фото
+    // Блок с фото (показываем всегда, если фото есть)
     let photoHtml = "";
     if (c.photo_id) {
       photoHtml = `<button class="btn ghost" style="margin-top:8px; font-size:12px;" onclick="showChallengePhoto('${c.photo_id}')">🖼 Посмотреть фото</button>`;
@@ -80,7 +80,7 @@ async function openChallenges() {
       statusText = isCreator ? "⏳ Ждёт выполнения" : "⏳ Тебе бросили вызов";
       if (isTarget) {
         actions = `<div class="challenge-actions">
-          <button class="primary" onclick="pickPhotoForChallenge(${c.id})">📸 Прикрепить фото</button>
+          <button class="primary" onclick="pickPhotoForChallenge(${c.id})">📸 Выполнить</button>
         </div>`;
       }
     } else if (c.status === "submitted") {

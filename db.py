@@ -523,6 +523,7 @@ async def _m16_add_done_status() -> None:
     await _exec("INSERT INTO events_new SELECT id, created_by, target_user, title, description, date, date_end, time, category, status, checklist, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility FROM events")
     await _exec("DROP TABLE events")
     await _exec("ALTER TABLE events_new RENAME TO events")
+
 async def _m17_challenges() -> None:
     # 1. Добавляем баланс пользователям
     await _add_column("users", "balance", "INTEGER NOT NULL DEFAULT 0")
@@ -537,10 +538,14 @@ async def _m17_challenges() -> None:
             text        TEXT NOT NULL,
             reward      INTEGER NOT NULL DEFAULT 10,
             status      TEXT NOT NULL DEFAULT 'pending', -- pending, submitted, approved, rejected
-            photo_id    TEXT NOT NULL DEFAULT '',        -- ID фото в Telegram (безопасно)
+            photo_id    TEXT NOT NULL DEFAULT '',        -- ID фото в Supabase
             created_at  INTEGER NOT NULL
         )
     """)
+
+    # 3. Очищаем старые челленджи, чтобы не было конфликтов при тестах
+    await _exec("DELETE FROM user_challenges")
+    
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
