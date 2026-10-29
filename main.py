@@ -1124,18 +1124,28 @@ async def api_create_challenge(request: web.Request) -> web.Response:
 async def api_challenge_action(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
-    if challenge_id <= 0:
-        raise ApiError("Некорректный id задания")
-
+    challenge = await db.get_user_challenge(challenge_id)
+    
+    if not challenge or (challenge["creator_id"] != tg_user.id and challenge["target_id"] != tg_user.id):
+        raise ApiError("Челлендж не найден", 404)
+        
     body = await read_json(request)
-    action = str(body.get("action") or "").strip()
-    if not action:
-        raise ApiError("Не указано действие")
-
-    result = await db.challenge_action(challenge_id, tg_user.id, action)
-    if result is None:
-        raise ApiError("Задание не найдено или действие недоступно", 404)
-    return web.json_response({"status": "ok", "challenge": result})
+    action = body.get("action")
+    
+    if action == "submit" and tg_user.id == challenge["target_id"]:
+        await db.update_user_challenge(challenge_id, "submitted")
+        notify(challenge["creator_id"], f"🔥 Партнер выполнил челлендж: «{challenge['text']}». Зайди в календарь, чтобы проверить!")
+    elif action == "approve" and tg_user.id == challenge["creator_id"]:
+        await db.update_user_challenge(challenge_id, "approved")
+        await db.add_balance(challenge["target_id"], challenge["reward"])
+        notify(challenge["target_id"], f"✅ Твой челлендж засчитан! Тебе начислено {challenge['reward']} баллов.")
+    elif action == "reject" and tg_user.id == challenge["creator_id"]:
+        await db.update_user_challenge(challenge_id, "rejected")
+        notify(challenge["target_id"], f"❌ Челлендж отклонен: «{challenge['text']}».")
+    else:
+        raise ApiError("Недопустимое действие", 400)
+        
+    return web.json_response({"status": "ok"})
 
 
 async def index(_: web.Request) -> web.FileResponse:
