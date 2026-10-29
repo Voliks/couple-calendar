@@ -199,7 +199,10 @@ async function createChallenge() {
   const select = $("challengeIdeaSelect");
   const selectedOption = select.options[select.selectedIndex];
   
-  if (!selectedOption) return;
+  if (!selectedOption || !selectedOption.value) {
+    toast("Выберите задание");
+    return;
+  }
 
   const text = selectedOption.value;
   const points = parseInt($("newChallengeReward").value) || parseInt(selectedOption.dataset.points) || 10;
