@@ -593,7 +593,6 @@ MIGRATIONS = [
     (17, _m17_challenges),
     (18, _m18_challenge_messages),
     (19, _m19_challenge_deadline),
-    (20, _m20_shop_items),
 ]
 
 
@@ -1306,6 +1305,21 @@ async def get_challenges_json() -> dict:
     except Exception as e:
         logging.error("ОШИБКА ЧТЕНИЯ challenges.json: %s", e)
         return {}
+
+def get_shop_items_json() -> list[dict]:
+    """Читает файл shop_items.json со списком товаров."""
+    path = Path(__file__).parent / "shop_items.json"
+    if not path.exists():
+        logging.error("ФАЙЛ shop_items.json НЕ НАЙДЕН")
+        return []
+    try:
+        import json
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        logging.error("ОШИБКА ЧТЕНИЯ shop_items.json: %s", e)
+        return []
+
 async def update_challenge_photo(challenge_id: int, photo_path: str) -> None:
     """Сохраняет путь к загруженному фото в БД."""
     await _exec(

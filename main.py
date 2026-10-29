@@ -1253,8 +1253,8 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
 
 async def api_get_shop_items(request: web.Request) -> web.Response:
     authenticate(request)
-    rs = await db._exec("SELECT id, title, cost, emoji FROM shop_items ORDER BY cost ASC")
-    items = [{"id": r[0], "title": r[1], "cost": r[2], "emoji": r[3]} for r in rs.rows]
+    # Читаем товары прямо из JSON-файла
+    items = db.get_shop_items_json()
     return web.json_response({"items": items})
 
 async def api_buy_shop_item(request: web.Request) -> web.Response:
@@ -1273,11 +1273,15 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
     if not valid_date(date):
         raise ApiError("Некорректная дата")
 
-    # Получаем товар
-    rs = await db._exec("SELECT title, cost, emoji FROM shop_items WHERE id = ?", (item_id,))
-    if not rs.rows:
+    # Ищем товар в JSON
+    items = db.get_shop_items_json()
+    item = next((i for i in items if i.get("id") == item_id), None)
+    if not item:
         raise ApiError("Товар не найден", 404)
-    title, cost, emoji = rs.rows[0]
+        
+    title = item.get("title")
+    cost = item.get("cost")
+    emoji = item.get("emoji", "🎁")
 
     # Проверяем баланс
     balance = await db.get_user_balance(tg_user.id)
