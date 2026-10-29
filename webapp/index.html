@@ -44,6 +44,7 @@
   </div>
 
   <button class="link-btn" id="unlink">Отвязать партнёра</button>
+    <button class="fab" id="shopBtn" aria-label="Магазин" style="right: 154px; background: #8b5cf6; font-size: 26px;">🛒</button>
   <button class="fab" id="challengeBtn" aria-label="Челленджи" style="right: 86px; background: #eab308; font-size: 26px;">⚔️</button>
   <button class="fab" id="add" aria-label="Добавить событие">+</button>
 </main>
@@ -307,6 +308,35 @@
 <input type="file" id="challengePhotoInput" accept="image/*" style="display: none;">
 
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<!-- Окно магазина -->
+<div class="overlay" id="shopOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <h2 style="margin:0;">Магазин желаний</h2>
+      <div style="font-weight:700;">🏆 <span id="shopBalance">0</span></div>
+    </div>
+
+    <div id="shopList"></div>
+
+    <div class="row">
+      <button class="btn ghost" id="shopClose" style="grid-column: 1 / -1;">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Окно выбора даты покупки -->
+<div class="overlay" id="buyDateOverlay" hidden style="z-index: 30;">
+  <div class="sheet" role="dialog" aria-modal="true">
+    <h2 id="buyTitle">Выберите дату</h2>
+    <p style="color: var(--hint); font-size: 14px; margin-bottom: 16px;">На какой день вы хотите запланировать это желание?</p>
+    <input type="date" id="buyDateInput" style="margin-bottom: 16px;">
+    
+    <div class="row">
+      <button class="btn ghost" id="buyCancel">Отмена</button>
+      <button class="btn primary" id="buyConfirm">Купить</button>
+    </div>
+  </div>
+</div>
 
 <script src="js/api.js"></script>
 <script src="js/calendar.js"></script>
@@ -314,6 +344,7 @@
 <script src="js/ideas.js"></script>
 <script src="js/form.js"></script>
 <script src="js/challenges.js?v=13"></script>
+<script src="js/shop.js?v=1"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

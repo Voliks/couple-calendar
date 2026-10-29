@@ -572,7 +572,8 @@ async def api_state(request: web.Request) -> web.Response:
             "todo_colors": db.TODO_COLORS,
             "allowed_reactions": ALLOWED_REACTIONS,
             "allowed_remind_before": sorted(ALLOWED_REMIND_BEFORE),
-            "my_id": tg_user.id,  # <--- ДОБАВИТЬ ВОТ ЭТО
+            "my_id": tg_user.id,
+            "balance": await db.get_user_balance(tg_user.id), # <--- ДОБАВИТЬ ВОТ ЭТО
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -1250,7 +1251,61 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
     
     return web.json_response({"status": "ok"})
 
+async def api_get_shop_items(request: web.Request) -> web.Response:
+    authenticate(request)
+    rs = await db._exec("SELECT id, title, cost, emoji FROM shop_items ORDER BY cost ASC")
+    items = [{"id": r[0], "title": r[1], "cost": r[2], "emoji": r[3]} for r in rs.rows]
+    return web.json_response({"items": items})
 
+async def api_buy_shop_item(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    user = await db.get_or_create_user(tg_user.id)
+    if not user["partner_id"]:
+        raise ApiError("Сначала свяжитесь с партнёром", 409)
+        
+    body = await read_json(request)
+    try:
+        item_id = int(body.get("item_id"))
+    except (TypeError, ValueError):
+        raise ApiError("Некорректный ID товара")
+        
+    date = str(body.get("date") or "").strip()
+    if not valid_date(date):
+        raise ApiError("Некорректная дата")
+
+    # Получаем товар
+    rs = await db._exec("SELECT title, cost, emoji FROM shop_items WHERE id = ?", (item_id,))
+    if not rs.rows:
+        raise ApiError("Товар не найден", 404)
+    title, cost, emoji = rs.rows[0]
+
+    # Проверяем баланс
+    balance = await db.get_user_balance(tg_user.id)
+    if balance < cost:
+        raise ApiError("Недостаточно баллов для покупки", 403)
+
+    # Списываем баллы
+    await db.add_balance(tg_user.id, -cost)
+
+    # Создаем событие в календаре (Отдых)
+    event = await db.create_event(
+        created_by=tg_user.id,
+        target_user=user["partner_id"],
+        title=f"{emoji} {title}",
+        description="Куплено в магазине желаний",
+        date=date,
+        event_time="",
+        category="rest",
+    )
+    
+    # Уведомляем партнёра
+    notify(
+        user["partner_id"], 
+        f"🎁 Партнёр купил желание «{title}» на {fmt_range(date, '')}. Загляните в календарь!",
+        reply_markup=event_reply_keyboard(event["id"])
+    )
+
+    return web.json_response({"status": "ok", "event": event_to_dict(event, tg_user.id)})
 
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
@@ -1396,6 +1451,8 @@ async def main() -> None:
     app.router.add_post("/api/challenges/{id}/photo", api_set_challenge_photo)
     app.router.add_get("/api/challenges/{id}/messages", api_get_challenge_messages)
     app.router.add_post("/api/challenges/{id}/messages", api_post_challenge_message)
+    app.router.add_get("/api/shop", api_get_shop_items)
+    app.router.add_post("/api/shop/buy", api_buy_shop_item)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()

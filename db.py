@@ -556,6 +556,22 @@ async def _m18_challenge_messages() -> None:
 async def _m19_challenge_deadline() -> None:
     await _add_column("user_challenges", "deadline", "INTEGER NOT NULL DEFAULT 0")
 
+async def _m20_shop_items() -> None:
+    await _exec("""
+        CREATE TABLE IF NOT EXISTS shop_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            cost INTEGER NOT NULL,
+            emoji TEXT DEFAULT '🎁'
+        )
+    """)
+    # Добавим пару товаров по умолчанию, чтобы магазин не был пустым
+    rs = await _exec("SELECT COUNT(*) FROM shop_items")
+    if rs.rows[0][0] == 0:
+        await _exec("INSERT INTO shop_items (title, cost, emoji) VALUES (?, ?, ?)", ("Массаж", 50, "💆"))
+        await _exec("INSERT INTO shop_items (title, cost, emoji) VALUES (?, ?, ?)", ("Ужин в ресторане", 150, "🍷"))
+        await _exec("INSERT INTO shop_items (title, cost, emoji) VALUES (?, ?, ?)", ("Поход в кино", 80, "🍿"))
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -577,6 +593,7 @@ MIGRATIONS = [
     (17, _m17_challenges),
     (18, _m18_challenge_messages),
     (19, _m19_challenge_deadline),
+    (20, _m20_shop_items),
 ]
 
 
@@ -1253,7 +1270,8 @@ async def get_user_challenge(challenge_id: int) -> dict | None:
     r = rs.rows[0]
     return {
         "id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3],
-        "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8]
+        "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8],
+        "deadline": r[9] if len(r) > 9 else 0  # <--- ДОБАВИТЬ ЭТО
     }
 
 async def get_all_user_challenges(user_id: int) -> list[dict]:
@@ -1299,6 +1317,7 @@ async def update_challenge_photo(challenge_id: int, photo_path: str) -> None:
 async def get_challenge_by_photo(photo_path: str) -> dict | None:
     rs = await _exec("SELECT id FROM user_challenges WHERE photo_id = ? LIMIT 1", (photo_path,))
     return await get_user_challenge(rs.rows[0][0]) if rs.rows else None
+
 
 
 async def transition_challenge(challenge_id: int, from_statuses: Sequence[str], new_status: str,
