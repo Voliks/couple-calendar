@@ -1115,8 +1115,8 @@ async def api_create_challenge(request: web.Request) -> web.Response:
     if not 1 <= points <= 10:
         raise ApiError("Количество очков должно быть от 1 до 10")
 
-    challenge = await db.create_challenge(
-        tg_user.id, user["partner_id"], text, points
+    challenge = await db.create_user_challenge(
+        tg_user.id, user["partner_id"], "Свое", text, points
     )
     return web.json_response({"status": "created", "challenge": challenge}, status=201)
 
