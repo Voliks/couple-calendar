@@ -1022,12 +1022,18 @@ def get_supabase():
     if _supabase is None:
         import httpx
         from supabase import create_client, ClientOptions
-
-        # Supabase отваливается по HTTP/2 с RemoteProtocolError -> принудительно HTTP/1.1
-        options = ClientOptions(
-            httpx_client=httpx.Client(http2=False, timeout=30.0)
-        )
-        _supabase = create_client(SUPABASE_URL, SUPABASE_KEY, options=options)
+        try:
+            options = ClientOptions(
+                httpx_client=httpx.Client(
+                    http2=False,
+                    timeout=httpx.Timeout(30.0, connect=10.0),
+                )
+            )
+            _supabase = create_client(SUPABASE_URL, SUPABASE_KEY, options=options)
+            logging.info("Supabase: HTTP/1.1 client ACTIVE")
+        except TypeError:
+            logging.warning("supabase-py слишком старый, httpx_client не поддерживается")
+            _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     return _supabase
 
 
