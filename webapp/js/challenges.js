@@ -149,6 +149,7 @@ function openChallengeDetails(id) {
   const isCreator = c.is_creator;
   const canReview = isCreator && c.status === "submitted";
   $("chatCreatorActions").style.display = canReview ? "flex" : "none";
+  loadMessages(id);
 }
 
 function closeChallengeDetails() {
@@ -313,4 +314,60 @@ try {
 
   const rejectBtn = $("chatRejectBtn");
   if (rejectBtn) rejectBtn.onclick = () => challengeAction("reject");
+  /* ---------- Чат (сообщения) ---------- */
+
+async function loadMessages(challengeId) {
+  const list = $("chatMessagesList");
+  if (!list) return;
+  list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px;">Загрузка...</div>`;
+  
+  try {
+    const res = await api(`/challenges/${challengeId}/messages`);
+    const msgs = res.messages || [];
+    
+    if (!msgs.length) {
+      list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px;">Сообщений пока нет</div>`;
+      return;
+    }
+    
+    // Получаем свой ID (он есть в state, который приходит с сервера)
+    const myId = state?.my_id || 0; 
+    
+    list.innerHTML = msgs.map(m => {
+      const isMine = m.sender_id === myId;
+      const align = isMine ? "align-self: flex-end; background: var(--accent); color: #fff;" : "align-self: flex-start; background: var(--bg2); color: var(--text);";
+      return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; ${align}">
+        ${esc(m.text)}
+      </div>`;
+    }).join("");
+    
+    // Скролл вниз
+    list.scrollTop = list.scrollHeight;
+  } catch (e) {
+    list.innerHTML = `<div style="text-align:center; color:rgb(var(--declined)); font-size:12px;">${esc(e.message)}</div>`;
+  }
+}
+
+async function sendMessage() {
+  if (!currentChallenge) return;
+  const input = $("chatMessageInput");
+  const text = input.value.trim();
+  if (!text) return;
+  
+  input.value = "";
+  input.disabled = true;
+  
+  try {
+    await api(`/challenges/${currentChallenge.id}/messages`, {
+      method: "POST",
+      body: { text }
+    });
+    await loadMessages(currentChallenge.id);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+}
 })();
