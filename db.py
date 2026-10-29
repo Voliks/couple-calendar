@@ -543,8 +543,6 @@ async def _m17_challenges() -> None:
         )
     """)
 
-    # 3. Очищаем старые челленджи, чтобы не было конфликтов при тестах
-    await _exec("DELETE FROM user_challenges")
     
 MIGRATIONS = [
     (1, _m1_base),
@@ -1282,3 +1280,22 @@ async def update_challenge_photo(challenge_id: int, photo_path: str) -> None:
         "UPDATE user_challenges SET photo_id = ? WHERE id = ?",
         (photo_path, challenge_id)
     )
+
+
+async def get_challenge_by_photo(photo_path: str) -> dict | None:
+    rs = await _exec("SELECT id FROM user_challenges WHERE photo_id = ? LIMIT 1", (photo_path,))
+    return await get_user_challenge(rs.rows[0][0]) if rs.rows else None
+
+
+async def transition_challenge(challenge_id: int, from_statuses: Sequence[str], new_status: str,
+                               photo_id: str | None = None) -> bool:
+    """Атомарно меняет статус, только если текущий статус один из from_statuses."""
+    marks = ",".join("?" for _ in from_statuses)
+    if photo_id is None:
+        sql = f"UPDATE user_challenges SET status = ? WHERE id = ? AND status IN ({marks})"
+        args = (new_status, challenge_id, *from_statuses)
+    else:
+        sql = f"UPDATE user_challenges SET status = ?, photo_id = ? WHERE id = ? AND status IN ({marks})"
+        args = (new_status, photo_id, challenge_id, *from_statuses)
+    rs = await _exec(sql, args)
+    return rs.affected == 1

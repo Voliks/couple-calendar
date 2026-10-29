@@ -55,7 +55,7 @@ function renderChallenges() {
       c.is_creator ? "" : "them",
       c.status === "approved" ? "done" : "",
     ].filter(Boolean).join(" ");
-    const reward = c.status === "approved" ? `🏆 ${c.reward} баллов` : `🏆 ${c.reward} баллов`;
+    const reward = `🏆 ${c.reward} баллов`;
     return `<div class="${cls}" data-challenge-id="${c.id}">
       <div class="challenge-header">
         <span>${esc(c.category)}</span>
@@ -160,11 +160,28 @@ function closeChallengeDetails() {
 
 /* ---------- Загрузка фото в Supabase (signed upload URL) ---------- */
 
+// Фото с телефона весят 5–10 МБ: уменьшаем до 1600px и пережимаем в JPEG.
+// Если не получилось (например, HEIC) — отправляем оригинал.
+async function prepareImage(file) {
+  try {
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * k);
+    canvas.height = Math.round(bmp.height * k);
+    canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close?.();
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
+    if (blob && blob.size < file.size) return new File([blob], "photo.jpg", { type: "image/jpeg" });
+  } catch (e) { /* оставляем оригинал */ }
+  return file;
+}
+
 $("challengePhotoInput").addEventListener("change", async (ev) => {
-  const file = ev.target.files?.[0];
+  const picked = ev.target.files?.[0];
   ev.target.value = "";
-  if (!file || !currentChallenge) return;
-  if (!file.type.startsWith("image/")) return toast("Нужно изображение");
+  if (!picked || !currentChallenge) return;
+  if (picked.type && !picked.type.startsWith("image/")) return toast("Нужно изображение");
 
   const c = currentChallenge;
   const btn = $("chatAttachBtn");
@@ -173,25 +190,27 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
   btn.textContent = "Загрузка…";
 
   try {
-    // 1. Получаем signed upload URL от сервера
+    const file = await prepareImage(picked);
+
+    // 1. Сервер выдаёт одноразовую ссылку для загрузки
     const up = await api("/challenges/upload-url", {
       method: "POST",
       body: { filename: file.name || "photo.jpg", challenge_id: c.id },
     });
 
-    // 2. Заливаем файл напрямую в Supabase
-    const resp = await fetch(up.upload_url, {
-      method: "PUT",
-      headers: { "Content-Type": file.type },
-      body: file,
-    });
-    if (!resp.ok) throw new Error("Supabase отклонил загрузку");
+    // 2. Заливаем файл напрямую в Supabase тем же форматом (multipart), что и их JS-клиент.
+    //    Content-Type вручную не ставим — браузер сам добавит boundary.
+    const form = new FormData();
+    form.append("cacheControl", "3600");
+    form.append("", file);
+    const resp = await fetch(up.upload_url, { method: "PUT", body: form });
+    if (!resp.ok) {
+      console.error("Supabase upload", resp.status, await resp.text().catch(() => ""));
+      throw new Error(`Хранилище отклонило загрузку (${resp.status})`);
+    }
 
-    // 3. Сообщаем серверу путь → он меняет статус на submitted и уведомляет автора
-    await api(`/challenges/${c.id}/photo`, {
-      method: "POST",
-      body: { path: up.path },
-    });
+    // 3. Сообщаем серверу путь — он ставит статус «на проверке» и уведомляет автора
+    await api(`/challenges/${c.id}/photo`, { method: "POST", body: { path: up.path } });
 
     toast("Фото отправлено!");
     tg.HapticFeedback?.notificationOccurred("success");
@@ -244,6 +263,13 @@ async function viewChallengePhoto() {
 }
 
 /* ---------- Привязка событий ---------- */
+
+try {
+  tg.BackButton?.onClick(() => {
+    if (!$("challengeChatOverlay").hidden) closeChallengeDetails();
+    else if (!$("challengesOverlay").hidden) closeChallenges();
+  });
+} catch (e) {}
 
 (() => {
   const btn = $("challengeBtn");
