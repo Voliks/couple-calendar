@@ -1271,3 +1271,9 @@ async def get_challenges_json() -> dict:
     except Exception as e:
         logging.error("ОШИБКА ЧТЕНИЯ challenges.json: %s", e)
         return {}
+async def update_challenge_photo(challenge_id: int, photo_path: str) -> None:
+    """Сохраняет путь к загруженному фото в БД."""
+    await _exec(
+        "UPDATE user_challenges SET photo_id = ? WHERE id = ?",
+        (photo_path, challenge_id)
+    )
