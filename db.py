@@ -543,7 +543,17 @@ async def _m17_challenges() -> None:
         )
     """)
 
-    
+async def _m18_challenge_messages() -> None:
+    await _exec("""
+        CREATE TABLE IF NOT EXISTS challenge_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            challenge_id INTEGER NOT NULL,
+            sender_id INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+    """)
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -563,6 +573,7 @@ MIGRATIONS = [
     (16, _m16_indexes_and_idea_keys),
     (16, _m16_add_done_status),
     (17, _m17_challenges),
+    (18, _m18_challenge_messages),
 ]
 
 

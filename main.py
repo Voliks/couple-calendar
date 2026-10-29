@@ -1011,6 +1011,7 @@ PHOTO_BUCKET = os.getenv("SUPABASE_BUCKET", "challenges").strip() or "challenges
 PHOTO_EXTS = ("jpg", "jpeg", "png", "webp", "gif", "heic", "heif")
 CHALLENGE_MAX_POINTS = 20  # в challenges.json есть задания до 20 баллов
 _supabase = None
+_challenge_messages: dict[int, list[dict]] = {}
 
 
 def get_supabase():
@@ -1189,6 +1190,43 @@ async def api_challenge_action(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def api_get_challenge_messages(request: web.Request) -> web.Response:
+    tg_user = authenticate(request)
+    challenge_id = _int_param(request, "id")
+    challenge = await db.get_user_challenge(challenge_id)
+    if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
+        raise ApiError("Челлендж не найден", 404)
+        
+    rs = await db._exec(
+        "SELECT id, sender_id, text, created_at FROM challenge_messages WHERE challenge_id = ? ORDER BY created_at ASC",
+        (challenge_id,)
+    )
+    messages = [{"id": r[0], "sender_id": r[1], "text": r[2], "created_at": r[3]} for r in rs.rows]
+    return web.json_response({"messages": messages})
+
+async def api_post_challenge_message(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    challenge_id = _int_param(request, "id")
+    challenge = await db.get_user_challenge(challenge_id)
+    if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
+        raise ApiError("Челлендж не найден", 404)
+        
+    body = await read_json(request)
+    text = str(body.get("text") or "").strip()[:500]
+    if not text:
+        raise ApiError("Введите текст", 400)
+        
+    await db._exec(
+        "INSERT INTO challenge_messages (challenge_id, sender_id, text, created_at) VALUES (?, ?, ?, ?)",
+        (challenge_id, tg_user.id, text, int(time.time()))
+    )
+    partner_id = challenge["target_id"] if tg_user.id == challenge["creator_id"] else challenge["creator_id"]
+    notify(partner_id, f"💬 Новое сообщение по челленджу: {text}")
+    
+    return web.json_response({"status": "ok"})
+
+
+
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
@@ -1331,6 +1369,8 @@ async def main() -> None:
     app.router.add_post("/api/challenges/upload-url", api_upload_photo_url)
     app.router.add_get("/api/challenges/photo-url", api_challenge_photo_url)
     app.router.add_post("/api/challenges/{id}/photo", api_set_challenge_photo)
+    app.router.add_get("/api/challenges/{id}/messages", api_get_challenge_messages)
+    app.router.add_post("/api/challenges/{id}/messages", api_post_challenge_message)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
