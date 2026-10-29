@@ -1009,16 +1009,29 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     user = await db.get_or_create_user(tg_user.id)
     
-    # 1. Получаем баланс
     balance = await db.get_user_balance(tg_user.id)
-    
-    # 2. Получаем историю личных челленджей
     history = await db.get_all_user_challenges(tg_user.id)
     
-    # 3. Получаем список предложенных челленджей из JSON
-    catalog = await db.get_challenges_json()
+    # ЖЕСТКО ЗАДАЕМ КАТАЛОГ В КОДЕ (для проверки)
+    catalog = {
+        "Лёгкие (1–2 очка)": [
+            "Пришли фото своего текущего вида «как есть»",
+            "Пришли фото губ крупным планом",
+            "Пришли фото рук"
+        ],
+        "Средние (3–4 очка)": [
+            "Пришли фото в обычной домашней одежде крупнее",
+            "Пришли фото своей спины в одежде"
+        ],
+        "Сложные (5–6 очков)": [
+            "Честно расскажи, чего тебе сейчас не хватает в нашей близости"
+        ],
+        "18+ (6–10 очков)": [
+            "Пришли фото в нижнем белье",
+            "Пришли фото в нижнем белье с разных ракурсов"
+        ]
+    }
     
-        # Добавляем флаг is_creator для каждого челленджа
     for h in history:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
         
@@ -1165,6 +1178,8 @@ async def main() -> None:
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
     app.router.add_get("/api/challenges", api_get_challenges_data)
+    app.router.add_post("/api/challenges", api_create_challenge)
+    app.router.add_post("/api/challenges/{id}/action", api_challenge_action)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
