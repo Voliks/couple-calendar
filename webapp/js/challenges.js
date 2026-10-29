@@ -55,13 +55,11 @@ function renderChallenges() {
 }
 
 // Открытие деталей челленджа (просто скроллим к нему или показываем статус)
-// Пока что оставим просто открытие окна с заданием
+
 function openChallengeDetails(id) {
   const c = allChallenges.find(x => x.id === id);
   if (!c) return;
-  
-  // Просто показываем детали (для теста)
-  alert(`Задание: ${c.text}\nБаллы: ${c.reward}\nСтатус: ${c.status}`);
+  toast(`${c.text} · ${c.reward} б. · ${c.status}`);
 }
 
 // Обновление селектов
@@ -120,16 +118,16 @@ function closeChallenges() {
 }
 
 // Привязка событий
-document.addEventListener("DOMContentLoaded", () => {
+(() => {
   const btn = $("challengeBtn");
   if (btn) btn.onclick = openChallenges;
-  
+
   const closeBtn = $("challengesClose");
   if (closeBtn) closeBtn.onclick = closeChallenges;
-  
+
   const catSelect = $("challengeCategorySelect");
   if (catSelect) catSelect.onchange = updateIdeaSelect;
-  
+
   const createBtn = $("createChallengeBtn");
   if (createBtn) createBtn.onclick = createChallenge;
-});
+})();
