@@ -761,7 +761,7 @@ async def api_delete_event(request: web.Request) -> web.Response:
         and event["created_by"] != tg_user.id
     ):
         raise ApiError(
-            "Удалить событие может только его автор. Вы можете отказаться от него.", 403
+            "Удалить событие может только автор. Вы можете отказаться от него.", 403
         )
     await db.delete_event(event["id"])
     return web.json_response({"status": "deleted"})
@@ -773,11 +773,11 @@ async def api_respond(request: web.Request) -> web.Response:
     body = await read_json(request)
 
     if event["category"] in ("shop", "todo", "personal"):
-        raise ApiError("Это не требует ответа")
+        raise ApiError("Не требует ответа")
 
     status = body.get("status")
-    if status not in ("accepted", "declined", "done"):
-        raise ApiError("Некорректный статус")
+    if status not in ("accepted", "declined"):
+        raise ApiError("Некорректный статус.")
 
     if event["target_user"] != tg_user.id:
         raise ApiError("Отвечать на событие может только приглашённый", 403)
@@ -793,8 +793,7 @@ async def api_respond(request: web.Request) -> web.Response:
             await db.set_decline_comment_slot(event["id"], slot, "")
 
         what = "принял(а)" if status == "accepted" else "отклонил(а)"
-        if status == "done":
-            what = "выполнил(а)"
+        
 
         icon = "✅" if status in ("accepted", "done") else "❌"
         extra = f"\n💬 {comment}" if status == "declined" and comment else ""

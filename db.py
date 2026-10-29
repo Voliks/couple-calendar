@@ -493,6 +493,36 @@ async def _m16_indexes_and_idea_keys() -> None:
         stmts.append(("DELETE FROM hidden_ideas WHERE user_id = ? AND idea_key = ?", (user_id, key)))
     await _batch(stmts)
 
+async def _m16_add_done_status() -> None:
+    # Пересоздаем таблицу events, чтобы разрешить статус 'done'
+    await _exec("""
+        CREATE TABLE IF NOT EXISTS events_new (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_by  INTEGER NOT NULL,
+            target_user INTEGER NOT NULL,
+            title       TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            date        TEXT NOT NULL,
+            date_end    TEXT NOT NULL DEFAULT '',
+            time        TEXT NOT NULL DEFAULT '',
+            category    TEXT NOT NULL DEFAULT 'rest',
+            status      TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'accepted', 'declined', 'done')),
+            checklist   TEXT NOT NULL DEFAULT '[]',
+            color       TEXT NOT NULL DEFAULT '',
+            priority    TEXT NOT NULL DEFAULT '',
+            reaction    TEXT NOT NULL DEFAULT '',
+            reaction_by INTEGER,
+            decline_comment TEXT NOT NULL DEFAULT '',
+            decline_comment_creator TEXT NOT NULL DEFAULT '',
+            decline_comment_target TEXT NOT NULL DEFAULT '',
+            remind_before INTEGER NOT NULL DEFAULT 0,
+            visibility  TEXT NOT NULL DEFAULT 'shared'
+        )
+    """)
+    await _exec("INSERT INTO events_new SELECT id, created_by, target_user, title, description, date, date_end, time, category, status, checklist, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility FROM events")
+    await _exec("DROP TABLE events")
+    await _exec("ALTER TABLE events_new RENAME TO events")
 
 MIGRATIONS = [
     (1, _m1_base),
@@ -511,7 +541,9 @@ MIGRATIONS = [
     (14, _m14_checklist_position),
     (15, _m15_personal_section),
     (16, _m16_indexes_and_idea_keys),
+    (16, _m16_add_done_status),
 ]
+
 
 
 _REQUIRED_COLUMNS = {
