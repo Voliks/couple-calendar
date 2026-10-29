@@ -553,6 +553,8 @@ async def _m18_challenge_messages() -> None:
             created_at INTEGER NOT NULL
         )
     """)
+async def _m19_challenge_deadline() -> None:
+    await _add_column("user_challenges", "deadline", "INTEGER NOT NULL DEFAULT 0")
 
 MIGRATIONS = [
     (1, _m1_base),
@@ -574,6 +576,7 @@ MIGRATIONS = [
     (16, _m16_add_done_status),
     (17, _m17_challenges),
     (18, _m18_challenge_messages),
+    (19, _m19_challenge_deadline),
 ]
 
 
@@ -1236,11 +1239,11 @@ async def get_user_balance(user_id: int) -> int:
 async def add_balance(user_id: int, amount: int) -> None:
     await _exec("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (amount, user_id))
 
-async def create_user_challenge(creator_id: int, target_id: int, category: str, text: str, reward: int) -> dict:
+async def create_user_challenge(creator_id: int, target_id: int, category: str, text: str, reward: int, deadline: int = 0) -> dict:
     rs = await _exec(
-        "INSERT INTO user_challenges (creator_id, target_id, category, text, reward, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (creator_id, target_id, category, text, reward, int(time.time()))
+        "INSERT INTO user_challenges (creator_id, target_id, category, text, reward, deadline, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (creator_id, target_id, category, text, reward, deadline, int(time.time()))
     )
     return await get_user_challenge(rs.last_id)
 

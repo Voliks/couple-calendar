@@ -1154,15 +1154,23 @@ async def api_create_challenge(request: web.Request) -> web.Response:
     category = str(body.get("category") or "").strip()[:50] or "Своё"
     try:
         points = int(body.get("reward"))
+        hours = int(body.get("hours", 24)) # по умолчанию 24 часа
     except (TypeError, ValueError):
-        raise ApiError("Некорректное количество очков")
+        raise ApiError("Некорректное количество очков или времени")
+        
     if not text:
         raise ApiError("Укажите текст задания")
     if not 1 <= points <= CHALLENGE_MAX_POINTS:
         raise ApiError(f"Количество очков должно быть от 1 до {CHALLENGE_MAX_POINTS}")
+    if not 1 <= hours <= 720:
+        raise ApiError("Время на выполнение должно быть от 1 часа до 30 дней (720 часов)")
 
-    challenge = await db.create_user_challenge(tg_user.id, user["partner_id"], category, text, points)
-    notify(user["partner_id"], f"⚔️ Тебе бросили вызов: «{text}» ({points} б.). Открой календарь → ⚔️")
+    deadline = int(time.time()) + hours * 3600
+
+    challenge = await db.create_user_challenge(
+        tg_user.id, user["partner_id"], category, text, points, deadline
+    )
+    notify(user["partner_id"], f"⚔️ Тебе бросили вызов: «{text}» ({points} б.). На выполнение {hours} ч.")
     return web.json_response({"status": "created", "challenge": challenge}, status=201)
 
 

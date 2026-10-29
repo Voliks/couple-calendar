@@ -238,6 +238,19 @@
     <label for="newChallengeReward">Баллы</label>
     <input type="number" id="newChallengeReward" min="1" max="20" value="10">
 
+    <!-- Добавлен выбор времени на выполнение -->
+    <label for="challengeDeadlineSelect">Время на выполнение</label>
+    <select id="challengeDeadlineSelect">
+      <option value="1">1 час</option>
+      <option value="3">3 часа</option>
+      <option value="6">6 часов</option>
+      <option value="12">12 часов</option>
+      <option value="24" selected>1 день (24 часа)</option>
+      <option value="48">2 дня</option>
+      <option value="72">3 дня</option>
+      <option value="168">1 неделя</option>
+    </select>
+
     <div class="row">
       <button class="btn ghost" id="challengesClose">Закрыть</button>
       <button class="btn primary" id="createChallengeBtn">Отправить партнёру</button>
@@ -245,9 +258,9 @@
   </div>
 </div>
 
-<!-- Окно деталей челленджа (Чат) -->
-<div class="overlay" id="challengeChatOverlay" hidden style="z-index: 25;">
-  <div class="sheet" role="dialog" aria-modal="true" style="height: 80vh; display: flex; flex-direction: column;">
+<!-- Окно деталей челленджа (Чат) на весь экран -->
+<div class="overlay" id="challengeChatOverlay" hidden style="z-index: 25; align-items: flex-end;">
+  <div class="sheet" role="dialog" aria-modal="true" style="height: 100vh; max-height: 100vh; border-radius: 0; display: flex; flex-direction: column; padding: 20px 16px calc(20px + env(safe-area-inset-bottom, 0px));">
     
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
       <button class="icon-btn" id="chatBackBtn" aria-label="Назад" style="font-size: 20px;">←</button>
@@ -300,7 +313,7 @@
 <script src="js/list.js"></script>
 <script src="js/ideas.js"></script>
 <script src="js/form.js"></script>
-<script src="js/challenges.js?v=9"></script>
+<script src="js/challenges.js?v=10"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

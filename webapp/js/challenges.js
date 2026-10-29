@@ -97,14 +97,14 @@ async function createChallenge() {
   if (!opt || !opt.value) return toast("Выберите задание");
 
   const text = opt.value;
-  const points = parseInt($("newChallengeReward").value, 10)
-    || parseInt(opt.dataset.points, 10) || 10;
+  const points = parseInt($("newChallengeReward").value, 10) || parseInt(opt.dataset.points, 10) || 10;
+  const hours = parseInt($("challengeDeadlineSelect").value, 10) || 24; // Читаем время
 
   const btn = $("createChallengeBtn");
   btn.disabled = true;
   btn.textContent = "Отправка…";
   try {
-    await api("/challenges", { method: "POST", body: { category: cat, text, reward: points } });
+    await api("/challenges", { method: "POST", body: { category: cat, text, reward: points, hours } });
     toast("Вызов брошен!");
     tg.HapticFeedback?.notificationOccurred("success");
     await openChallenges();
@@ -135,7 +135,14 @@ function openChallengeDetails(id) {
   $("chatCategory").textContent = c.category;
   $("chatTaskText").textContent = c.text;
   $("chatReward").textContent = `🏆 ${c.reward} баллов`;
-  $("chatStatus").textContent = `Статус: ${statusLabel(c)}`;
+  
+  // Вывод дедлайна
+  let deadlineStr = "";
+  if (c.deadline > 0) {
+    const d = new Date(c.deadline * 1000);
+    deadlineStr = ` | ⏳ До: ${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+  }
+  $("chatStatus").textContent = `Статус: ${statusLabel(c)}${deadlineStr}`;
 
   // Фото
   const hasPhoto = !!c.photo_id;
@@ -167,7 +174,6 @@ function closeChallengeDetails() {
   $("challengeChatOverlay").hidden = true;
   currentChallenge = null;
   
-  // Останавливаем автообновление
   if (chatPollTimer) {
     clearInterval(chatPollTimer);
     chatPollTimer = null;
@@ -198,7 +204,6 @@ async function loadMessages(challengeId, silent = false) {
     
     const myId = state?.my_id || 0; 
     
-    // Проверяем, изменилось ли количество сообщений
     const currentCount = list.querySelectorAll('div').length;
     if (silent && currentCount === msgs.length) return;
 
@@ -271,13 +276,11 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
   try {
     const file = await prepareImage(picked);
 
-    // 1. Сервер выдаёт одноразовую ссылку для загрузки
     const up = await api("/challenges/upload-url", {
       method: "POST",
       body: { filename: file.name || "photo.jpg", challenge_id: c.id },
     });
 
-    // 2. Заливаем файл напрямую в Supabase (multipart/form-data)
     const form = new FormData();
     form.append("cacheControl", "3600");
     form.append("", file);
@@ -287,7 +290,6 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
       throw new Error(`Хранилище отклонило загрузку (${resp.status})`);
     }
 
-    // 3. Сообщаем серверу путь — он ставит статус «на проверке» и уведомляет автора
     await api(`/challenges/${c.id}/photo`, { method: "POST", body: { path: up.path } });
 
     toast("Фото отправлено!");
@@ -364,14 +366,12 @@ try {
   const createBtn = $("createChallengeBtn");
   if (createBtn) createBtn.onclick = createChallenge;
 
-  // Клик по карточке в списке → детали
   $("challengesList").addEventListener("click", (ev) => {
     const card = ev.target.closest("[data-challenge-id]");
     if (!card) return;
     openChallengeDetails(Number(card.dataset.challengeId));
   });
 
-  // Закрытие оверлея по клику на фон
   $("challengesOverlay").addEventListener("click", (e) => {
     if (e.target === $("challengesOverlay")) closeChallenges();
   });
@@ -379,7 +379,6 @@ try {
     if (e.target === $("challengeChatOverlay")) closeChallengeDetails();
   });
 
-  // Кнопки в деталях
   const backBtn = $("chatBackBtn");
   if (backBtn) backBtn.onclick = closeChallengeDetails;
 
@@ -395,7 +394,6 @@ try {
   const rejectBtn = $("chatRejectBtn");
   if (rejectBtn) rejectBtn.onclick = () => challengeAction("reject");
 
-  // Отправка сообщений
   const sendBtn = $("chatSendBtn");
   if (sendBtn) sendBtn.onclick = sendMessage;
 
@@ -404,8 +402,4 @@ try {
     msgInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
-        sendMessage();
-      }
-    });
-  }
-})();
+        sendMessage
