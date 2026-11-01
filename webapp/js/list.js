@@ -83,6 +83,23 @@ function declineCommentHtml(e) {
   return `${lines.join("")}${button}`;
 }
 
+// Новый блок: комментарии для Секса и Отдыха
+function eventCommentsHtml(e) {
+  if (e.category !== "rest" && e.category !== "sex") return "";
+  
+  return `
+    <div class="event-comments-block" data-event-id="${e.id}" style="margin-top: 12px; border-top: 1px solid rgba(0,0,0,0.05); padding-top: 12px;">
+      <div class="event-comments-list" id="comments-list-${e.id}" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px;">
+         <!-- Сюда подгрузятся комментарии -->
+      </div>
+      <div style="display: flex; gap: 6px;">
+        <input type="text" class="comment-input" placeholder="Написать комментарий..." maxlength="500" style="flex: 1; padding: 8px 12px; border-radius: 8px; background: rgba(0,0,0,0.04); border: none; font-size: 14px;">
+        <button class="btn-send-comment" style="background: var(--accent); color: #fff; border-radius: 8px; padding: 0 12px; font-weight: bold;">➤</button>
+      </div>
+    </div>
+  `;
+}
+
 function cardHtml(e) {
   const cat = CATEGORIES[e.category] || CATEGORIES.rest;
   const sk = statusKey(e);
@@ -126,6 +143,7 @@ function cardHtml(e) {
     ${ideasHtml(e)}
     ${reactionHtml(e)}
     ${declineCommentHtml(e)}
+    ${eventCommentsHtml(e)} <!-- Вывод блока комментариев -->
     <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span>${statusLabel}</div>
     ${answerHtml(e, sk === "expired")}
   </article>`;
@@ -145,12 +163,12 @@ function reconcile(container, items) {
       const fresh = tpl.content.firstElementChild;
       sigs.set(fresh, it.html);
       if (el) {
-        const oldInput = el.querySelector(".cl-input");
+        const oldInput = el.querySelector(".cl-input, .comment-input");
         const typed = oldInput ? oldInput.value : "";
         const hadFocus = oldInput && oldInput === document.activeElement;
         const sel = hadFocus ? [oldInput.selectionStart, oldInput.selectionEnd] : null;
         el.replaceWith(fresh);
-        const newInput = fresh.querySelector(".cl-input");
+        const newInput = fresh.querySelector(".cl-input, .comment-input");
         if (newInput && typed) newInput.value = typed;
         if (newInput && hadFocus) {
           newInput.focus({ preventScroll: true });
@@ -168,6 +186,55 @@ function reconcile(container, items) {
   return true;
 }
 
+// Загрузка комментариев для карточки
+async function loadEventComments(eventId) {
+  const list = document.getElementById(`comments-list-${eventId}`);
+  if (!list) return;
+
+  try {
+    const res = await api(`/events/${eventId}/comments`);
+    const comments = res.comments || [];
+    
+    if (!comments.length) {
+      list.innerHTML = `<div style="font-size: 12px; color: var(--hint);">Нет комментариев</div>`;
+      return;
+    }
+
+    const myId = state?.my_id || 0;
+    list.innerHTML = comments.map(c => {
+      const isMine = c.sender_id === myId;
+      const color = isMine ? "background: rgba(36, 129, 204, 0.1);" : "background: rgba(0,0,0,0.04);";
+      return `<div style="padding: 6px 10px; border-radius: 8px; font-size: 13px; ${color} word-break: break-word;">
+        ${esc(c.text)}
+      </div>`;
+    }).join("");
+  } catch (e) {
+    console.error("Ошибка загрузки комментариев", e);
+  }
+}
+
+// Отправка комментария
+async function sendEventComment(eventId, inputEl) {
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  inputEl.value = "";
+  inputEl.disabled = true;
+
+  try {
+    await api(`/events/${eventId}/comments`, {
+      method: "POST",
+      body: { text }
+    });
+    await loadEventComments(eventId);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    inputEl.disabled = false;
+    inputEl.focus();
+  }
+}
+
 function renderList() {
   $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
   const items = state.events
@@ -175,6 +242,11 @@ function renderList() {
     .map((e) => ({ id: String(e.id), html: cardHtml(e) }));
   if (!reconcile($("list"), items)) {
     $("list").innerHTML = `<div class="empty">На этот день ничего нет. Нажмите «+», чтобы добавить событие.</div>`;
+  } else {
+    // Подгружаем комментарии для отрисованных карточек
+    state.events
+      .filter(e => dayHasDate(e, selected) && (e.category === "rest" || e.category === "sex"))
+      .forEach(e => loadEventComments(e.id));
   }
 }
 
@@ -382,6 +454,15 @@ $("list").addEventListener("click", async (ev) => {
   const event = findEvent(eventId);
   if (!event) return;
 
+  // Обработка отправки комментария
+  const sendCommentBtn = ev.target.closest(".btn-send-comment");
+  if (sendCommentBtn) {
+    const block = sendCommentBtn.closest(".event-comments-block");
+    const input = block.querySelector(".comment-input");
+    sendEventComment(block.dataset.eventId, input);
+    return;
+  }
+
   const ideaYes = ev.target.closest("[data-idea-yes]");
   const ideaNo  = ev.target.closest("[data-idea-no]");
   if (ideaYes || ideaNo) {
@@ -467,9 +548,15 @@ $("list").addEventListener("click", async (ev) => {
   }
 });
 
+// Обработка Enter для инпутов
 $("list").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && ev.target.classList?.contains("cl-input")) {
     ev.preventDefault();
     addItem(ev.target.closest(".card").dataset.id, ev.target);
+  }
+  if (ev.key === "Enter" && ev.target.classList?.contains("comment-input")) {
+    ev.preventDefault();
+    const block = ev.target.closest(".event-comments-block");
+    sendEventComment(block.dataset.eventId, ev.target);
   }
 });

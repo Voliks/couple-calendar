@@ -572,6 +572,17 @@ async def _m20_shop_items() -> None:
         await _exec("INSERT INTO shop_items (title, cost, emoji) VALUES (?, ?, ?)", ("Ужин в ресторане", 150, "🍷"))
         await _exec("INSERT INTO shop_items (title, cost, emoji) VALUES (?, ?, ?)", ("Поход в кино", 80, "🍿"))
 
+async def _m21_event_comments() -> None:
+    await _exec("""
+        CREATE TABLE IF NOT EXISTS event_comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+    """)
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -593,6 +604,8 @@ MIGRATIONS = [
     (17, _m17_challenges),
     (18, _m18_challenge_messages),
     (19, _m19_challenge_deadline),
+    (20, _m20_shop_items),
+    (21, _m21_event_comments),
 ]
 
 

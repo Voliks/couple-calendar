@@ -1023,9 +1023,10 @@ def get_supabase():
             "Хранилище фото не настроено (нужны SUPABASE_URL и SUPABASE_SERVICE_KEY)", 503
         )
     if _supabase is None:
-        import httpx
+        import importlib
         from supabase import create_client, ClientOptions
         try:
+            httpx = importlib.import_module("httpx")
             options = ClientOptions(
                 httpx_client=httpx.Client(
                     http2=False,
@@ -1034,6 +1035,9 @@ def get_supabase():
             )
             _supabase = create_client(SUPABASE_URL, SUPABASE_KEY, options=options)
             logging.info("Supabase: HTTP/1.1 client ACTIVE")
+        except ImportError:
+            logging.warning("httpx недоступен, используется клиент Supabase по умолчанию")
+            _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
         except TypeError:
             logging.warning("supabase-py слишком старый, httpx_client не поддерживается")
             _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -1310,6 +1314,46 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
     )
 
     return web.json_response({"status": "ok", "event": event_to_dict(event, tg_user.id)})
+async def api_get_event_comments(request: web.Request) -> web.Response:
+    tg_user = authenticate(request)
+    event_id = _int_param(request, "id")
+    event = await member_event(request, tg_user.id)
+    
+    # Комментарии доступны только для rest и sex
+    if event["category"] not in ("rest", "sex"):
+        return web.json_response({"comments": []})
+
+    rs = await db._exec(
+        "SELECT id, user_id, text, created_at FROM event_comments WHERE event_id = ? ORDER BY created_at ASC",
+        (event_id,)
+    )
+    comments = [{"id": r[0], "sender_id": r[1], "text": r[2], "created_at": r[3]} for r in rs.rows]
+    return web.json_response({"comments": comments})
+
+
+async def api_post_event_comment(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    event_id = _int_param(request, "id")
+    event = await member_event(request, tg_user.id)
+    
+    if event["category"] not in ("rest", "sex"):
+        raise ApiError("Комментарии доступны только для Отдыха и Секса", 403)
+
+    body = await read_json(request)
+    text = str(body.get("text") or "").strip()[:500]
+    if not text:
+        raise ApiError("Введите текст", 400)
+
+    await db._exec(
+        "INSERT INTO event_comments (event_id, user_id, text, created_at) VALUES (?, ?, ?, ?)",
+        (event_id, tg_user.id, text, int(time.time()))
+    )
+    
+    # Отправляем уведомление партнёру
+    partner_id = event["target_user"] if tg_user.id == event["created_by"] else event["created_by"]
+    notify(partner_id, f"💬 Новый комментарий к событию «{event['title']}»:\n\n{text}")
+    
+    return web.json_response({"status": "ok"})
 
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
@@ -1457,6 +1501,8 @@ async def main() -> None:
     app.router.add_post("/api/challenges/{id}/messages", api_post_challenge_message)
     app.router.add_get("/api/shop", api_get_shop_items)
     app.router.add_post("/api/shop/buy", api_buy_shop_item)
+    app.router.add_get("/api/events/{id}/comments", api_get_event_comments)
+    app.router.add_post("/api/events/{id}/comments", api_post_event_comment)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
