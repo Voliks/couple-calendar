@@ -1142,14 +1142,13 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
     now = int(time.time())
     for h in history:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
-        # Если статус approved и прошло больше 24 часов (86400 секунд) с момента deadline
-        if h["status"] == "approved" and h.get("deadline", 0) > 0:
-            if now - h["deadline"] > 86400:
-                h["is_archived"] = True
-            else:
-                h["is_archived"] = False
-        else:
-            h["is_archived"] = False
+        h["is_archived"] = False
+        if h["status"] == "approved":
+            dl = h.get("deadline") or 0
+            # Новые: deadline = момент подтверждения (всегда <= now).
+            # Старые: deadline мог остаться в будущем или быть 0 — считаем от created_at.
+            done_at = dl if 0 < dl <= now else (h.get("created_at") or 0)
+            h["is_archived"] = done_at > 0 and now - done_at > 86400
 
     return web.json_response({
         "balance": balance,
