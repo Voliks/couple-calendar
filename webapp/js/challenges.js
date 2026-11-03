@@ -2,7 +2,7 @@ let allChallenges = [];
 let catalogData = {};
 let currentChallenge = null;
 let chatPollTimer = null;
-let showArchive = false; // Флаг: показываем ли мы сейчас архив
+let showArchive = false;
 
 /* ---------- Список ---------- */
 
@@ -191,6 +191,13 @@ function openChallengeDetails(id) {
   // Фото
   const hasPhoto = !!c.photo_id;
   $("chatPhotoBlock").style.display = hasPhoto ? "block" : "none";
+  
+  if (hasPhoto) {
+    const count = c.photo_id.split(",").filter(Boolean).length;
+    $("chatViewPhotoBtn").textContent = count > 1 
+      ? `🖼 Посмотреть фото (${count} шт.)` 
+      : `🖼 Посмотреть прикрепленное фото`;
+  }
 
   // Исполнитель: прикрепить фото, если pending или rejected
   const isTarget = !c.is_creator;
@@ -288,7 +295,7 @@ async function sendMessage() {
   }
 }
 
-/* ---------- Загрузка фото в Supabase (signed upload URL) ---------- */
+/* ---------- Загрузка фото в Supabase (мультизагрузка) ---------- */
 
 async function prepareImage(file) {
   try {
@@ -306,37 +313,58 @@ async function prepareImage(file) {
 }
 
 $("challengePhotoInput").addEventListener("change", async (ev) => {
-  const picked = ev.target.files?.[0];
-  ev.target.value = "";
-  if (!picked || !currentChallenge) return;
-  if (picked.type && !picked.type.startsWith("image/")) return toast("Нужно изображение");
+  const pickedFiles = ev.target.files;
+  ev.target.value = ""; // Очищаем инпут
+  if (!pickedFiles || !pickedFiles.length || !currentChallenge) return;
 
   const c = currentChallenge;
   const btn = $("chatAttachBtn");
   const original = btn.textContent;
   btn.disabled = true;
-  btn.textContent = "Загрузка…";
+  btn.textContent = "Загрузка 0/" + pickedFiles.length + "…";
+
+  const uploadedPaths = [];
 
   try {
-    const file = await prepareImage(picked);
+    for (let i = 0; i < pickedFiles.length; i++) {
+      const file = pickedFiles[i];
+      if (file.type && !file.type.startsWith("image/")) continue;
 
-    const up = await api("/challenges/upload-url", {
-      method: "POST",
-      body: { filename: file.name || "photo.jpg", challenge_id: c.id },
-    });
+      btn.textContent = `Загрузка ${i + 1}/${pickedFiles.length}…`;
+      
+      const preparedFile = await prepareImage(file);
 
-    const form = new FormData();
-    form.append("cacheControl", "3600");
-    form.append("", file);
-    const resp = await fetch(up.upload_url, { method: "PUT", body: form });
-    if (!resp.ok) {
-      console.error("Supabase upload", resp.status, await resp.text().catch(() => ""));
-      throw new Error(`Хранилище отклонило загрузку (${resp.status})`);
+      const up = await api("/challenges/upload-url", {
+        method: "POST",
+        body: { filename: preparedFile.name || "photo.jpg", challenge_id: c.id },
+      });
+
+      const form = new FormData();
+      form.append("cacheControl", "3600");
+      form.append("", preparedFile);
+      const resp = await fetch(up.upload_url, { method: "PUT", body: form });
+      
+      if (!resp.ok) {
+        console.error("Supabase upload error", resp.status);
+        throw new Error(`Ошибка при загрузке файла ${i + 1}`);
+      }
+      
+      uploadedPaths.push(up.path);
     }
 
-    await api(`/challenges/${c.id}/photo`, { method: "POST", body: { path: up.path } });
+    if (uploadedPaths.length === 0) {
+      throw new Error("Ни один файл не был загружен");
+    }
 
-    toast("Фото отправлено!");
+    // Сохраняем все пути в БД через запятую
+    const allPathsString = uploadedPaths.join(",");
+    
+    await api(`/challenges/${c.id}/photo`, { 
+      method: "POST", 
+      body: { path: allPathsString } 
+    });
+
+    toast(`Загружено фото: ${uploadedPaths.length}`);
     tg.HapticFeedback?.notificationOccurred("success");
     closeChallengeDetails();
     await openChallenges();
@@ -364,7 +392,7 @@ async function challengeAction(action) {
   }
 }
 
-/* ---------- Просмотр фото ---------- */
+/* ---------- Просмотр фото (галерея) ---------- */
 
 async function viewChallengePhoto() {
   if (!currentChallenge?.photo_id) return;
@@ -372,11 +400,28 @@ async function viewChallengePhoto() {
   const original = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Открываем…";
+  
   try {
-    const res = await api(`/challenges/photo-url?path=${encodeURIComponent(currentChallenge.photo_id)}`);
-    if (!res.view_url) throw new Error("Ссылка не получена");
-    if (tg.openLink) tg.openLink(res.view_url);
-    else window.open(res.view_url, "_blank");
+    const paths = currentChallenge.photo_id.split(",").filter(Boolean);
+    const urls = [];
+
+    // Получаем ссылки для всех фото
+    for (const path of paths) {
+      const res = await api(`/challenges/photo-url?path=${encodeURIComponent(path)}`);
+      if (res.view_url) urls.push(res.view_url);
+    }
+
+    if (!urls.length) throw new Error("Ссылки не получены");
+
+    if (tg.openLink && urls.length === 1) {
+      tg.openLink(urls[0]);
+    } else if (tg.showImages) {
+      // Встроенный просмотрщик Telegram (для нескольких фото)
+      tg.showImages(urls);
+    } else {
+      // Фолбэк: открываем каждую ссылку в новой вкладке
+      urls.forEach(url => window.open(url, "_blank"));
+    }
   } catch (e) {
     toast(e.message);
   } finally {

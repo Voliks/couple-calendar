@@ -1094,7 +1094,12 @@ def _storage_url(url: str) -> str:
 
 def _photo_path_ok(path: str, challenge_id: int) -> bool:
     exts = "|".join(PHOTO_EXTS)
-    return re.fullmatch(rf"challenge_{challenge_id}_\d+_[0-9a-f]{{8}}\.({exts})", path) is not None
+    # Разрешаем передавать несколько путей через запятую
+    paths = path.split(",")
+    for p in paths:
+        if not re.fullmatch(rf"challenge_{challenge_id}_\d+_[0-9a-f]{{8}}\.({exts})", p.strip()):
+            return False
+    return True
 
 
 async def api_upload_photo_url(request: web.Request) -> web.Response:
