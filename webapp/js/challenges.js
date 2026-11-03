@@ -389,12 +389,12 @@ try {
     const card = e.target.closest("[data-cat]");
     if (!card) return;
     selectedCategory = card.dataset.cat;
-    selectedIdeaData = null; // Сбрасываем выбранное задание
+    selectedIdeaData = null;
     $("selectedCatText").textContent = selectedCategory;
     $("selectedIdeaText").textContent = "Не выбрано";
     renderCategories();
     updateIdeaList();
-    $("catAccordionContent").style.display = "none"; // Закрываем аккордеон
+    $("catAccordionContent").style.display = "none";
   });
 
   // Выбор задания
@@ -404,13 +404,11 @@ try {
     const text = card.dataset.ideaText;
     const points = parseInt(card.dataset.ideaPoints, 10);
     selectedIdeaData = { text, points };
-    $("customChallengeInput").value = ""; // Очищаем кастомный инпут
+    $("customChallengeInput").value = ""; 
     $("newChallengeReward").value = points;
     $("selectedIdeaText").textContent = text;
-    
-    // Обновляем подсветку
     updateIdeaList();
-    $("ideaAccordionContent").style.display = "none"; // Закрываем аккордеон
+    $("ideaAccordionContent").style.display = "none";
   });
 
   // Кастомное задание
@@ -432,13 +430,11 @@ try {
     }
   });
 
-  // Переключение архива
   $("toggleArchiveBtn").onclick = () => {
     showArchive = !showArchive;
     openChallenges();
   };
 
-  // Кнопки челленджей
   $("challengeBtn").onclick = openChallenges;
   $("challengesClose").onclick = closeChallenges;
   $("createChallengeBtn").onclick = createChallenge;
