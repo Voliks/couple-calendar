@@ -7,15 +7,13 @@ function openShop() {
   $("shopList").innerHTML = `<div class="spinner" style="margin:20px auto;"></div>`;
 
   try {
-    // Подтягиваем баланс из state (он обновляется через load())
     currentBalance = state.balance || 0;
     $("shopBalance").textContent = currentBalance;
 
-    // Запрашиваем список товаров
     api("/shop").then(res => {
       let items = res.items || [];
       
-      // Сортируем по возрастанию цены (от дешевых к дорогим)
+      // Сортируем по возрастанию цены
       items.sort((a, b) => a.cost - b.cost);
 
       if (!items.length) {
@@ -26,7 +24,6 @@ function openShop() {
       $("shopList").innerHTML = items.map(item => {
         const afford = currentBalance >= item.cost;
         
-        // Используем flex для идеального выравнивания названия слева, цены справа
         return `<div class="card accepted" style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; padding: 12px; border-left: 4px solid #8b5cf6; cursor: pointer;" data-item-id="${item.id}" data-item-title="${esc(item.title)}" data-item-cost="${item.cost}" data-item-emoji="${esc(item.emoji)}">
           <div style="font-size: 16px; font-weight: 600; word-break: break-word; margin-right: 10px;">${esc(item.emoji)} ${esc(item.title)}</div>
           <div style="font-size: 16px; font-weight: bold; white-space: nowrap; color: ${afford ? '#eab308' : 'var(--declined)'};">🏆 ${item.cost}</div>
@@ -78,7 +75,6 @@ async function confirmBuy() {
     closeBuyDatePicker();
     closeShop();
     
-    // Обновляем календарь
     etag = null;
     await load();
   } catch (e) {
@@ -102,6 +98,16 @@ async function confirmBuy() {
   
   const confirmBtn = $("buyConfirm");
   if (confirmBtn) confirmBtn.onclick = confirmBuy;
+
+  // Закрытие по клику на фон магазина
+  $("shopOverlay").addEventListener("click", (e) => {
+    if (e.target === $("shopOverlay")) closeShop();
+  });
+
+  // Закрытие по клику на фон выбора даты
+  $("buyDateOverlay").addEventListener("click", (e) => {
+    if (e.target === $("buyDateOverlay")) closeBuyDatePicker();
+  });
 
   $("shopList").addEventListener("click", (e) => {
     const card = e.target.closest("[data-item-id]");
