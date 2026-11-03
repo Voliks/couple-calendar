@@ -285,20 +285,29 @@ async function sendMessage() {
   } catch (e) { toast(e.message); } finally { input.disabled = false; input.focus(); }
 }
 
-/* ---------- Загрузка фото ---------- */
+/* ---------- Загрузка фото (сжатие) ---------- */
 
 async function prepareImage(file) {
   try {
     const bmp = await createImageBitmap(file);
-    const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const k = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(bmp.width * k);
     canvas.height = Math.round(bmp.height * k);
-    canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
     bmp.close?.();
-    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
-    if (blob && blob.size < file.size) return new File([blob], "photo.jpg", { type: "image/jpeg" });
-  } catch (e) {}
+    
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.8));
+    if (blob && blob.size < file.size) {
+      return new File([blob], "photo.jpg", { type: "image/jpeg" });
+    }
+  } catch (e) { 
+    console.warn("Не удалось сжать фото, грузим оригинал", e); 
+  }
   return file;
 }
 
@@ -313,33 +322,57 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
   const btn = $("chatAttachBtn");
   const original = btn.textContent;
   btn.disabled = true;
-  btn.textContent = "Загрузка 0/" + pickedFiles.length + "…";
 
   const uploadedPaths = [];
+
   try {
     for (let i = 0; i < pickedFiles.length; i++) {
       const file = pickedFiles[i];
       if (file.type && !file.type.startsWith("image/")) continue;
-      btn.textContent = `Загрузка ${i + 1}/${pickedFiles.length}…`;
+      
+      btn.textContent = `Сжатие ${i + 1}/${pickedFiles.length}…`;
       
       let preparedFile = file;
       try { preparedFile = await prepareImage(file); } catch (err) {}
 
-      const up = await api("/challenges/upload-url", { method: "POST", body: { filename: preparedFile.name || "photo.jpg", challenge_id: c.id } });
+      btn.textContent = `Загрузка ${i + 1}/${pickedFiles.length}…`;
+
+      const up = await api("/challenges/upload-url", { 
+        method: "POST", 
+        body: { filename: "photo.jpg", challenge_id: c.id } 
+      });
+
       const form = new FormData();
       form.append("cacheControl", "3600");
       form.append("", preparedFile);
+      
       const resp = await fetch(up.upload_url, { method: "PUT", body: form });
       if (!resp.ok) throw new Error(`Ошибка при загрузке файла ${i + 1}`);
+      
       uploadedPaths.push(up.path);
+      
+      // Пауза между файлами
+      if (i < pickedFiles.length - 1) {
+        await new Promise(r => setTimeout(r, 500));
+      }
     }
+    
     if (uploadedPaths.length === 0) throw new Error("Ни один файл не был загружен");
+    
+    btn.textContent = "Сохранение...";
     await api(`/challenges/${c.id}/photo`, { method: "POST", body: { path: uploadedPaths.join(",") } });
+    
     toast(`Загружено фото: ${uploadedPaths.length}`);
     tg.HapticFeedback?.notificationOccurred("success");
     closeChallengeDetails();
     await openChallenges();
-  } catch (e) { toast(e.message || "Ошибка загрузки"); } finally { btn.disabled = false; btn.textContent = original; ev.target.value = ""; }
+  } catch (e) { 
+    toast(e.message || "Ошибка загрузки"); 
+  } finally { 
+    btn.disabled = false; 
+    btn.textContent = original; 
+    ev.target.value = ""; 
+  }
 });
 
 /* ---------- Действия создателя ---------- */
@@ -378,7 +411,7 @@ async function viewChallengePhoto() {
 
     const container = $("photoViewerContent");
     container.innerHTML = urls.map((url, i) => `
-      <img src="${url}" style="max-width: 100%; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);" alt="Фото ${i+1}">
+      <img src="${url}" loading="lazy" style="max-width: 100%; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);" alt="Фото ${i+1}">
     `).join("");
     
     $("photoViewerOverlay").hidden = false;
@@ -472,28 +505,32 @@ try {
   $("challengesClose").onclick = closeChallenges;
   $("createChallengeBtn").onclick = createChallenge;
 
-  // Нажатие на крестик карточки для переноса в архив
+  // Обработка клика по крестику (в архив)
   $("challengesList").addEventListener("click", async (ev) => {
     const archiveBtn = ev.target.closest(".archive-btn");
-    if (!archiveBtn) return;
-    
-    ev.stopPropagation();
-    ev.preventDefault();
-    
-    const id = archiveBtn.dataset.archiveId;
-    const card = archiveBtn.closest(".challenge-card");
-    
-    // Мгновенно убираем из верстки
-    if (card) card.style.display = "none";
-    
-    try {
-      await api(`/challenges/${id}/archive`, { method: "POST" });
-      tg.HapticFeedback?.notificationOccurred("success");
-      toast("Убрано в архив");
-      await openChallenges();
-    } catch (err) {
-      toast(err.message);
-      if (card) card.style.display = "flex";
+    if (archiveBtn) {
+      ev.stopPropagation(); // Чтобы не открылось окно челленджа
+      ev.preventDefault();
+      
+      const id = archiveBtn.dataset.archiveId;
+      archiveBtn.textContent = "⏳";
+      archiveBtn.disabled = true;
+      
+      try {
+        await api(`/challenges/${id}/archive`, { method: "POST" });
+        tg.HapticFeedback?.notificationOccurred("success");
+        toast("Убрано в архив");
+        // Визуально скрываем карточку
+        const card = archiveBtn.closest(".challenge-card");
+        if (card) card.style.display = "none";
+        // Перезагружаем
+        await openChallenges();
+      } catch (err) {
+        toast(err.message);
+        archiveBtn.textContent = "×";
+        archiveBtn.disabled = false;
+      }
+      return;
     }
   });
 

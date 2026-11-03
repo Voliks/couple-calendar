@@ -562,41 +562,31 @@ async def api_state(request: web.Request) -> web.Response:
         except Exception:
             logging.exception("Не удалось получить статистику")
     
-    # --- ПРОВЕРКА НА КРАСНУЮ ТОЧКУ ---
+     # --- ОПТИМИЗИРОВАННАЯ ПРОВЕРКА НА КРАСНУЮ ТОЧКУ ---
     rs = await db._exec("SELECT last_viewed_challenges FROM users WHERE telegram_id = ?", (tg_user.id,))
     last_viewed = rs.rows[0][0] if rs.rows else 0
     
     has_new = False
     if last_viewed > 0:
-        # 1. Новые челленджи от партнёра
-        rs_c = await db._exec(
-            "SELECT COUNT(*) FROM user_challenges WHERE target_id = ? AND created_at > ?",
-            (tg_user.id, last_viewed)
+        # Один запрос вместо трех
+        rs_check = await db._exec(
+            "SELECT 1 FROM ("
+            "  SELECT 1 FROM user_challenges WHERE target_id = ? AND created_at > ?"
+            "  UNION ALL"
+            "  SELECT 1 FROM challenge_messages m JOIN user_challenges c ON c.id = m.challenge_id "
+            "  WHERE (c.creator_id = ? OR c.target_id = ?) AND m.sender_id != ? AND m.created_at > ?"
+            "  UNION ALL"
+            "  SELECT 1 FROM event_comments e JOIN events ev ON ev.id = e.event_id "
+            "  WHERE (ev.created_by = ? OR ev.target_user = ?) AND e.user_id != ? AND e.created_at > ?"
+            ") LIMIT 1",
+            (
+                tg_user.id, last_viewed,
+                tg_user.id, tg_user.id, tg_user.id, last_viewed,
+                tg_user.id, tg_user.id, tg_user.id, last_viewed
+            )
         )
-        if rs_c.rows[0][0] > 0:
+        if rs_check.rows:
             has_new = True
-            
-        # 2. Новые сообщения в челленджах
-        if not has_new:
-            rs_m = await db._exec(
-                "SELECT COUNT(*) FROM challenge_messages m "
-                "JOIN user_challenges c ON c.id = m.challenge_id "
-                "WHERE (c.creator_id = ? OR c.target_id = ?) AND m.sender_id != ? AND m.created_at > ?",
-                (tg_user.id, tg_user.id, tg_user.id, last_viewed)
-            )
-            if rs_m.rows[0][0] > 0:
-                has_new = True
-
-        # 3. Новые комментарии к событиям
-        if not has_new:
-            rs_e = await db._exec(
-                "SELECT COUNT(*) FROM event_comments e "
-                "JOIN events ev ON ev.id = e.event_id "
-                "WHERE (ev.created_by = ? OR ev.target_user = ?) AND e.user_id != ? AND e.created_at > ?",
-                (tg_user.id, tg_user.id, tg_user.id, last_viewed)
-            )
-            if rs_e.rows[0][0] > 0:
-                has_new = True
     # ---------------------------------------
 
     body = json.dumps(

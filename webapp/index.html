@@ -6,7 +6,7 @@
 <meta name="api-base" content="https://couple-calendar-ycu9.onrender.com">
 <title>Календарь на двоих</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="css/style.css?v=6">
+<link rel="stylesheet" href="css/style.css?v=7">
 </head>
 <body>
 
@@ -19,7 +19,7 @@
   <h1>Календарь на двоих</h1>
   <p>Чтобы начать, отправьте пригласительную ссылку второму человеку. Когда он откроет её в боте, вы будете связаны.</p>
   <button class="btn primary" id="share">Отправить ссылку партнёру</button>
-<button class="btn ghost" id="copy">Скопировать ссылку</button>
+  <button class="btn ghost" id="copy">Скопировать ссылку</button>
 </section>
 
 <main id="app" hidden>
@@ -388,13 +388,14 @@
 
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
-<script src="js/api.js"></script>
-<script src="js/calendar.js"></script>
-<script src="js/list.js?v=20"></script>
-<script src="js/ideas.js"></script>
-<script src="js/form.js"></script>
-<script src="js/challenges.js?v=65"></script>
-<script src="js/shop.js?v=6"></script>
-<script src="js/main.js?v=110"></script>
+<!-- Добавлен defer для оптимизации загрузки -->
+<script src="js/api.js" defer></script>
+<script src="js/calendar.js" defer></script>
+<script src="js/list.js?v=21" defer></script>
+<script src="js/ideas.js" defer></script>
+<script src="js/form.js" defer></script>
+<script src="js/challenges.js?v=67" defer></script>
+<script src="js/shop.js?v=7" defer></script>
+<script src="js/main.js?v=111" defer></script>
 </body>
 </html>
