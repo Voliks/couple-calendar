@@ -1142,7 +1142,7 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
     now = int(time.time())
     for h in history:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
-        # Проверяем, прошло ли 86400 секунд (24 часа) с момента deadline
+        # Если статус approved и прошло больше 24 часов (86400 секунд) с момента deadline
         if h["status"] == "approved" and h.get("deadline", 0) > 0:
             if now - h["deadline"] > 86400:
                 h["is_archived"] = True
