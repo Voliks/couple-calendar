@@ -561,6 +561,44 @@ async def api_state(request: web.Request) -> web.Response:
             stats = await db.pair_stats(tg_user.id, user["partner_id"])
         except Exception:
             logging.exception("Не удалось получить статистику")
+    
+    # --- НОВАЯ ПРОВЕРКА НА КРАСНУЮ ТОЧКУ ---
+    rs = await db._exec("SELECT last_viewed_challenges FROM users WHERE telegram_id = ?", (tg_user.id,))
+    last_viewed = rs.rows[0][0] if rs.rows else 0
+    
+    has_new = False
+    if last_viewed > 0:
+        # 1. Новые челленджи от партнёра
+        rs_c = await db._exec(
+            "SELECT COUNT(*) FROM user_challenges WHERE target_id = ? AND created_at > ?",
+            (tg_user.id, last_viewed)
+        )
+        if rs_c.rows[0][0] > 0:
+            has_new = True
+            
+        # 2. Новые сообщения в челленджах
+        if not has_new:
+            rs_m = await db._exec(
+                "SELECT COUNT(*) FROM challenge_messages m "
+                "JOIN user_challenges c ON c.id = m.challenge_id "
+                "WHERE (c.creator_id = ? OR c.target_id = ?) AND m.sender_id != ? AND m.created_at > ?",
+                (tg_user.id, tg_user.id, tg_user.id, last_viewed)
+            )
+            if rs_m.rows[0][0] > 0:
+                has_new = True
+
+        # 3. Новые комментарии к событиям
+        if not has_new:
+            rs_e = await db._exec(
+                "SELECT COUNT(*) FROM event_comments e "
+                "JOIN events ev ON ev.id = e.event_id "
+                "WHERE (ev.created_by = ? OR ev.target_user = ?) AND e.user_id != ? AND e.created_at > ?",
+                (tg_user.id, tg_user.id, tg_user.id, last_viewed)
+            )
+            if rs_e.rows[0][0] > 0:
+                has_new = True
+    # ---------------------------------------
+
     body = json.dumps(
         {
             "has_partner": has_partner,
@@ -573,7 +611,8 @@ async def api_state(request: web.Request) -> web.Response:
             "allowed_reactions": ALLOWED_REACTIONS,
             "allowed_remind_before": sorted(ALLOWED_REMIND_BEFORE),
             "my_id": tg_user.id,
-            "balance": await db.get_user_balance(tg_user.id), # <--- ДОБАВИТЬ ВОТ ЭТО
+            "balance": await db.get_user_balance(tg_user.id),
+            "has_new_challenges": has_new, # <--- ПЕРЕДАЕМ ФЛАГ
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -1135,6 +1174,9 @@ async def api_set_challenge_photo(request: web.Request) -> web.Response:
 
 async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
+    # Обновляем время последнего просмотра (сбрасываем красную точку)
+    await db._exec("UPDATE users SET last_viewed_challenges = ? WHERE telegram_id = ?", (int(time.time()), tg_user.id))
+    
     balance = await db.get_user_balance(tg_user.id)
     history = await db.get_all_user_challenges(tg_user.id)
     catalog = await db.get_challenges_json()
@@ -1144,10 +1186,8 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
         h["is_archived"] = False
         
-        # Если челлендж завершен (выполнен или отклонен), проверяем, истекло ли время на его выполнение
         if h["status"] in ("approved", "rejected"):
             dl = h.get("deadline") or 0
-            # Если время истекло (now > deadline), отправляем в архив
             if dl > 0 and now > dl:
                 h["is_archived"] = True
 
@@ -1243,6 +1283,42 @@ async def api_create_challenge(request: web.Request) -> web.Response:
     )
     notify(user["partner_id"], f"⚔️ Тебе бросили вызов: «{text}» ({points} б.). На выполнение {hours} ч.")
     return web.json_response({"status": "created", "challenge": challenge}, status=201)
+
+async def api_challenge_action(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    challenge_id = _int_param(request, "id")
+    challenge = await db.get_user_challenge(challenge_id)
+    if not challenge or challenge["creator_id"] != tg_user.id:
+        raise ApiError("Челлендж не найден или у вас нет доступа", 404)
+
+    body = await read_json(request)
+    action = str(body.get("action") or body.get("status") or "").strip().lower()
+    if action in ("approve", "approved", "accept", "accepted"):
+        new_status = "approved"
+    elif action in ("reject", "rejected"):
+        new_status = "rejected"
+    else:
+        raise ApiError("Некорректное действие")
+
+    if not await db.transition_challenge(
+        challenge_id, ("submitted",), new_status
+    ):
+        raise ApiError("Этот челлендж уже обработан или ещё не отправлен", 409)
+
+    if new_status == "approved":
+        points = int(challenge.get("points", challenge.get("reward", 0)) or 0)
+        if points > 0:
+            await db.add_balance(challenge["target_id"], points)
+        notify(
+            challenge["target_id"],
+            f"✅ Челлендж «{challenge['text']}» принят! Начислено {points} б.",
+        )
+    else:
+        notify(
+            challenge["target_id"],
+            f"↩️ Выполнение челленджа «{challenge['text']}» отклонено. Можно отправить фото повторно.",
+        )
+    return web.json_response({"status": new_status})
 
 async def api_get_challenge_messages(request: web.Request) -> web.Response:
     tg_user = authenticate(request)

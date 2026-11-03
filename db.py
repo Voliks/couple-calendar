@@ -582,6 +582,8 @@ async def _m21_event_comments() -> None:
             created_at INTEGER NOT NULL
         )
     """)
+async def _m22_last_viewed() -> None:
+    await _add_column("users", "last_viewed_challenges", "INTEGER NOT NULL DEFAULT 0")
 
 MIGRATIONS = [
     (1, _m1_base),
@@ -606,6 +608,7 @@ MIGRATIONS = [
     (19, _m19_challenge_deadline),
     (20, _m20_shop_items),
     (21, _m21_event_comments),
+    (22, _m22_last_viewed)
 ]
 
 
