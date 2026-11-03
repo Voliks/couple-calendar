@@ -126,7 +126,10 @@ $("unlink").onclick = () => {
 };
 
 (() => {
-  const fab = $("add");
+  const fabAdd = $("add");
+  const fabChallenge = $("challengeBtn");
+  const fabShop = $("shopBtn");
+  
   let lastY = window.scrollY;
   let ticking = false;
   const THRESHOLD = 8;
@@ -137,17 +140,35 @@ $("unlink").onclick = () => {
     requestAnimationFrame(() => {
       const y = window.scrollY;
       const diff = y - lastY;
+      
+      const fabs = [fabAdd, fabChallenge, fabShop].filter(Boolean);
+
       if (y < 40) {
-        fab.classList.remove("fab-hidden");
+        fabs.forEach(f => f.classList.remove("fab-hidden"));
       } else if (diff > THRESHOLD) {
-        fab.classList.add("fab-hidden");
+        fabs.forEach(f => f.classList.add("fab-hidden"));
       } else if (diff < -THRESHOLD) {
-        fab.classList.remove("fab-hidden");
+        fabs.forEach(f => f.classList.remove("fab-hidden"));
       }
+      
       lastY = y;
       ticking = false;
     });
   }
+
+  window.addEventListener("scroll", onScroll, { passive: true });
+
+  const observer = new MutationObserver(() => {
+    const anyOpen = !$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden || !$("catOverlay").hidden 
+                 || !$("challengesOverlay").hidden || !$("shopOverlay").hidden;
+    if (anyOpen) {
+      [fabAdd, fabChallenge, fabShop].forEach(f => f && f.classList.remove("fab-hidden"));
+    }
+  });
+  ["overlay", "ideasOverlay", "archiveOverlay", "catOverlay", "challengesOverlay", "shopOverlay"].forEach(id => {
+    if ($(id)) observer.observe($(id), { attributes: true, attributeFilter: ["hidden"] });
+  });
+})();
 
   window.addEventListener("scroll", onScroll, { passive: true });
 
