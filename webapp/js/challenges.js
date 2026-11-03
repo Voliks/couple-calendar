@@ -503,7 +503,31 @@ try {
     }
   });
 
-  $("challengesList").addEventListener("click", (ev) => {
+  $("challengesList").addEventListener("click", async (ev) => {
+    // 1. Сначала проверяем, не нажали ли мы на крестик архивации
+    const archiveBtn = ev.target.closest(".archive-btn");
+    if (archiveBtn) {
+      ev.stopPropagation(); // Останавливаем дальнейшие клики
+      ev.preventDefault();
+      
+      const id = archiveBtn.dataset.archiveId;
+      archiveBtn.disabled = true;
+      archiveBtn.textContent = "⏳";
+      
+      try {
+        await api(`/challenges/${id}/archive`, { method: "POST" });
+        tg.HapticFeedback?.notificationOccurred("success");
+        toast("Убрано в архив");
+        await openChallenges(); // Перерисовываем список
+      } catch (err) {
+        toast(err.message);
+        archiveBtn.disabled = false;
+        archiveBtn.textContent = "×";
+      }
+      return; // Выходим, чтобы не открывать карточку
+    }
+
+    // 2. Если нажали не на крестик, а на саму карточку — открываем её
     const card = ev.target.closest("[data-challenge-id]");
     if (!card) return;
     openChallengeDetails(Number(card.dataset.challengeId));
