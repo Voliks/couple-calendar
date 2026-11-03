@@ -1142,7 +1142,7 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
     now = int(time.time())
     for h in history:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
-        # Если статус approved и прошло больше 24 часов (86400 секунд) с момента завершения (deadline)
+        # Проверяем, прошло ли 86400 секунд (24 часа) с момента deadline
         if h["status"] == "approved" and h.get("deadline", 0) > 0:
             if now - h["deadline"] > 86400:
                 h["is_archived"] = True
@@ -1217,8 +1217,10 @@ async def api_challenge_action(request: web.Request) -> web.Response:
         if not await db.transition_challenge(challenge_id, ("submitted",), "approved"):
             raise ApiError("Этот вызов нельзя засчитать в текущем статусе", 409)
         await db.add_balance(challenge["target_id"], challenge["reward"])
-        # Записываем время завершения в поле deadline для будущего архивирования
+        
+        # ВАЖНО: Записываем текущее время в поле deadline для архивации
         await db._exec("UPDATE user_challenges SET deadline = ? WHERE id = ?", (int(time.time()), challenge_id))
+        
         notify(challenge["target_id"], f"✅ Твой челлендж засчитан! Тебе начислено {challenge['reward']} баллов.")
     elif action == "reject" and is_creator:
         if not await db.transition_challenge(challenge_id, ("submitted",), "rejected"):
@@ -1227,7 +1229,6 @@ async def api_challenge_action(request: web.Request) -> web.Response:
     else:
         raise ApiError("Недопустимое действие", 400)
     return web.json_response({"status": "ok"})
-
 
 async def api_get_challenge_messages(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
