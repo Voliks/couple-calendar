@@ -35,9 +35,16 @@ async function openChallenges() {
     // Показываем либо архив, либо все активные (без slice, чтобы можно было прокручивать)
     let filtered;
     if (showArchive) {
+      // В архиве показываем только то, что сервер пометил как is_archived
       filtered = allChallenges.filter(c => c.is_archived);
     } else {
-      filtered = allChallenges.filter(c => !c.is_archived);
+      // В основном списке показываем:
+      // 1. Все активные (pending, submitted)
+      // 2. И только 3 последних завершенных (approved, rejected), которые еще не ушли в архив
+      const active = allChallenges.filter(c => c.status === "pending" || c.status === "submitted");
+      const recentlyDone = allChallenges.filter(c => (c.status === "approved" || c.status === "rejected") && !c.is_archived).slice(0, 3);
+      
+      filtered = [...active, ...recentlyDone].sort((a, b) => b.created_at - a.created_at);
     }
 
     // Инициализируем категории (если еще не выбрана)
