@@ -56,7 +56,18 @@ function render() {
   $("welcome").hidden = state.has_partner;
   const canShowApp = state.has_partner || (state.events && state.events.length > 0);
   $("app").hidden = !canShowApp;
-  if (canShowApp) { renderCalendar(); renderList(); renderStats(); }
+  
+  if (canShowApp) { 
+    renderCalendar(); 
+    renderList(); 
+    renderStats(); 
+    
+    // Показываем/скрываем красную точку на мечах
+    const badge = $("challengeBadge");
+    if (badge) {
+      badge.hidden = !state.has_new_challenges;
+    }
+  }
 }
 
 function renderStats() {
@@ -167,17 +178,6 @@ $("unlink").onclick = () => {
   });
   ["overlay", "ideasOverlay", "archiveOverlay", "catOverlay", "challengesOverlay", "shopOverlay"].forEach(id => {
     if ($(id)) observer.observe($(id), { attributes: true, attributeFilter: ["hidden"] });
-  });
-})();
-
-  window.addEventListener("scroll", onScroll, { passive: true });
-
-  const observer = new MutationObserver(() => {
-    const anyOpen = !$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden || !$("catOverlay").hidden;
-    if (anyOpen) fab.classList.remove("fab-hidden");
-  });
-  ["overlay", "ideasOverlay", "archiveOverlay", "catOverlay"].forEach(id => {
-    observer.observe($(id), { attributes: true, attributeFilter: ["hidden"] });
   });
 })();
 
