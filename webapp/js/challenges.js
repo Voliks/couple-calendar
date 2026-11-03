@@ -32,18 +32,13 @@ async function openChallenges() {
     catalogData = res.catalog || {};
     $("challengeBalance").textContent = res.balance ?? 0;
 
-    // Показываем либо архив, либо все активные (без slice, чтобы можно было прокручивать)
     let filtered;
     if (showArchive) {
-      // В архиве показываем только то, что сервер пометил как is_archived
       filtered = allChallenges.filter(c => c.is_archived);
     } else {
-      // В основном списке показываем:
-      // 1. Все активные (pending, submitted)
-      // 2. И только 3 последних завершенных (approved, rejected), которые еще не ушли в архив
+      // В основном списке показываем активные и недавно завершенные, которые еще не ушли в архив
       const active = allChallenges.filter(c => c.status === "pending" || c.status === "submitted");
       const recentlyDone = allChallenges.filter(c => (c.status === "approved" || c.status === "rejected") && !c.is_archived).slice(0, 3);
-      
       filtered = [...active, ...recentlyDone].sort((a, b) => b.created_at - a.created_at);
     }
 
@@ -94,16 +89,16 @@ function renderChallenges(listToRender = []) {
       dateStr = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
     }
 
-    // Крестик для ручной архивации (показываем только если челлендж не в архиве)
+    // Крестик (только если не в архиве)
     const archiveIcon = !c.is_archived && !showArchive 
-      ? `<button class="archive-btn" data-archive-id="${c.id}" style="background:none; border:none; color:var(--hint); font-size:18px; cursor:pointer; padding: 0 4px; margin-left: 8px;" title="Убрать в архив">×</button>` 
+      ? `<button class="archive-btn" data-archive-id="${c.id}" style="background:none; border:none; color:var(--hint); font-size:22px; cursor:pointer; padding: 0 8px; line-height:1;" title="Убрать в архив">×</button>` 
       : "";
 
     return `<div class="${cls}" data-challenge-id="${c.id}" style="padding: 10px 12px; margin-bottom: 0; border-radius: 12px; border-left-width: 3px; display: flex; flex-direction: column; gap: 6px; position: relative;">
       
-      <div class="challenge-header" style="margin: 0; font-size: 11px; display: flex; justify-content: space-between; align-items: flex-start;">
+      <div class="challenge-header" style="margin: 0; font-size: 11px; display: flex; justify-content: space-between; align-items: center; width: 100%;">
         <span>${esc(c.category)}</span>
-        <div style="display: flex; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 6px;">
           <span style="opacity: 0.8;">${statusLabel(c)} · ${dateStr}</span>
           ${archiveIcon}
         </div>
@@ -140,7 +135,6 @@ function updateIdeaList() {
     const text = typeof idea === "object" ? idea.challenge : idea;
     const points = typeof idea === "object" ? idea.points : 10;
     
-    // По умолчанию выбираем первое
     if (index === 0 && !selectedIdeaData) {
       selectedIdeaData = { text, points };
       $("newChallengeReward").value = points;
@@ -375,7 +369,6 @@ async function viewChallengePhoto() {
     const paths = currentChallenge.photo_id.split(",").filter(Boolean);
     const urls = [];
 
-    // Получаем все ссылки
     for (const path of paths) {
       const res = await api(`/challenges/photo-url?path=${encodeURIComponent(path)}`);
       if (res.view_url) urls.push(res.view_url);
@@ -383,7 +376,6 @@ async function viewChallengePhoto() {
 
     if (!urls.length) throw new Error("Ссылки не получены");
 
-    // Показываем наше модальное окно с фото
     const container = $("photoViewerContent");
     container.innerHTML = urls.map((url, i) => `
       <img src="${url}" style="max-width: 100%; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);" alt="Фото ${i+1}">
@@ -480,54 +472,40 @@ try {
   $("challengesClose").onclick = closeChallenges;
   $("createChallengeBtn").onclick = createChallenge;
 
-    // Обработка клика по крестику (в архив)
-  $("challengesList").addEventListener("click", async (e) => {
-    const archiveBtn = e.target.closest(".archive-btn");
+  // Клик по крестику (pointerdown) — срабатывает мгновенно
+  $("challengesList").addEventListener("pointerdown", async (ev) => {
+    const archiveBtn = ev.target.closest(".archive-btn");
     if (archiveBtn) {
-      e.stopPropagation(); // Чтобы не открылось окно челленджа
+      ev.preventDefault();
+      ev.stopPropagation();
+      
       const id = archiveBtn.dataset.archiveId;
-      archiveBtn.disabled = true;
       archiveBtn.textContent = "⏳";
+      archiveBtn.disabled = true;
       
       try {
         await api(`/challenges/${id}/archive`, { method: "POST" });
         tg.HapticFeedback?.notificationOccurred("success");
         toast("Убрано в архив");
+        
+        // Скрываем карточку сразу
+        const card = archiveBtn.closest(".challenge-card");
+        if (card) card.style.display = "none";
+        
+        // Перезагружаем список
         await openChallenges();
       } catch (err) {
         toast(err.message);
-        archiveBtn.disabled = false;
         archiveBtn.textContent = "×";
+        archiveBtn.disabled = false;
       }
       return;
     }
   });
 
-  $("challengesList").addEventListener("click", async (ev) => {
-    // 1. Сначала проверяем, не нажали ли мы на крестик архивации
-    const archiveBtn = ev.target.closest(".archive-btn");
-    if (archiveBtn) {
-      ev.stopPropagation(); // Останавливаем дальнейшие клики
-      ev.preventDefault();
-      
-      const id = archiveBtn.dataset.archiveId;
-      archiveBtn.disabled = true;
-      archiveBtn.textContent = "⏳";
-      
-      try {
-        await api(`/challenges/${id}/archive`, { method: "POST" });
-        tg.HapticFeedback?.notificationOccurred("success");
-        toast("Убрано в архив");
-        await openChallenges(); // Перерисовываем список
-      } catch (err) {
-        toast(err.message);
-        archiveBtn.disabled = false;
-        archiveBtn.textContent = "×";
-      }
-      return; // Выходим, чтобы не открывать карточку
-    }
-
-    // 2. Если нажали не на крестик, а на саму карточку — открываем её
+  // Клик по карточке для открытия
+  $("challengesList").addEventListener("click", (ev) => {
+    if (ev.target.closest(".archive-btn")) return; // Игнорируем клик по крестику
     const card = ev.target.closest("[data-challenge-id]");
     if (!card) return;
     openChallengeDetails(Number(card.dataset.challengeId));
