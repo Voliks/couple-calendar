@@ -3,6 +3,7 @@ let catalogData = {};
 let currentChallenge = null;
 let chatPollTimer = null;
 let showArchive = false;
+let selectedIdeaData = null; // Хранит выбранную идею (текст и баллы)
 
 /* ---------- Список ---------- */
 
@@ -34,14 +35,14 @@ async function openChallenges() {
     
     const elementsToToggle = [
       "label[for='challengeCategorySelect']", "#challengeCategorySelect",
-      "label[for='challengeIdeaSelect']", "#challengeIdeaSelect",
+      "label:has(#challengeIdeaList)", "#challengeIdeaList",
       "#customChallengeBlock", 
       "label[for='newChallengeReward']", "#newChallengeReward",
       "label[for='challengeDeadlineSelect']", "#challengeDeadlineSelect"
     ];
     elementsToToggle.forEach(sel => {
       const el = document.querySelector(sel);
-      if (el) el.style.display = showArchive ? "none" : (sel === "#customChallengeBlock" ? "flex" : "block");
+      if (el) el.style.display = showArchive ? "none" : (sel === "#customChallengeBlock" ? "flex" : (sel === "#challengeIdeaList" ? "block" : "block"));
     });
 
     // Фильтруем: в основном списке только 3 последних неархивных, в архиве — все архивные
@@ -59,7 +60,7 @@ async function openChallenges() {
     ).join("");
     if (prevCat && catalogData[prevCat]) catSelect.value = prevCat;
 
-    updateIdeaSelect();
+    updateIdeaList();
     renderChallenges(filtered);
   } catch (e) {
     $("challengesList").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
@@ -113,36 +114,52 @@ function renderChallenges(listToRender = []) {
   }).join("");
 }
 
-/* ---------- Выбор идеи / создание ---------- */
+/* ---------- Кастомный список заданий (как в магазине) ---------- */
 
-function updateIdeaSelect() {
+function updateIdeaList() {
   const cat = $("challengeCategorySelect").value;
   const ideas = catalogData[cat] || [];
-  const sel = $("challengeIdeaSelect");
-  sel.innerHTML = ideas.map(idea => {
+  const list = $("challengeIdeaList");
+  
+  if (!ideas.length) {
+    list.innerHTML = `<div style="padding: 10px; color: var(--hint); text-align: center; font-size: 14px;">Нет доступных заданий</div>`;
+    return;
+  }
+
+  list.innerHTML = ideas.map((idea, index) => {
     const text = typeof idea === "object" ? idea.challenge : idea;
     const points = typeof idea === "object" ? idea.points : 10;
-    return `<option value="${esc(text)}" data-points="${points}">${esc(text)} (${points} б.)</option>`;
+    
+    // По умолчанию выбираем первое
+    if (index === 0 && !selectedIdeaData) {
+      selectedIdeaData = { text, points };
+      $("newChallengeReward").value = points;
+    }
+    
+    const isSelected = selectedIdeaData && selectedIdeaData.text === text;
+
+    return `<div class="card accepted" style="margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-left: 4px solid ${isSelected ? 'var(--accent)' : 'transparent'}; cursor: pointer; background: ${isSelected ? 'rgba(36,129,204,0.1)' : 'var(--bg2)'};" data-idea-idx="${index}" data-idea-text="${esc(text)}" data-idea-points="${points}">
+      <div style="font-size: 14px; font-weight: 500; word-break: break-word; margin-right: 10px;">${esc(text)}</div>
+      <div style="font-size: 13px; font-weight: bold; white-space: nowrap; color: #eab308;">🏆 ${points}</div>
+    </div>`;
   }).join("");
-  updateRewardInput();
 }
 
-function updateRewardInput() {
-  const sel = $("challengeIdeaSelect");
-  const opt = sel.options[sel.selectedIndex];
-  if (opt && opt.dataset.points) {
-    $("newChallengeReward").value = opt.dataset.points;
-  }
-}
+/* ---------- Создание челленджа ---------- */
 
 async function createChallenge() {
   const cat = $("challengeCategorySelect").value;
-  const sel = $("challengeIdeaSelect");
-  const opt = sel.options[sel.selectedIndex];
-  if (!opt || !opt.value) return toast("Выберите задание");
+  
+  // Берем либо выбранную из списка, либо кастомную (если она в приоритете)
+  let text = selectedIdeaData ? selectedIdeaData.text : "";
+  const customInput = $("customChallengeInput");
+  if (customInput && customInput.value.trim()) {
+    text = customInput.value.trim();
+  }
 
-  const text = opt.value;
-  const points = parseInt($("newChallengeReward").value, 10) || parseInt(opt.dataset.points, 10) || 10;
+  if (!text) return toast("Выберите или введите задание");
+
+  const points = parseInt($("newChallengeReward").value, 10) || 10;
   const hours = parseInt($("challengeDeadlineSelect").value, 10) || 24;
 
   const btn = $("createChallengeBtn");
@@ -453,10 +470,7 @@ try {
   if (closeBtn) closeBtn.onclick = closeChallenges;
 
   const catSelect = $("challengeCategorySelect");
-  if (catSelect) catSelect.onchange = updateIdeaSelect;
-
-  const ideaSelect = $("challengeIdeaSelect");
-  if (ideaSelect) ideaSelect.onchange = updateRewardInput;
+  if (catSelect) catSelect.onchange = updateIdeaList; // Обновляем список при смене категории
 
   const createBtn = $("createChallengeBtn");
   if (createBtn) createBtn.onclick = createChallenge;
@@ -469,6 +483,27 @@ try {
       openChallenges();
     };
   }
+
+  // Обработка выбора задания из кастомного списка
+  $("challengeIdeaList").addEventListener("click", (e) => {
+    const card = e.target.closest("[data-idea-idx]");
+    if (!card) return;
+    
+    const text = card.dataset.ideaText;
+    const points = parseInt(card.dataset.ideaPoints, 10);
+    selectedIdeaData = { text, points };
+    
+    // Подсвечиваем выбранную карточку
+    $("challengeIdeaList").querySelectorAll("[data-idea-idx]").forEach(el => {
+      el.style.borderLeftColor = "transparent";
+      el.style.background = "var(--bg2)";
+    });
+    card.style.borderLeftColor = "var(--accent)";
+    card.style.background = "rgba(36,129,204,0.1)";
+    
+    // Обновляем баллы
+    $("newChallengeReward").value = points;
+  });
 
   $("challengesList").addEventListener("click", (ev) => {
     const card = ev.target.closest("[data-challenge-id]");
@@ -526,16 +561,16 @@ try {
       const text = customInput.value.trim();
       if (!text) return toast("Введите текст задания");
       
-      const sel = $("challengeIdeaSelect");
-      const newOption = document.createElement("option");
-      newOption.value = text;
-      newOption.textContent = text + " (Своё)";
-      newOption.dataset.points = "10"; // По умолчанию 10 баллов
-      newOption.selected = true;
+      // Снимаем выделение со старых карточек, так как выбрано кастомное
+      $("challengeIdeaList").querySelectorAll("[data-idea-idx]").forEach(el => {
+        el.style.borderLeftColor = "transparent";
+        el.style.background = "var(--bg2)";
+      });
+      selectedIdeaData = null; 
       
-      sel.appendChild(newOption);
       customInput.value = "";
-      $("newChallengeReward").value = "10"; // Обновляем поле с баллами
+      $("newChallengeReward").value = "10"; // По умолчанию 10 баллов
+      toast("Своё задание добавлено. Нажмите Отправить.");
     };
     
     customInput.addEventListener("keydown", (e) => {
