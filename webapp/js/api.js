@@ -46,7 +46,7 @@ function fmtRange(start, end) {
 let state = {
   has_partner: false, invite_link: "", events: [], sex_ideas: [],
   stats: null, todo_colors: [], allowed_reactions: [], allowed_remind_before: [],
-  multi_select: new Set(), my_id: 0, balance: 0 // <--- ДОБАВИТЬ my_id и balance
+  multi_select: new Set(), my_id: 0, balance: 0,
 };
 let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
@@ -130,3 +130,7 @@ function openCommentDialog(initial, onConfirm) {
 }
 
 let etag = null, etagKey = "";
+
+// Все модальные окна приложения; используется для блокировки жестов, опроса сервера и FAB-кнопок
+const OVERLAY_IDS = ["overlay", "ideasOverlay", "archiveOverlay", "catOverlay", "challengesOverlay", "shopOverlay", "buyDateOverlay"];
+const anyOverlayOpen = () => OVERLAY_IDS.some((id) => { const el = $(id); return el && !el.hidden; });

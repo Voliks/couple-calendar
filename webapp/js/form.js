@@ -52,9 +52,9 @@ function updateFormSections() {
   $("restSection").hidden = !(isRest && isRange);
 
   if (isShop && !editingEvent) renderFormChecklist();
-  if (isTodo) renderTodoSection();
-  if (isPersonal) renderPersonalSection();
-  if (isRest && isRange) renderRestSection();
+  if (isTodo) renderColors("todoColors");
+  if (isPersonal) renderColors("personalColors");
+  if (isRest && isRange) renderColors("restColors");
   updateRemindAvailability();
 
   if (!isSex) {
@@ -64,61 +64,28 @@ function updateFormSections() {
   }
 }
 
-function renderTodoSection() {
-  const box = $("todoColors");
+const COLOR_BOXES = ["todoColors", "personalColors", "restColors"];
+
+function renderColors(boxId) {
+  const box = $(boxId);
   if (!box) return;
-  const colors = availableTodoColors();
-  box.innerHTML = colors.map(c =>
+  box.innerHTML = availableTodoColors().map(c =>
     `<button type="button" class="todo-color${c === formColor ? " selected" : ""}"
              data-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
   ).join("");
 }
 
-function renderPersonalSection() {
-  const box = $("personalColors");
+COLOR_BOXES.forEach((boxId) => {
+  const box = $(boxId);
   if (!box) return;
-  const colors = availableTodoColors();
-  box.innerHTML = colors.map(c =>
-    `<button type="button" class="todo-color${c === formColor ? " selected" : ""}"
-             data-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
-  ).join("");
-}
-
-function renderRestSection() {
-  const box = $("restColors");
-  if (!box) return;
-  const colors = availableTodoColors();
-  box.innerHTML = colors.map(c =>
-    `<button type="button" class="todo-color${c === formColor ? " selected" : ""}"
-             data-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
-  ).join("");
-}
-
-$("todoColors").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-color]");
-  if (!b) return;
-  formColor = b.dataset.color;
-  renderTodoSection();
-  updateMultiColorPreview();
-  tg.HapticFeedback?.selectionChanged();
-});
-
-$("personalColors").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-color]");
-  if (!b) return;
-  formColor = b.dataset.color;
-  renderPersonalSection();
-  updateMultiColorPreview();
-  tg.HapticFeedback?.selectionChanged();
-});
-
-$("restColors").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-color]");
-  if (!b) return;
-  formColor = b.dataset.color;
-  renderRestSection();
-  updateMultiColorPreview();
-  tg.HapticFeedback?.selectionChanged();
+  box.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-color]");
+    if (!b) return;
+    formColor = b.dataset.color;
+    renderColors(boxId);
+    updateMultiColorPreview();
+    tg.HapticFeedback?.selectionChanged();
+  });
 });
 
 function renderFormChecklist() {
