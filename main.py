@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import gzip
 import hashlib
 import json
 import logging
@@ -270,6 +271,32 @@ def _add_cors(request: web.Request, response: web.StreamResponse) -> None:
         h["Access-Control-Max-Age"] = "86400"
 
 
+# --- НОВЫЙ MIDDLEWARE ДЛЯ СЖАТИЯ (GZIP) ---
+@web.middleware
+async def gzip_middleware(request: web.Request, handler):
+    response = await handler(request)
+    
+    # Сжимаем только если это не файл из storage и клиент поддерживает gzip
+    if (
+        isinstance(response, web.Response)
+        and response.body
+        and response.status == 200
+        and request.path.startswith(("/api", "/js", "/css"))
+        and "gzip" in request.headers.get("Accept-Encoding", "").lower()
+    ):
+        try:
+            compressed = gzip.compress(response.body)
+            response.body = compressed
+            response.headers["Content-Encoding"] = "gzip"
+            response.headers["Vary"] = "Accept-Encoding"
+            # Убираем Content-Length, так как он изменился
+            response.headers.pop("Content-Length", None)
+        except Exception as e:
+            logging.error("Gzip compression failed: %s", e)
+            
+    return response
+
+
 @web.middleware
 async def api_middleware(request: web.Request, handler):
     try:
@@ -290,9 +317,7 @@ async def api_middleware(request: web.Request, handler):
         logging.exception("Необработанная ошибка в API")
         response = web.json_response({"error": "Внутренняя ошибка сервера"}, status=500)
     if request.path.startswith(("/css/", "/js/")):
-        response.headers["Cache-Control"] = (
-            "no-cache"  # проверять обновления при каждом открытии
-        )
+        response.headers["Cache-Control"] = "no-cache"
     _add_cors(request, response)
     return response
 
@@ -550,8 +575,7 @@ async def api_state(request: web.Request) -> web.Response:
         user = await db.ensure_invite(user)
         events = await db.list_events_range(tg_user.id, start, end)
         link = invite_link(user["invite_code"])
-    # Независимые чтения выполняем одновременно: для Turso это сокращает
-    # суммарное время ожидания сетевых round-trip.
+    # Независимые чтения выполняем одновременно
     async def _safe_ideas():
         try:
             return await db.get_sex_ideas(tg_user.id, user["partner_id"])
@@ -569,7 +593,6 @@ async def api_state(request: web.Request) -> web.Response:
             return None
 
     async def _has_new_activity():
-        # Один запрос вместо чтения last_viewed + отдельной проверки.
         rs = await db._exec(
             "WITH v AS ("
             " SELECT COALESCE(last_viewed_challenges, 0) AS ts "
@@ -1186,7 +1209,7 @@ async def api_set_challenge_photo(request: web.Request) -> web.Response:
 async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     
-    # Выполняем все чтения одновременно (параллельно)
+    # Выполняем все чтения одновременно
     _, balance, history, catalog = await asyncio.gather(
         db._exec("UPDATE users SET last_viewed_challenges = ? WHERE telegram_id = ?", (int(time.time()), tg_user.id)),
         db.get_user_balance(tg_user.id),
@@ -1211,14 +1234,13 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
         "my_id": tg_user.id,
     })
 
+
 async def api_create_challenge(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     user = await db.get_or_create_user(tg_user.id)
     if not user["partner_id"]:
         raise ApiError("Сначала свяжитесь с партнёром", 409)
 
-    # Проверяем, сколько АКТИВНЫХ челленджей создано сегодня.
-    # Архивные и отклоненные больше не считаются.
     now = int(time.time())
     start_of_day = now - (now % 86400)
     
@@ -1569,7 +1591,10 @@ async def main() -> None:
                 BotCommand(command="unlink", description="Отвязать партнёра"),
             ]
         )
-    app = web.Application(middlewares=[api_middleware], client_max_size=1024 * 1024)
+    
+    # Подключаем gzip_middleware ПЕРЕД api_middleware
+    app = web.Application(middlewares=[gzip_middleware, api_middleware], client_max_size=1024 * 1024)
+    
     app.router.add_get("/", index)
     app.router.add_get("/health", health_check)
     app.router.add_static("/css", INDEX_FILE.parent / "css")
