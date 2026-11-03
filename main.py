@@ -1185,11 +1185,14 @@ async def api_set_challenge_photo(request: web.Request) -> web.Response:
 
 async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
-    await db._exec("UPDATE users SET last_viewed_challenges = ? WHERE telegram_id = ?", (int(time.time()), tg_user.id))
     
-    balance = await db.get_user_balance(tg_user.id)
-    history = await db.get_all_user_challenges(tg_user.id)
-    catalog = await db.get_challenges_json()
+    # Выполняем все чтения одновременно (параллельно)
+    _, balance, history, catalog = await asyncio.gather(
+        db._exec("UPDATE users SET last_viewed_challenges = ? WHERE telegram_id = ?", (int(time.time()), tg_user.id)),
+        db.get_user_balance(tg_user.id),
+        db.get_all_user_challenges(tg_user.id),
+        db.get_challenges_json()
+    )
     
     now = int(time.time())
     for h in history:
@@ -1207,7 +1210,6 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
         "catalog": catalog,
         "my_id": tg_user.id,
     })
-
 
 async def api_create_challenge(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
