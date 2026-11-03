@@ -30,19 +30,17 @@ async function openChallenges() {
     $("challengeBalance").textContent = res.balance ?? 0;
 
     // Скрываем интерфейс создания, если мы в архиве
-    const formRow = document.querySelector(".row:has(#createChallengeBtn)");
-    if (formRow) formRow.style.display = showArchive ? "none" : "grid";
-    
-    const elementsToToggle = [
+    const elementsToHide = [
       "label[for='challengeCategorySelect']", "#challengeCategorySelect",
-      "label:has(#challengeIdeaList)", "#challengeIdeaList",
+      "#challengeIdeaLabel", "#challengeIdeaList",
       "#customChallengeBlock", 
       "label[for='newChallengeReward']", "#newChallengeReward",
-      "label[for='challengeDeadlineSelect']", "#challengeDeadlineSelect"
+      "label[for='challengeDeadlineSelect']", "#challengeDeadlineSelect",
+      ".row:has(#createChallengeBtn)"
     ];
-    elementsToToggle.forEach(sel => {
+    elementsToHide.forEach(sel => {
       const el = document.querySelector(sel);
-      if (el) el.style.display = showArchive ? "none" : (sel === "#customChallengeBlock" ? "flex" : (sel === "#challengeIdeaList" ? "block" : "block"));
+      if (el) el.style.display = showArchive ? "none" : (sel === "#customChallengeBlock" ? "flex" : "block");
     });
 
     // Фильтруем: в основном списке только 3 последних неархивных, в архиве — все архивные
@@ -470,7 +468,11 @@ try {
   if (closeBtn) closeBtn.onclick = closeChallenges;
 
   const catSelect = $("challengeCategorySelect");
-  if (catSelect) catSelect.onchange = updateIdeaList; // Обновляем список при смене категории
+  if (catSelect) catSelect.onchange = () => {
+    // При смене категории сбрасываем выбранное
+    selectedIdeaData = null;
+    updateIdeaList();
+  };
 
   const createBtn = $("createChallengeBtn");
   if (createBtn) createBtn.onclick = createChallenge;
@@ -493,6 +495,9 @@ try {
     const points = parseInt(card.dataset.ideaPoints, 10);
     selectedIdeaData = { text, points };
     
+    // Очищаем кастомный инпут, так как выбрали из списка
+    $("customChallengeInput").value = "";
+
     // Подсвечиваем выбранную карточку
     $("challengeIdeaList").querySelectorAll("[data-idea-idx]").forEach(el => {
       el.style.borderLeftColor = "transparent";
