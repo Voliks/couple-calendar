@@ -21,8 +21,10 @@ async function openChallenges() {
 
   try {
     const res = await api("/challenges");
+    
     // Сортируем: новые сверху
     allChallenges = (res.history || []).sort((a, b) => b.created_at - a.created_at);
+    
     catalogData = res.catalog || {};
     $("challengeBalance").textContent = res.balance ?? 0;
 
@@ -41,7 +43,13 @@ async function openChallenges() {
       if (el) el.style.display = showArchive ? "none" : "block";
     });
 
-    const filtered = allChallenges.filter(c => showArchive ? c.is_archived : !c.is_archived);
+    // Фильтруем: в основном списке только 3 последних неархивных, в архиве — все архивные
+    let filtered;
+    if (showArchive) {
+      filtered = allChallenges.filter(c => c.is_archived);
+    } else {
+      filtered = allChallenges.filter(c => !c.is_archived).slice(0, 3);
+    }
     
     const catSelect = $("challengeCategorySelect");
     const prevCat = catSelect.value;
