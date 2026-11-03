@@ -1462,6 +1462,30 @@ async def api_post_event_comment(request: web.Request) -> web.Response:
     notify(partner_id, f"💬 Новый комментарий к событию «{event['title']}»:\n\n{text}")
     
     return web.json_response({"status": "ok"})
+async def api_delete_challenge(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    challenge_id = _int_param(request, "id")
+    challenge = await db.get_user_challenge(challenge_id)
+    
+    if not challenge:
+        raise ApiError("Челлендж не найден", 404)
+    if challenge["creator_id"] != tg_user.id:
+        raise ApiError("Удалить может только тот, кто бросил вызов", 403)
+    if challenge["status"] != "pending":
+        raise ApiError("Нельзя удалить челлендж, который уже выполняется или завершен", 403)
+
+    # Также удаляем сообщения из чата этого челленджа
+    await db._exec("DELETE FROM challenge_messages WHERE challenge_id = ?", (challenge_id,))
+    await db.delete_user_challenge(challenge_id, tg_user.id)
+    
+    return web.json_response({"status": "deleted"})
+
+async def api_add_custom_challenge(request: web.Request) -> web.Response:
+    # Пока просто возвращаем успех, чтобы фронтенд знал, что можно добавить в список
+    # (Мы будем сохранять пользовательские задания прямо в challenges.json? 
+    # Нет, лучше хранить их в отдельной таблице или просто в оперативной памяти.
+    # Для простоты разрешим создавать прямо при броске вызова.)
+    pass
 
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})

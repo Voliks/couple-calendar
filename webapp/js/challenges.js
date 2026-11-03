@@ -35,12 +35,13 @@ async function openChallenges() {
     const elementsToToggle = [
       "label[for='challengeCategorySelect']", "#challengeCategorySelect",
       "label[for='challengeIdeaSelect']", "#challengeIdeaSelect",
+      "#customChallengeBlock", 
       "label[for='newChallengeReward']", "#newChallengeReward",
       "label[for='challengeDeadlineSelect']", "#challengeDeadlineSelect"
     ];
     elementsToToggle.forEach(sel => {
       const el = document.querySelector(sel);
-      if (el) el.style.display = showArchive ? "none" : "block";
+      if (el) el.style.display = showArchive ? "none" : (sel === "#customChallengeBlock" ? "flex" : "block");
     });
 
     // Фильтруем: в основном списке только 3 последних неархивных, в архиве — все архивные
@@ -208,6 +209,11 @@ function openChallengeDetails(id) {
   const isCreator = c.is_creator;
   const canReview = isCreator && c.status === "submitted";
   $("chatCreatorActions").style.display = canReview ? "flex" : "none";
+
+  // Показываем кнопку удаления (только создатель и только в статусе pending)
+  const canDelete = isCreator && c.status === "pending";
+  const delBlock = $("chatDeleteBlock");
+  if (delBlock) delBlock.style.display = canDelete ? "block" : "none";
 
   // Загружаем историю сообщений
   loadMessages(id);
@@ -491,6 +497,54 @@ try {
 
   const rejectBtn = $("chatRejectBtn");
   if (rejectBtn) rejectBtn.onclick = () => challengeAction("reject");
+
+  // Кнопка удаления
+  const deleteBtn = $("chatDeleteBtn");
+  if (deleteBtn) {
+    deleteBtn.onclick = async () => {
+      if (!currentChallenge) return;
+      confirmDialog("Точно удалить этот вызов?", async () => {
+        try {
+          await api(`/challenges/${currentChallenge.id}`, { method: "DELETE" });
+          toast("Вызов удален");
+          tg.HapticFeedback?.notificationOccurred("success");
+          closeChallengeDetails();
+          await openChallenges();
+        } catch (e) {
+          toast(e.message);
+        }
+      });
+    };
+  }
+
+  // Добавление своего задания
+  const customBtn = $("customChallengeBtn");
+  const customInput = $("customChallengeInput");
+  
+  if (customBtn && customInput) {
+    customBtn.onclick = () => {
+      const text = customInput.value.trim();
+      if (!text) return toast("Введите текст задания");
+      
+      const sel = $("challengeIdeaSelect");
+      const newOption = document.createElement("option");
+      newOption.value = text;
+      newOption.textContent = text + " (Своё)";
+      newOption.dataset.points = "10"; // По умолчанию 10 баллов
+      newOption.selected = true;
+      
+      sel.appendChild(newOption);
+      customInput.value = "";
+      $("newChallengeReward").value = "10"; // Обновляем поле с баллами
+    };
+    
+    customInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        customBtn.click();
+      }
+    });
+  }
 
   const sendBtn = $("chatSendBtn");
   if (sendBtn) sendBtn.onclick = sendMessage;

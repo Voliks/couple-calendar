@@ -1362,3 +1362,11 @@ async def transition_challenge(challenge_id: int, from_statuses: Sequence[str], 
         args = (new_status, photo_id, challenge_id, *from_statuses)
     rs = await _exec(sql, args)
     return rs.affected == 1
+
+async def delete_user_challenge(challenge_id: int, user_id: int) -> bool:
+    # Удаляем только если создатель совпадает и статус pending
+    rs = await _exec(
+        "DELETE FROM user_challenges WHERE id = ? AND creator_id = ? AND status = 'pending'",
+        (challenge_id, user_id)
+    )
+    return rs.affected == 1
