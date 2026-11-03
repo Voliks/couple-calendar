@@ -1143,12 +1143,13 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
     for h in history:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
         h["is_archived"] = False
-        if h["status"] == "approved":
+        
+        # Если челлендж завершен (выполнен или отклонен), проверяем, истекло ли время на его выполнение
+        if h["status"] in ("approved", "rejected"):
             dl = h.get("deadline") or 0
-            # Новые: deadline = момент подтверждения (всегда <= now).
-            # Старые: deadline мог остаться в будущем или быть 0 — считаем от created_at.
-            done_at = dl if 0 < dl <= now else (h.get("created_at") or 0)
-            h["is_archived"] = done_at > 0 and now - done_at > 86400
+            # Если время истекло (now > deadline), отправляем в архив
+            if dl > 0 and now > dl:
+                h["is_archived"] = True
 
     return web.json_response({
         "balance": balance,
@@ -1201,32 +1202,47 @@ async def api_create_challenge(request: web.Request) -> web.Response:
     return web.json_response({"status": "created", "challenge": challenge}, status=201)
 
 
-async def api_challenge_action(request: web.Request) -> web.Response:
+async def api_create_challenge(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
-    challenge_id = _int_param(request, "id")
-    challenge = await db.get_user_challenge(challenge_id)
-    if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
-        raise ApiError("Челлендж не найден", 404)
+    user = await db.get_or_create_user(tg_user.id)
+    if not user["partner_id"]:
+        raise ApiError("Сначала свяжитесь с партнёром", 409)
 
-    action = (await read_json(request)).get("action")
-    is_creator = tg_user.id == challenge["creator_id"]
+    # Проверяем, сколько ВСЕГО челленджей создано сегодня (независимо от статуса)
+    now = int(time.time())
+    start_of_day = now - (now % 86400)
+    rs = await db._exec(
+        "SELECT COUNT(*) FROM user_challenges "
+        "WHERE creator_id = ? AND created_at >= ?",
+        (tg_user.id, start_of_day)
+    )
+    created_today = rs.rows[0][0]
+    if created_today >= 3:
+        raise ApiError("Лимит на сегодня: можно создать не более 3 челленджей.", 429)
 
-    if action == "approve" and is_creator:
-        if not await db.transition_challenge(challenge_id, ("submitted",), "approved"):
-            raise ApiError("Этот вызов нельзя засчитать в текущем статусе", 409)
-        await db.add_balance(challenge["target_id"], challenge["reward"])
+    body = await read_json(request)
+    text = str(body.get("text") or "").strip()[:300]
+    category = str(body.get("category") or "").strip()[:50] or "Своё"
+    try:
+        points = int(body.get("reward"))
+        hours = int(body.get("hours", 24))
+    except (TypeError, ValueError):
+        raise ApiError("Некорректное количество очков или времени")
         
-        # ВАЖНО: Записываем текущее время в поле deadline для архивации
-        await db._exec("UPDATE user_challenges SET deadline = ? WHERE id = ?", (int(time.time()), challenge_id))
-        
-        notify(challenge["target_id"], f"✅ Твой челлендж засчитан! Тебе начислено {challenge['reward']} баллов.")
-    elif action == "reject" and is_creator:
-        if not await db.transition_challenge(challenge_id, ("submitted",), "rejected"):
-            raise ApiError("Этот вызов нельзя отклонить в текущем статусе", 409)
-        notify(challenge["target_id"], f"❌ Челлендж отклонён: «{challenge['text']}». Можно прислать другое фото.")
-    else:
-        raise ApiError("Недопустимое действие", 400)
-    return web.json_response({"status": "ok"})
+    if not text:
+        raise ApiError("Укажите текст задания")
+    if not 1 <= points <= CHALLENGE_MAX_POINTS:
+        raise ApiError(f"Количество очков должно быть от 1 до {CHALLENGE_MAX_POINTS}")
+    if not 1 <= hours <= 720:
+        raise ApiError("Время на выполнение должно быть от 1 часа до 30 дней (720 часов)")
+
+    deadline = int(time.time()) + hours * 3600
+
+    challenge = await db.create_user_challenge(
+        tg_user.id, user["partner_id"], category, text, points, deadline
+    )
+    notify(user["partner_id"], f"⚔️ Тебе бросили вызов: «{text}» ({points} б.). На выполнение {hours} ч.")
+    return web.json_response({"status": "created", "challenge": challenge}, status=201)
 
 async def api_get_challenge_messages(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
