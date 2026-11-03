@@ -13,7 +13,11 @@ function openShop() {
 
     // Запрашиваем список товаров
     api("/shop").then(res => {
-      const items = res.items || [];
+      let items = res.items || [];
+      
+      // Сортируем по возрастанию цены (от дешевых к дорогим)
+      items.sort((a, b) => a.cost - b.cost);
+
       if (!items.length) {
         $("shopList").innerHTML = `<div class="empty">Магазин пока пуст.</div>`;
         return;
@@ -21,8 +25,8 @@ function openShop() {
 
       $("shopList").innerHTML = items.map(item => {
         const afford = currentBalance >= item.cost;
-        return `<div class="challenge-card" style="border-left-color: #8b5cf6;" data-item-id="${item.id}" data-item-title="${esc(item.title)}" data-item-cost="${item.cost}" data-item-emoji="${esc(item.emoji)}">
-          <div class="challenge-header">
+        return `<div class="challenge-card" style="border-left-color: #8b5cf6; margin-bottom: 8px;" data-item-id="${item.id}" data-item-title="${esc(item.title)}" data-item-cost="${item.cost}" data-item-emoji="${esc(item.emoji)}">
+          <div class="challenge-header" style="align-items: center;">
             <span>${esc(item.emoji)} ${esc(item.title)}</span>
             <span style="color: ${afford ? '#eab308' : 'var(--declined)'}; font-weight: bold;">🏆 ${item.cost}</span>
           </div>
@@ -37,7 +41,8 @@ function openShop() {
 
 function closeShop() {
   $("shopOverlay").hidden = true;
-  tg.BackButton?.hide();
+  if (!$("overlay").hidden || !$("buyDateOverlay").hidden) tg.BackButton?.show();
+  else tg.BackButton?.hide();
 }
 
 function openBuyDatePicker(title, itemId) {
@@ -50,6 +55,8 @@ function openBuyDatePicker(title, itemId) {
 function closeBuyDatePicker() {
   $("buyDateOverlay").hidden = true;
   selectedShopItem = null;
+  if (!$("shopOverlay").hidden) tg.BackButton?.show();
+  else tg.BackButton?.hide();
 }
 
 async function confirmBuy() {
@@ -84,10 +91,17 @@ async function confirmBuy() {
 
 // Привязка событий
 (() => {
-  $("shopBtn").onclick = openShop;
-  $("shopClose").onclick = closeShop;
-  $("buyCancel").onclick = closeBuyDatePicker;
-  $("buyConfirm").onclick = confirmBuy;
+  const shopBtn = $("shopBtn");
+  if (shopBtn) shopBtn.onclick = openShop;
+  
+  const closeBtn = $("shopClose");
+  if (closeBtn) closeBtn.onclick = closeShop;
+  
+  const cancelBtn = $("buyCancel");
+  if (cancelBtn) cancelBtn.onclick = closeBuyDatePicker;
+  
+  const confirmBtn = $("buyConfirm");
+  if (confirmBtn) confirmBtn.onclick = confirmBuy;
 
   $("shopList").addEventListener("click", (e) => {
     const card = e.target.closest("[data-item-id]");
@@ -101,8 +115,6 @@ async function confirmBuy() {
       return toast("Недостаточно баллов для покупки");
     }
 
-    // Вместо confirm() используем наше модальное окно выбора даты
-    // (оно же служит подтверждением)
     openBuyDatePicker(title, id);
   });
 })();
