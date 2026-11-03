@@ -1431,6 +1431,26 @@ async def api_delete_challenge(request: web.Request) -> web.Response:
     
     return web.json_response({"status": "deleted"})
 
+async def api_archive_challenge_manually(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    challenge_id = _int_param(request, "id")
+    challenge = await db.get_user_challenge(challenge_id)
+    
+    if not challenge:
+        raise ApiError("Челлендж не найден", 404)
+        
+    # Архивировать может только тот, кто бросил вызов (создатель), 
+    # либо тот, кому он адресован (исполнитель)
+    if tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
+        raise ApiError("Нет доступа", 403)
+
+    # Ставим дедлайн на 2 дня назад, чтобы он гарантированно улетел в архив
+    past_deadline = int(time.time()) - (2 * 86400)
+    await db._exec(
+        "UPDATE user_challenges SET deadline = ? WHERE id = ?", 
+        (past_deadline, challenge_id)
+    )
+    return web.json_response({"status": "archived"})
 
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
@@ -1567,6 +1587,7 @@ async def main() -> None:
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
+    app.router.add_post("/api/challenges/{id}/archive", api_archive_challenge_manually)
     
     # Челленджи и магазин
     app.router.add_get("/api/challenges", api_get_challenges_data)

@@ -80,7 +80,6 @@ function renderChallenges(listToRender = []) {
     return;
   }
 
-  // Компактные карточки
   list.innerHTML = listToRender.map(c => {
     const cls = [
       "challenge-card",
@@ -95,14 +94,22 @@ function renderChallenges(listToRender = []) {
       dateStr = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
     }
 
-    return `<div class="${cls}" data-challenge-id="${c.id}" style="padding: 10px 12px; margin-bottom: 0; border-radius: 12px; border-left-width: 3px; display: flex; flex-direction: column; gap: 6px;">
-      <div class="challenge-header" style="margin: 0; font-size: 11px;">
+    // Крестик для ручной архивации (показываем только если челлендж не в архиве)
+    const archiveIcon = !c.is_archived && !showArchive 
+      ? `<button class="archive-btn" data-archive-id="${c.id}" style="background:none; border:none; color:var(--hint); font-size:18px; cursor:pointer; padding: 0 4px; margin-left: 8px;" title="Убрать в архив">×</button>` 
+      : "";
+
+    return `<div class="${cls}" data-challenge-id="${c.id}" style="padding: 10px 12px; margin-bottom: 0; border-radius: 12px; border-left-width: 3px; display: flex; flex-direction: column; gap: 6px; position: relative;">
+      
+      <div class="challenge-header" style="margin: 0; font-size: 11px; display: flex; justify-content: space-between; align-items: flex-start;">
         <span>${esc(c.category)}</span>
-        <span style="text-align: right; display: flex; align-items: center; gap: 4px;">
-          ${statusLabel(c)} <span style="opacity: 0.5;">· ${dateStr}</span>
-        </span>
+        <div style="display: flex; align-items: center;">
+          <span style="opacity: 0.8;">${statusLabel(c)} · ${dateStr}</span>
+          ${archiveIcon}
+        </div>
       </div>
-      <div class="challenge-text" style="font-size: 14px; line-height: 1.3;">${esc(c.text)}</div>
+      
+      <div class="challenge-text" style="font-size: 14px; line-height: 1.3; padding-right: 20px;">${esc(c.text)}</div>
       <div class="challenge-reward" style="font-size: 12px; margin-top: 2px;">🏆 ${c.reward} баллов</div>
     </div>`;
   }).join("");
@@ -472,6 +479,29 @@ try {
   $("challengeBtn").onclick = openChallenges;
   $("challengesClose").onclick = closeChallenges;
   $("createChallengeBtn").onclick = createChallenge;
+
+    // Обработка клика по крестику (в архив)
+  $("challengesList").addEventListener("click", async (e) => {
+    const archiveBtn = e.target.closest(".archive-btn");
+    if (archiveBtn) {
+      e.stopPropagation(); // Чтобы не открылось окно челленджа
+      const id = archiveBtn.dataset.archiveId;
+      archiveBtn.disabled = true;
+      archiveBtn.textContent = "⏳";
+      
+      try {
+        await api(`/challenges/${id}/archive`, { method: "POST" });
+        tg.HapticFeedback?.notificationOccurred("success");
+        toast("Убрано в архив");
+        await openChallenges();
+      } catch (err) {
+        toast(err.message);
+        archiveBtn.disabled = false;
+        archiveBtn.textContent = "×";
+      }
+      return;
+    }
+  });
 
   $("challengesList").addEventListener("click", (ev) => {
     const card = ev.target.closest("[data-challenge-id]");
