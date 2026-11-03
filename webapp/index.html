@@ -6,7 +6,7 @@
 <meta name="api-base" content="https://couple-calendar-ycu9.onrender.com">
 <title>Календарь на двоих</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="css/style.css?v=2">
+<link rel="stylesheet" href="css/style.css?v=3">
 </head>
 <body>
 
@@ -45,13 +45,23 @@
 
   <button class="link-btn" id="unlink">Отвязать партнёра</button>
   
-  <!-- Кнопки без инлайн-стилей -->
-  <button class="fab" id="shopBtn" aria-label="Магазин">🛒</button>
-  <button class="fab" id="challengeBtn" aria-label="Челленджи">
-    ⚔️
-    <span id="challengeBadge" style="position: absolute; top: -2px; right: -2px; width: 14px; height: 14px; background: red; border-radius: 50%; border: 2px solid var(--bg);" hidden></span>
-  </button>
-  <button class="fab" id="add" aria-label="Добавить событие">+</button>
+  <!-- Нижняя панель с кнопками -->
+  <div class="bottom-nav">
+    <button class="nav-btn" id="shopBtn" aria-label="Магазин">
+      <span class="nav-icon">🛒</span>
+      <span class="nav-label">Магазин</span>
+    </button>
+    
+    <button class="nav-btn" id="add" aria-label="Добавить">
+      <span class="nav-icon" style="background: var(--accent); color: var(--accent-text); border-radius: 50%; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; font-size: 32px; margin-top: -24px; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">+</span>
+    </button>
+    
+    <button class="nav-btn" id="challengeBtn" aria-label="Челленджи">
+      <span class="nav-icon">⚔️</span>
+      <span class="nav-label">Челленджи</span>
+      <span id="challengeBadge" style="position: absolute; top: 8px; right: calc(50% - 16px); width: 10px; height: 10px; background: red; border-radius: 50%; border: 2px solid var(--bg);" hidden></span>
+    </button>
+  </div>
 </main>
 
 <div class="cat-overlay" id="catOverlay" hidden>
@@ -228,8 +238,6 @@
 <!-- Окно со списком челленджей -->
 <div class="overlay" id="challengesOverlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true">
-    
-    <!-- Шапка -->
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
       <h2 style="margin:0;">Челленджи</h2>
       <div style="display:flex; align-items:center; gap:10px;">
@@ -238,22 +246,15 @@
       </div>
     </div>
 
-    <!-- Список активных/архивных челленджей (увеличили высоту) -->
     <div id="challengesList" style="max-height: 38vh; overflow-y: auto; padding-right: 4px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px;"></div>
 
-    <!-- Блок создания (аккордеоны) -->
     <div id="createChallengeArea">
-      
-      <!-- Категория -->
       <div id="catAccordionHeader" style="cursor:pointer; padding: 12px; background: var(--bg2); border-radius: 12px; margin-bottom: 8px; font-weight: 500; font-size: 15px; display: flex; justify-content: space-between; align-items: center;">
         <span>Категория: <span id="selectedCatText" style="color: var(--accent);">Лёгкие</span></span>
         <span style="font-size: 12px; opacity: 0.5;">▼</span>
       </div>
-      <div id="catAccordionContent" style="display: none; margin-bottom: 12px; background: rgba(0,0,0,0.02); border-radius: 12px; padding: 4px;">
-        <!-- Сюда рендерятся категории -->
-      </div>
+      <div id="catAccordionContent" style="display: none; margin-bottom: 12px; background: rgba(0,0,0,0.02); border-radius: 12px; padding: 4px;"></div>
 
-      <!-- Задание -->
       <div id="ideaAccordionHeader" style="cursor:pointer; padding: 12px; background: var(--bg2); border-radius: 12px; margin-bottom: 8px; font-weight: 500; font-size: 15px; display: flex; justify-content: space-between; align-items: center;">
         <span>Задание: <span id="selectedIdeaText" style="color: var(--accent);">Не выбрано</span></span>
         <span style="font-size: 12px; opacity: 0.5;">▼</span>
@@ -262,13 +263,11 @@
         <div id="challengeIdeaList"></div>
       </div>
 
-      <!-- Своё задание -->
       <div id="customChallengeBlock" style="display: flex; gap: 8px; margin-bottom: 12px;">
         <input type="text" id="customChallengeInput" placeholder="Или введите своё задание..." maxlength="200" style="flex: 1; padding: 12px; font-size: 14px;">
         <button type="button" id="customChallengeBtn" class="btn ghost" style="padding: 0 16px; font-size: 14px; border-radius: 12px;">Добавить</button>
       </div>
 
-      <!-- Баллы и Время (в один ряд) -->
       <div style="display: flex; gap: 10px; margin-bottom: 12px;">
         <div style="flex: 1;">
           <label for="newChallengeReward" style="font-size: 13px; margin-top: 0;">Баллы</label>
@@ -294,7 +293,6 @@
         <button class="btn primary" id="createChallengeBtn">Отправить партнёру</button>
       </div>
     </div>
-
   </div>
 </div>
 
@@ -336,7 +334,6 @@
       <div style="width: 24px;"></div>
     </div>
 
-    <!-- Информация о задании -->
     <div style="background: var(--bg2); border-radius: 12px; padding: 12px; margin-bottom: 10px;">
       <div style="font-size: 14px; color: var(--hint); margin-bottom: 4px;" id="chatCategory">Категория</div>
       <div style="font-size: 16px; font-weight: 600; margin-bottom: 10px;" id="chatTaskText">Задание...</div>
@@ -361,12 +358,8 @@
       </div>
     </div>
 
-    <!-- Лента сообщений -->
-    <div id="chatMessagesList" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; padding-right: 4px;">
-      <!-- Сообщения будут появляться здесь -->
-    </div>
+    <div id="chatMessagesList" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; padding-right: 4px;"></div>
 
-    <!-- Поле ввода -->
     <div style="display: flex; gap: 8px;">
       <input type="text" id="chatMessageInput" placeholder="Написать сообщение..." maxlength="500" style="flex: 1; padding: 12px; border-radius: 12px; border: none; background: var(--bg2); color: var(--text); outline: none;">
       <button id="chatSendBtn" class="btn primary" style="padding: 0 16px; border-radius: 12px; font-weight: bold;">➤</button>
@@ -381,9 +374,7 @@
     <div style="display: flex; justify-content: flex-end; padding: 10px;">
       <button id="photoViewerClose" style="color: #fff; font-size: 32px; background: none; border: none; padding: 0 10px; line-height: 1;">&times;</button>
     </div>
-    <div id="photoViewerContent" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; align-items: center; padding-bottom: 20px;">
-      <!-- Фото будут здесь -->
-    </div>
+    <div id="photoViewerContent" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; align-items: center; padding-bottom: 20px;"></div>
   </div>
 </div>
 
@@ -399,6 +390,6 @@
 <script src="js/form.js"></script>
 <script src="js/challenges.js?v=65"></script>
 <script src="js/shop.js?v=6"></script>
-<script src="js/main.js?v=100"></script>
+<script src="js/main.js?v=105"></script>
 </body>
 </html>

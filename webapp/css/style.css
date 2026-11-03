@@ -17,7 +17,9 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text);
   font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-body { padding: 12px 14px calc(96px + env(safe-area-inset-bottom, 0px)); max-width: 560px; margin: 0 auto; }
+  
+/* Увеличили нижний отступ, чтобы контент не залезал под таб-бар */
+body { padding: 12px 14px calc(90px + env(safe-area-inset-bottom, 0px)); max-width: 560px; margin: 0 auto; }
 button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 [hidden] { display: none !important; }
@@ -111,33 +113,56 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .stat-cell.declined .num { color: rgb(var(--declined)); }
 .stat-cell.pending  .num { color: rgb(var(--pending)); }
 
-/* --- ОБНОВЛЕННЫЕ КНОПКИ --- */
-.fab { 
-  position: fixed; 
-  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  width: 56px; 
-  height: 56px; 
-  border-radius: 50%; 
-  color: #fff; 
-  line-height: 1; 
-  box-shadow: 0 4px 12px rgba(0,0,0,.3); 
-  transition: transform .18s ease, opacity .18s ease; 
-  z-index: 5; 
+/* --- НОВАЯ НИЖНЯЯ ПАНЕЛЬ --- */
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 560px;
+  height: calc(60px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg);
+  border-top: 1px solid rgba(0,0,0,0.1);
   display: flex;
+  justify-content: space-around;
   align-items: center;
-  justify-content: center;
-  border: none;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  z-index: 10;
 }
 
-#shopBtn { background: #7c3aed; font-size: 24px; right: calc(18px + 56px + 12px + 56px + 12px); }
-#challengeBtn { background: #ca8a04; font-size: 24px; right: calc(18px + 56px + 12px); }
-#add { background: var(--accent); right: 18px; font-size: 30px; }
+.nav-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--hint);
+  font-size: 12px;
+  gap: 2px;
+  flex: 1;
+  height: 100%;
+  position: relative;
+  cursor: pointer;
+}
 
-.fab:active { transform: scale(.92); }
-.fab.fab-hidden { transform: translateY(120px); opacity: 0; pointer-events: none; }
-@media (prefers-reduced-motion: reduce) { .fab { transition: none; } }
+.nav-btn:active {
+  opacity: 0.6;
+}
 
-.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; z-index: 10; }
+.nav-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.nav-label {
+  font-size: 10px;
+  font-weight: 500;
+}
+
+/* --- МОДАЛЬНЫЕ ОКНА И ФОРМЫ --- */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; z-index: 20; }
 .sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
   max-height: 92vh; overflow-y: auto;
   padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px)); animation: up .18s ease-out; }
