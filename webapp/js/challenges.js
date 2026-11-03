@@ -70,6 +70,7 @@ function renderChallenges(listToRender = []) {
     return;
   }
 
+  // Компактные карточки
   list.innerHTML = listToRender.map(c => {
     const cls = [
       "challenge-card",
@@ -84,16 +85,15 @@ function renderChallenges(listToRender = []) {
       dateStr = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
     }
 
-    return `<div class="${cls}" data-challenge-id="${c.id}">
-      <div class="challenge-header">
+    return `<div class="${cls}" data-challenge-id="${c.id}" style="padding: 10px 12px; margin-bottom: 0; border-radius: 12px; border-left-width: 3px; display: flex; flex-direction: column; gap: 6px;">
+      <div class="challenge-header" style="margin: 0; font-size: 11px;">
         <span>${esc(c.category)}</span>
-        <span style="text-align: right; display: flex; flex-direction: column; align-items: flex-end;">
-          <span>${statusLabel(c)}</span>
-          <span style="font-size: 10px; opacity: 0.6; margin-top: 2px;">${dateStr}</span>
+        <span style="text-align: right; display: flex; align-items: center; gap: 4px;">
+          ${statusLabel(c)} <span style="opacity: 0.5;">· ${dateStr}</span>
         </span>
       </div>
-      <div class="challenge-text">${esc(c.text)}</div>
-      <div class="challenge-reward">🏆 ${c.reward} баллов</div>
+      <div class="challenge-text" style="font-size: 14px; line-height: 1.3;">${esc(c.text)}</div>
+      <div class="challenge-reward" style="font-size: 12px; margin-top: 2px;">🏆 ${c.reward} баллов</div>
     </div>`;
   }).join("");
 }

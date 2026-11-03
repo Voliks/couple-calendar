@@ -237,52 +237,58 @@
       </div>
     </div>
 
-    <!-- Список активных/архивных челленджей -->
-    <div id="challengesList" style="max-height: 30vh; overflow-y: auto; padding-right: 4px; margin-bottom: 12px;"></div>
+    <!-- Список активных/архивных челленджей (увеличили высоту) -->
+    <div id="challengesList" style="max-height: 40vh; overflow-y: auto; padding-right: 4px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px;"></div>
 
     <!-- Блок создания (аккордеоны) -->
     <div id="createChallengeArea">
       
       <!-- Категория -->
-      <div id="catAccordionHeader" style="cursor:pointer; padding: 10px; background: var(--bg2); border-radius: 8px; margin-bottom: 4px; font-weight: 600; display: flex; justify-content: space-between;">
+      <div id="catAccordionHeader" style="cursor:pointer; padding: 12px; background: var(--bg2); border-radius: 12px; margin-bottom: 8px; font-weight: 500; font-size: 15px; display: flex; justify-content: space-between; align-items: center;">
         <span>Категория: <span id="selectedCatText" style="color: var(--accent);">Лёгкие</span></span>
         <span style="font-size: 12px; opacity: 0.5;">▼</span>
       </div>
-      <div id="catAccordionContent" style="display: none; margin-bottom: 12px; background: rgba(0,0,0,0.02); border-radius: 8px; padding: 4px;">
+      <div id="catAccordionContent" style="display: none; margin-bottom: 12px; background: rgba(0,0,0,0.02); border-radius: 12px; padding: 4px;">
         <!-- Сюда рендерятся категории -->
       </div>
 
       <!-- Задание -->
-      <div id="ideaAccordionHeader" style="cursor:pointer; padding: 10px; background: var(--bg2); border-radius: 8px; margin-bottom: 4px; font-weight: 600; display: flex; justify-content: space-between;">
+      <div id="ideaAccordionHeader" style="cursor:pointer; padding: 12px; background: var(--bg2); border-radius: 12px; margin-bottom: 8px; font-weight: 500; font-size: 15px; display: flex; justify-content: space-between; align-items: center;">
         <span>Задание: <span id="selectedIdeaText" style="color: var(--accent);">Не выбрано</span></span>
         <span style="font-size: 12px; opacity: 0.5;">▼</span>
       </div>
-      <div id="ideaAccordionContent" style="display: none; margin-bottom: 12px; background: rgba(0,0,0,0.02); border-radius: 8px; padding: 4px; max-height: 30vh; overflow-y: auto;">
+      <div id="ideaAccordionContent" style="display: none; margin-bottom: 12px; background: rgba(0,0,0,0.02); border-radius: 12px; padding: 4px; max-height: 30vh; overflow-y: auto;">
         <div id="challengeIdeaList"></div>
       </div>
 
       <!-- Своё задание -->
       <div id="customChallengeBlock" style="display: flex; gap: 8px; margin-bottom: 12px;">
-        <input type="text" id="customChallengeInput" placeholder="Или введите своё задание..." maxlength="200" style="flex: 1; padding: 10px; font-size: 14px;">
-        <button type="button" id="customChallengeBtn" class="btn ghost" style="padding: 0 12px; font-size: 14px;">Добавить</button>
+        <input type="text" id="customChallengeInput" placeholder="Или введите своё задание..." maxlength="200" style="flex: 1; padding: 12px; font-size: 14px;">
+        <button type="button" id="customChallengeBtn" class="btn ghost" style="padding: 0 16px; font-size: 14px; border-radius: 12px;">Добавить</button>
       </div>
 
-      <label for="newChallengeReward">Баллы</label>
-      <input type="number" id="newChallengeReward" min="1" max="20" value="10">
+      <!-- Баллы и Время (в один ряд) -->
+      <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+        <div style="flex: 1;">
+          <label for="newChallengeReward" style="font-size: 13px; margin-top: 0;">Баллы</label>
+          <input type="number" id="newChallengeReward" min="1" max="20" value="10" style="padding: 10px;">
+        </div>
+        <div style="flex: 2;">
+          <label for="challengeDeadlineSelect" style="font-size: 13px; margin-top: 0;">Время на выполнение</label>
+          <select id="challengeDeadlineSelect" style="padding: 10px;">
+            <option value="1">1 час</option>
+            <option value="3">3 часа</option>
+            <option value="6">6 часов</option>
+            <option value="12">12 часов</option>
+            <option value="24" selected>1 день (24 часа)</option>
+            <option value="48">2 дня</option>
+            <option value="72">3 дня</option>
+            <option value="168">1 неделя</option>
+          </select>
+        </div>
+      </div>
 
-      <label for="challengeDeadlineSelect">Время на выполнение</label>
-      <select id="challengeDeadlineSelect">
-        <option value="1">1 час</option>
-        <option value="3">3 часа</option>
-        <option value="6">6 часов</option>
-        <option value="12">12 часов</option>
-        <option value="24" selected>1 день (24 часа)</option>
-        <option value="48">2 дня</option>
-        <option value="72">3 дня</option>
-        <option value="168">1 неделя</option>
-      </select>
-
-      <div class="row">
+      <div class="row" style="margin-top: 16px;">
         <button class="btn ghost" id="challengesClose">Закрыть</button>
         <button class="btn primary" id="createChallengeBtn">Отправить партнёру</button>
       </div>
