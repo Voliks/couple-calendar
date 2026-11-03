@@ -25,11 +25,11 @@ function openShop() {
 
       $("shopList").innerHTML = items.map(item => {
         const afford = currentBalance >= item.cost;
-        return `<div class="challenge-card" style="border-left-color: #8b5cf6; margin-bottom: 8px;" data-item-id="${item.id}" data-item-title="${esc(item.title)}" data-item-cost="${item.cost}" data-item-emoji="${esc(item.emoji)}">
-          <div class="challenge-header" style="align-items: center;">
-            <span>${esc(item.emoji)} ${esc(item.title)}</span>
-            <span style="color: ${afford ? '#eab308' : 'var(--declined)'}; font-weight: bold;">🏆 ${item.cost}</span>
-          </div>
+        
+        // Используем flex для идеального выравнивания названия слева, цены справа
+        return `<div class="card accepted" style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; padding: 12px; border-left: 4px solid #8b5cf6; cursor: pointer;" data-item-id="${item.id}" data-item-title="${esc(item.title)}" data-item-cost="${item.cost}" data-item-emoji="${esc(item.emoji)}">
+          <div style="font-size: 16px; font-weight: 600; word-break: break-word; margin-right: 10px;">${esc(item.emoji)} ${esc(item.title)}</div>
+          <div style="font-size: 16px; font-weight: bold; white-space: nowrap; color: ${afford ? '#eab308' : 'var(--declined)'};">🏆 ${item.cost}</div>
         </div>`;
       }).join("");
     });
