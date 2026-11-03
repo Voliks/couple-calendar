@@ -3,12 +3,19 @@ let catalogData = {};
 let currentChallenge = null;
 let chatPollTimer = null;
 let showArchive = false;
-let selectedIdeaData = null; 
-let selectedCategory = ""; 
+let selectedIdeaData = null;
+let selectedCustomChallengeText = "";
+let selectedCategory = "";
+let challengesRequestSeq = 0;
+let chatRequestSeq = 0;
+let chatLoadPromise = null;
+let creatingChallenge = false;
+let uploadingPhotos = false;
 
 /* ---------- Список ---------- */
 
 async function openChallenges() {
+  const requestId = ++challengesRequestSeq;
   $("challengesOverlay").hidden = false;
   tg.BackButton?.show();
   $("challengesList").innerHTML = `<div class="spinner" style="margin:20px auto;"></div>`;
@@ -26,9 +33,11 @@ async function openChallenges() {
 
   try {
     const res = await api("/challenges");
-    // Сортируем: новые сверху
-    allChallenges = (res.history || []).sort((a, b) => b.created_at - a.created_at);
-    
+    // Более поздний запрос имеет приоритет: старый ответ не перезаписывает новый экран.
+    if (requestId !== challengesRequestSeq || $("challengesOverlay").hidden) return;
+    // Сортируем копию, не мутируя массив из API.
+    allChallenges = [...(res.history || [])].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+
     catalogData = res.catalog || {};
     $("challengeBalance").textContent = res.balance ?? 0;
 
@@ -51,6 +60,7 @@ async function openChallenges() {
     updateIdeaList();
     renderChallenges(filtered);
   } catch (e) {
+    if (requestId !== challengesRequestSeq || $("challengesOverlay").hidden) return;
     $("challengesList").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
     toast(e.message);
   }
@@ -153,34 +163,34 @@ function updateIdeaList() {
 /* ---------- Создание ---------- */
 
 async function createChallenge() {
-  let text = selectedIdeaData ? selectedIdeaData.text : "";
-  const customInput = $("customChallengeInput");
-  if (customInput && customInput.value.trim()) {
-    text = customInput.value.trim();
-  }
-
+  if (creatingChallenge) return;
+  const text = selectedCustomChallengeText || (selectedIdeaData ? selectedIdeaData.text : "");
   if (!text) return toast("Выберите или введите задание");
 
   const points = parseInt($("newChallengeReward").value, 10) || 10;
   const hours = parseInt($("challengeDeadlineSelect").value, 10) || 24;
 
   const btn = $("createChallengeBtn");
+  creatingChallenge = true;
   btn.disabled = true;
   btn.textContent = "Отправка…";
   try {
     await api("/challenges", { method: "POST", body: { category: selectedCategory, text, reward: points, hours } });
+    selectedCustomChallengeText = "";
     toast("Вызов брошен!");
     tg.HapticFeedback?.notificationOccurred("success");
     await openChallenges();
   } catch (e) {
     toast(e.message);
   } finally {
+    creatingChallenge = false;
     btn.disabled = false;
     btn.textContent = "Отправить партнёру";
   }
 }
 
 function closeChallenges() {
+  challengesRequestSeq++;
   $("challengesOverlay").hidden = true;
   if (!$("overlay").hidden || !$("challengeChatOverlay").hidden) tg.BackButton?.show();
   else tg.BackButton?.hide();
@@ -192,6 +202,9 @@ function openChallengeDetails(id) {
   const c = allChallenges.find(x => x.id === id);
   if (!c) return;
   currentChallenge = c;
+  // Инвалидируем ответы предыдущего чата при быстром переключении карточек.
+  chatRequestSeq++;
+  chatLoadPromise = null;
 
   $("challengeChatOverlay").hidden = false;
   tg.BackButton?.show();
@@ -230,15 +243,17 @@ function openChallengeDetails(id) {
 
   if (chatPollTimer) clearInterval(chatPollTimer);
   chatPollTimer = setInterval(() => {
-    if (!$("challengeChatOverlay").hidden && currentChallenge?.id === id) {
+    if (!document.hidden && !$("challengeChatOverlay").hidden && currentChallenge?.id === id) {
       loadMessages(id, true);
     }
-  }, 4000);
+  }, 8000);
 }
 
 function closeChallengeDetails() {
   $("challengeChatOverlay").hidden = true;
   currentChallenge = null;
+  chatRequestSeq++;
+  chatLoadPromise = null;
   if (chatPollTimer) { clearInterval(chatPollTimer); chatPollTimer = null; }
   if (!$("challengesOverlay").hidden) tg.BackButton?.show();
   else tg.BackButton?.hide();
@@ -249,28 +264,38 @@ function closeChallengeDetails() {
 async function loadMessages(challengeId, silent = false) {
   const list = $("chatMessagesList");
   if (!list) return;
+  // Не запускаем несколько одинаковых фоновых опросов одновременно.
+  if (silent && chatLoadPromise) return chatLoadPromise;
+  const requestId = ++chatRequestSeq;
   if (!silent) list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Загрузка...</div>`;
-  
-  try {
-    const res = await api(`/challenges/${challengeId}/messages`);
-    const msgs = res.messages || [];
-    if (!msgs.length) {
-      if (!silent) list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Сообщений пока нет.</div>`;
-      return;
-    }
-    const myId = state?.my_id || 0; 
-    const currentCount = list.querySelectorAll('div').length;
-    if (silent && currentCount === msgs.length) return;
 
-    list.innerHTML = msgs.map(m => {
-      const isMine = m.sender_id === myId;
-      const align = isMine ? "align-self: flex-end; background: var(--accent); color: #fff;" : "align-self: flex-start; background: var(--bg2); color: var(--text);";
-      return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; ${align}">${esc(m.text)}</div>`;
-    }).join("");
-    list.scrollTop = list.scrollHeight;
-  } catch (e) {
-    if (!silent) list.innerHTML = `<div style="text-align:center; color:rgb(var(--declined)); font-size:12px; padding:10px;">Ошибка: ${esc(e.message)}</div>`;
-  }
+  const request = (async () => {
+    try {
+      const res = await api(`/challenges/${challengeId}/messages`);
+      if (requestId !== chatRequestSeq || currentChallenge?.id !== challengeId || $("challengeChatOverlay").hidden) return;
+      const msgs = res.messages || [];
+      const signature = JSON.stringify(msgs);
+      if (list.dataset.messagesSignature === signature) return;
+      list.dataset.messagesSignature = signature;
+
+      if (!msgs.length) {
+        list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Сообщений пока нет.</div>`;
+        return;
+      }
+      const myId = state?.my_id || 0;
+      list.innerHTML = msgs.map(m => {
+        const isMine = m.sender_id === myId;
+        const align = isMine ? "align-self: flex-end; background: var(--accent); color: #fff;" : "align-self: flex-start; background: var(--bg2); color: var(--text);";
+        return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; ${align}">${esc(m.text)}</div>`;
+      }).join("");
+      list.scrollTop = list.scrollHeight;
+    } catch (e) {
+      if (requestId === chatRequestSeq && !silent) list.innerHTML = `<div style="text-align:center; color:rgb(var(--declined)); font-size:12px; padding:10px;">Ошибка: ${esc(e.message)}</div>`;
+    }
+  })();
+  if (silent) chatLoadPromise = request;
+  try { await request; }
+  finally { if (chatLoadPromise === request) chatLoadPromise = null; }
 }
 
 async function sendMessage() {
@@ -280,8 +305,9 @@ async function sendMessage() {
   if (!text) return;
   input.value = ""; input.disabled = true;
   try {
-    await api(`/challenges/${currentChallenge.id}/messages`, { method: "POST", body: { text } });
-    await loadMessages(currentChallenge.id);
+    const challengeId = currentChallenge.id;
+    await api(`/challenges/${challengeId}/messages`, { method: "POST", body: { text } });
+    if (currentChallenge?.id === challengeId) await loadMessages(challengeId);
   } catch (e) { toast(e.message); } finally { input.disabled = false; input.focus(); }
 }
 
@@ -296,12 +322,16 @@ async function prepareImage(file) {
     canvas.height = Math.round(bmp.height * k);
     
     const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      bmp.close?.();
+      return file;
+    }
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
     bmp.close?.();
-    
-    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.8));
+
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
     if (blob && blob.size < file.size) {
       return new File([blob], "photo.jpg", { type: "image/jpeg" });
     }
@@ -313,7 +343,7 @@ async function prepareImage(file) {
 
 $("challengePhotoInput").addEventListener("change", async (ev) => {
   const pickedFiles = Array.from(ev.target.files || []);
-  if (!pickedFiles.length || !currentChallenge) {
+  if (!pickedFiles.length || !currentChallenge || uploadingPhotos) {
     ev.target.value = "";
     return;
   }
@@ -321,57 +351,60 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
   const c = currentChallenge;
   const btn = $("chatAttachBtn");
   const original = btn.textContent;
+  uploadingPhotos = true;
   btn.disabled = true;
+  const validFiles = pickedFiles.filter(file => !file.type || file.type.startsWith("image/"));
+  const uploadedPaths = new Array(validFiles.length);
+  let nextIndex = 0;
+  let completed = 0;
+  let uploadError = null;
 
-  const uploadedPaths = [];
-
-  try {
-    for (let i = 0; i < pickedFiles.length; i++) {
-      const file = pickedFiles[i];
-      if (file.type && !file.type.startsWith("image/")) continue;
-      
-      btn.textContent = `Сжатие ${i + 1}/${pickedFiles.length}…`;
-      
-      let preparedFile = file;
-      try { preparedFile = await prepareImage(file); } catch (err) {}
-
-      btn.textContent = `Загрузка ${i + 1}/${pickedFiles.length}…`;
-
-      const up = await api("/challenges/upload-url", { 
-        method: "POST", 
-        body: { filename: "photo.jpg", challenge_id: c.id } 
-      });
-
-      const form = new FormData();
-      form.append("cacheControl", "3600");
-      form.append("", preparedFile);
-      
-      const resp = await fetch(up.upload_url, { method: "PUT", body: form });
-      if (!resp.ok) throw new Error(`Ошибка при загрузке файла ${i + 1}`);
-      
-      uploadedPaths.push(up.path);
-      
-      // Пауза между файлами
-      if (i < pickedFiles.length - 1) {
-        await new Promise(r => setTimeout(r, 500));
+  async function uploadWorker() {
+    while (!uploadError && nextIndex < validFiles.length) {
+      const index = nextIndex++;
+      const file = validFiles[index];
+      try {
+        btn.textContent = `Подготовка ${completed + 1}/${validFiles.length}…`;
+        const preparedFile = await prepareImage(file);
+        const up = await api("/challenges/upload-url", {
+          method: "POST",
+          body: { filename: "photo.jpg", challenge_id: c.id }
+        });
+        const form = new FormData();
+        form.append("cacheControl", "3600");
+        form.append("", preparedFile);
+        const resp = await fetch(up.upload_url, { method: "PUT", body: form });
+        if (!resp.ok) throw new Error(`Ошибка при загрузке файла ${index + 1}`);
+        uploadedPaths[index] = up.path;
+        completed++;
+        btn.textContent = `Загрузка ${completed}/${validFiles.length}…`;
+      } catch (error) {
+        uploadError ||= error;
+        throw error;
       }
     }
-    
-    if (uploadedPaths.length === 0) throw new Error("Ни один файл не был загружен");
-    
+  }
+
+  try {
+    if (!validFiles.length) throw new Error("Выберите файлы изображений");
+    // Ограничиваем параллелизм: быстрее последовательной загрузки без перегрузки сети.
+    const workers = await Promise.allSettled(Array.from({ length: Math.min(2, validFiles.length) }, () => uploadWorker()));
+    const failedWorker = workers.find(result => result.status === "rejected");
+    if (failedWorker) throw failedWorker.reason;
     btn.textContent = "Сохранение...";
     await api(`/challenges/${c.id}/photo`, { method: "POST", body: { path: uploadedPaths.join(",") } });
-    
+
     toast(`Загружено фото: ${uploadedPaths.length}`);
     tg.HapticFeedback?.notificationOccurred("success");
     closeChallengeDetails();
     await openChallenges();
-  } catch (e) { 
-    toast(e.message || "Ошибка загрузки"); 
-  } finally { 
-    btn.disabled = false; 
-    btn.textContent = original; 
-    ev.target.value = ""; 
+  } catch (e) {
+    toast(e.message || "Ошибка загрузки");
+  } finally {
+    uploadingPhotos = false;
+    btn.disabled = false;
+    btn.textContent = original;
+    ev.target.value = "";
   }
 });
 
@@ -400,19 +433,26 @@ async function viewChallengePhoto() {
   
   try {
     const paths = currentChallenge.photo_id.split(",").filter(Boolean);
-    const urls = [];
-
-    for (const path of paths) {
-      const res = await api(`/challenges/photo-url?path=${encodeURIComponent(path)}`);
-      if (res.view_url) urls.push(res.view_url);
-    }
-
+    const results = await Promise.all(paths.map(path =>
+      api(`/challenges/photo-url?path=${encodeURIComponent(path)}`)
+    ));
+    const urls = results.map(result => result.view_url).filter(Boolean);
     if (!urls.length) throw new Error("Ссылки не получены");
 
     const container = $("photoViewerContent");
-    container.innerHTML = urls.map((url, i) => `
-      <img src="${url}" loading="lazy" style="max-width: 100%; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);" alt="Фото ${i+1}">
-    `).join("");
+    container.replaceChildren();
+    urls.forEach((url, index) => {
+      let parsed;
+      try { parsed = new URL(url, location.href); } catch { return; }
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return;
+      const img = document.createElement("img");
+      img.src = parsed.href;
+      img.loading = "lazy";
+      img.alt = `Фото ${index + 1}`;
+      img.style.cssText = "max-width: 100%; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);";
+      container.appendChild(img);
+    });
+    if (!container.childElementCount) throw new Error("Получены некорректные ссылки на фото");
     
     $("photoViewerOverlay").hidden = false;
     
@@ -456,6 +496,8 @@ try {
     if (!card) return;
     selectedCategory = card.dataset.cat;
     selectedIdeaData = null;
+    selectedCustomChallengeText = "";
+    $("customChallengeInput").value = "";
     $("selectedCatText").textContent = selectedCategory;
     $("selectedIdeaText").textContent = "Не выбрано";
     renderCategories();
@@ -470,6 +512,7 @@ try {
     const text = card.dataset.ideaText;
     const points = parseInt(card.dataset.ideaPoints, 10);
     selectedIdeaData = { text, points };
+    selectedCustomChallengeText = "";
     $("customChallengeInput").value = ""; 
     $("newChallengeReward").value = points;
     $("selectedIdeaText").textContent = text;
@@ -481,7 +524,8 @@ try {
   $("customChallengeBtn").onclick = () => {
     const text = $("customChallengeInput").value.trim();
     if (!text) return toast("Введите текст задания");
-    selectedIdeaData = null; 
+    selectedIdeaData = null;
+    selectedCustomChallengeText = text;
     $("selectedIdeaText").textContent = text;
     $("customChallengeInput").value = "";
     $("newChallengeReward").value = "10";

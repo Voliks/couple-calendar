@@ -11,6 +11,7 @@ import secrets
 import sqlite3
 import threading
 import time
+import aiohttp
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -98,36 +99,33 @@ class _TursoBackend:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        self._session = None
+        self._session: aiohttp.ClientSession | None = None
 
     async def start(self) -> None:
-        return None
+        # Один пул соединений на весь срок жизни приложения.
+        timeout = aiohttp.ClientTimeout(total=20, connect=10)
+        self._session = aiohttp.ClientSession(
+            headers=self._headers,
+            timeout=timeout,
+            connector=aiohttp.TCPConnector(limit=50, ttl_dns_cache=300),
+        )
 
     async def close(self) -> None:
-        return None
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
 
     async def _pipeline(self, requests: list, retries: int = 0) -> list:
-        import urllib.error
-        import urllib.request
+        if self._session is None or self._session.closed:
+            raise DbError("HTTP-сессия Turso не инициализирована")
 
         payload = {"requests": requests + [{"type": "close"}]}
         for attempt in range(retries + 1):
             try:
-                def send():
-                    request = urllib.request.Request(
-                        self._endpoint,
-                        data=json.dumps(payload).encode("utf-8"),
-                        headers=self._headers,
-                        method="POST",
-                    )
-                    try:
-                        with urllib.request.urlopen(request, timeout=20) as resp:
-                            return resp.status, resp.read().decode("utf-8")
-                    except urllib.error.HTTPError as resp:
-                        return resp.code, resp.read().decode("utf-8", errors="replace")
-
-                status, body = await asyncio.to_thread(send)
-            except (urllib.error.URLError, TimeoutError, asyncio.TimeoutError) as e:
+                async with self._session.post(self._endpoint, json=payload) as resp:
+                    status = resp.status
+                    body = await resp.text()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 err = DbError(f"Нет связи с Turso: {e!r}")
             else:
                 if status == 200:
@@ -590,6 +588,16 @@ async def _m22_last_viewed() -> None:
     await _add_column("users", "last_viewed_challenges", "INTEGER NOT NULL DEFAULT 0")
 
 
+async def _m23_performance_indexes() -> None:
+    # Migration 16 rebuilds events and drops its earlier indexes.
+    await _exec("CREATE INDEX IF NOT EXISTS idx_events_created ON events (created_by, date)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_events_target ON events (target_user, date)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_challenges_target_created ON user_challenges (target_id, created_at)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_challenges_creator_created ON user_challenges (creator_id, created_at)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_challenge_messages_challenge_created ON challenge_messages (challenge_id, created_at)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_event_comments_event_created ON event_comments (event_id, created_at)")
+
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -613,7 +621,8 @@ MIGRATIONS = [
     (19, _m19_challenge_deadline),
     (20, _m20_shop_items),
     (21, _m21_event_comments),
-    (22, _m22_last_viewed)
+    (22, _m22_last_viewed),
+    (23, _m23_performance_indexes)
 ]
 
 
@@ -836,38 +845,56 @@ def _event(r) -> dict | None:
 
 
 async def _attach_items(events: list[dict]) -> list[dict]:
-    shop = [e for e in events if e["category"] == "shop"]
-    if shop:
-        by_id = {e["id"]: e for e in shop}
-        marks = ",".join("?" * len(by_id))
-        rs = await _exec(
-            f"SELECT id, event_id, text, checked FROM checklist_items "
-            f"WHERE event_id IN ({marks}) ORDER BY position, id",
-            tuple(by_id),
-        )
-        for item_id, event_id, text, checked in rs.rows:
-            by_id[event_id]["checklist"].append({"id": item_id, "text": text, "checked": bool(checked)})
+    if not events:
+        return events
 
-    if events:
-        ids = [e["id"] for e in events]
-        marks = ",".join("?" * len(ids))
-        rs = await _exec(
-            f"SELECT event_id, user_id, emoji FROM reactions WHERE event_id IN ({marks})",
-            tuple(ids),
-        )
-        by_id = {e["id"]: e for e in events}
-        for event_id, user_id, emoji in rs.rows:
-            by_id[event_id]["reactions"][user_id] = emoji
+    ids = [e["id"] for e in events]
+    marks = ",".join("?" for _ in ids)
+    by_id = {e["id"]: e for e in events}
 
-        rs2 = await _exec(
-            f"SELECT event_id, idea_idx, status, user_id, ts FROM idea_responses "
-            f"WHERE event_id IN ({marks})",
-            tuple(ids),
-        )
-        for event_id, idx, status, uid, ts in rs2.rows:
-            by_id[event_id]["idea_responses"][idx] = {
-                "status": status, "user_id": uid, "ts": ts,
-            }
+    # Все связанные данные независимы — читаем их параллельно.
+    tasks = []
+    task_names = []
+
+    shop_ids = [e["id"] for e in events if e["category"] == "shop"]
+    if shop_ids:
+        shop_marks = ",".join("?" for _ in shop_ids)
+        tasks.append(_exec(
+            "SELECT id, event_id, text, checked FROM checklist_items "
+            f"WHERE event_id IN ({shop_marks}) ORDER BY position, id",
+            tuple(shop_ids),
+        ))
+        task_names.append("checklist")
+
+    tasks.append(_exec(
+        f"SELECT event_id, user_id, emoji FROM reactions WHERE event_id IN ({marks})",
+        tuple(ids),
+    ))
+    task_names.append("reactions")
+
+    tasks.append(_exec(
+        "SELECT event_id, idea_idx, status, user_id, ts FROM idea_responses "
+        f"WHERE event_id IN ({marks})",
+        tuple(ids),
+    ))
+    task_names.append("ideas")
+
+    results = await asyncio.gather(*tasks)
+    result_by_name = dict(zip(task_names, results))
+
+    if "checklist" in result_by_name:
+        for item_id, event_id, text, checked in result_by_name["checklist"].rows:
+            by_id[event_id]["checklist"].append({
+                "id": item_id, "text": text, "checked": bool(checked)
+            })
+
+    for event_id, user_id, emoji in result_by_name["reactions"].rows:
+        by_id[event_id]["reactions"][user_id] = emoji
+
+    for event_id, idx, status, uid, ts in result_by_name["ideas"].rows:
+        by_id[event_id]["idea_responses"][idx] = {
+            "status": status, "user_id": uid, "ts": ts,
+        }
 
     return events
 
@@ -1302,15 +1329,25 @@ async def update_user_challenge(challenge_id: int, status: str, photo_id: str | 
         await _exec("UPDATE user_challenges SET status = ? WHERE id = ?", (status, challenge_id))
 
 
+_challenges_json_cache: tuple[int, dict] | None = None
+
+
 async def get_challenges_json() -> dict:
+    global _challenges_json_cache
     path = Path(__file__).parent / "challenges.json"
-    if not path.exists(): 
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+        if _challenges_json_cache is not None and _challenges_json_cache[0] == mtime_ns:
+            return _challenges_json_cache[1]
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+        _challenges_json_cache = (mtime_ns, data)
+        logging.info("Загружено %s категорий из challenges.json", len(data))
+        return data
+    except FileNotFoundError:
         logging.error("ФАЙЛ challenges.json НЕ НАЙДЕН ПО ПУТИ: %s", path)
         return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        logging.info("УСПЕХ: прочитано %s категорий из challenges.json", len(data))
-        return data if isinstance(data, dict) else {}
     except Exception as e:
         logging.error("ОШИБКА ЧТЕНИЯ challenges.json: %s", e)
         return {}

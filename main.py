@@ -550,44 +550,57 @@ async def api_state(request: web.Request) -> web.Response:
         user = await db.ensure_invite(user)
         events = await db.list_events_range(tg_user.id, start, end)
         link = invite_link(user["invite_code"])
-    try:
-        sex_ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
-    except Exception:
-        logging.exception("Не удалось получить идеи")
-        sex_ideas = []
-    stats = None
-    if has_partner:
+    # Независимые чтения выполняем одновременно: для Turso это сокращает
+    # суммарное время ожидания сетевых round-trip.
+    async def _safe_ideas():
         try:
-            stats = await db.pair_stats(tg_user.id, user["partner_id"])
+            return await db.get_sex_ideas(tg_user.id, user["partner_id"])
+        except Exception:
+            logging.exception("Не удалось получить идеи")
+            return []
+
+    async def _safe_stats():
+        if not has_partner:
+            return None
+        try:
+            return await db.pair_stats(tg_user.id, user["partner_id"])
         except Exception:
             logging.exception("Не удалось получить статистику")
-    
-     # --- ОПТИМИЗИРОВАННАЯ ПРОВЕРКА НА КРАСНУЮ ТОЧКУ ---
-    rs = await db._exec("SELECT last_viewed_challenges FROM users WHERE telegram_id = ?", (tg_user.id,))
-    last_viewed = rs.rows[0][0] if rs.rows else 0
-    
-    has_new = False
-    if last_viewed > 0:
-        # Один запрос вместо трех
-        rs_check = await db._exec(
-            "SELECT 1 FROM ("
-            "  SELECT 1 FROM user_challenges WHERE target_id = ? AND created_at > ?"
-            "  UNION ALL"
-            "  SELECT 1 FROM challenge_messages m JOIN user_challenges c ON c.id = m.challenge_id "
-            "  WHERE (c.creator_id = ? OR c.target_id = ?) AND m.sender_id != ? AND m.created_at > ?"
-            "  UNION ALL"
-            "  SELECT 1 FROM event_comments e JOIN events ev ON ev.id = e.event_id "
-            "  WHERE (ev.created_by = ? OR ev.target_user = ?) AND e.user_id != ? AND e.created_at > ?"
-            ") LIMIT 1",
-            (
-                tg_user.id, last_viewed,
-                tg_user.id, tg_user.id, tg_user.id, last_viewed,
-                tg_user.id, tg_user.id, tg_user.id, last_viewed
-            )
+            return None
+
+    async def _has_new_activity():
+        # Один запрос вместо чтения last_viewed + отдельной проверки.
+        rs = await db._exec(
+            "WITH v AS ("
+            " SELECT COALESCE(last_viewed_challenges, 0) AS ts "
+            " FROM users WHERE telegram_id = ?"
+            ") "
+            "SELECT EXISTS ("
+            " SELECT 1 FROM user_challenges c, v "
+            " WHERE v.ts > 0 AND c.target_id = ? AND c.created_at > v.ts "
+            " UNION ALL "
+            " SELECT 1 FROM challenge_messages m "
+            " JOIN user_challenges c ON c.id = m.challenge_id, v "
+            " WHERE v.ts > 0 AND (c.creator_id = ? OR c.target_id = ?) "
+            " AND m.sender_id != ? AND m.created_at > v.ts "
+            " UNION ALL "
+            " SELECT 1 FROM event_comments e "
+            " JOIN events ev ON ev.id = e.event_id, v "
+            " WHERE v.ts > 0 AND (ev.created_by = ? OR ev.target_user = ?) "
+            " AND e.user_id != ? AND e.created_at > v.ts"
+            ")",
+            (tg_user.id, tg_user.id, tg_user.id, tg_user.id, tg_user.id,
+             tg_user.id, tg_user.id, tg_user.id),
         )
-        if rs_check.rows:
-            has_new = True
-    # ---------------------------------------
+        return bool(rs.rows and rs.rows[0][0])
+
+    events, sex_ideas, stats, has_new, balance = await asyncio.gather(
+        db.list_events_range(tg_user.id, start, end),
+        _safe_ideas(),
+        _safe_stats(),
+        _has_new_activity(),
+        db.get_user_balance(tg_user.id),
+    )
 
     body = json.dumps(
         {
@@ -601,7 +614,7 @@ async def api_state(request: web.Request) -> web.Response:
             "allowed_reactions": ALLOWED_REACTIONS,
             "allowed_remind_before": sorted(ALLOWED_REMIND_BEFORE),
             "my_id": tg_user.id,
-            "balance": await db.get_user_balance(tg_user.id),
+            "balance": balance,
             "has_new_challenges": has_new,
         },
         ensure_ascii=False,
