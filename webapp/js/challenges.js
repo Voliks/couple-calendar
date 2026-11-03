@@ -472,40 +472,33 @@ try {
   $("challengesClose").onclick = closeChallenges;
   $("createChallengeBtn").onclick = createChallenge;
 
-  // Клик по крестику (pointerdown) — срабатывает мгновенно
-  $("challengesList").addEventListener("pointerdown", async (ev) => {
+  // Клик по крестику — архивация карточки
+  $("challengesList").addEventListener("click", async (ev) => {
     const archiveBtn = ev.target.closest(".archive-btn");
-    if (archiveBtn) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      
-      const id = archiveBtn.dataset.archiveId;
-      archiveBtn.textContent = "⏳";
-      archiveBtn.disabled = true;
-      
-      try {
-        await api(`/challenges/${id}/archive`, { method: "POST" });
-        tg.HapticFeedback?.notificationOccurred("success");
-        toast("Убрано в архив");
-        
-        // Скрываем карточку сразу
-        const card = archiveBtn.closest(".challenge-card");
-        if (card) card.style.display = "none";
-        
-        // Перезагружаем список
-        await openChallenges();
-      } catch (err) {
-        toast(err.message);
-        archiveBtn.textContent = "×";
-        archiveBtn.disabled = false;
-      }
-      return;
+    if (!archiveBtn) return;
+    
+    ev.stopPropagation();
+    ev.preventDefault();
+    
+    const id = archiveBtn.dataset.archiveId;
+    archiveBtn.textContent = "⏳";
+    archiveBtn.disabled = true;
+    
+    try {
+      await api(`/challenges/${id}/archive`, { method: "POST" });
+      tg.HapticFeedback?.notificationOccurred("success");
+      toast("Убрано в архив");
+      await openChallenges();
+    } catch (err) {
+      toast(err.message);
+      archiveBtn.textContent = "×";
+      archiveBtn.disabled = false;
     }
   });
 
-  // Клик по карточке для открытия
+  // Клик по карточке для открытия деталей
   $("challengesList").addEventListener("click", (ev) => {
-    if (ev.target.closest(".archive-btn")) return; // Игнорируем клик по крестику
+    if (ev.target.closest(".archive-btn")) return;
     const card = ev.target.closest("[data-challenge-id]");
     if (!card) return;
     openChallengeDetails(Number(card.dataset.challengeId));

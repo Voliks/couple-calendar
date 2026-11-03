@@ -562,7 +562,7 @@ async def api_state(request: web.Request) -> web.Response:
         except Exception:
             logging.exception("Не удалось получить статистику")
     
-    # --- НОВАЯ ПРОВЕРКА НА КРАСНУЮ ТОЧКУ ---
+    # --- ПРОВЕРКА НА КРАСНУЮ ТОЧКУ ---
     rs = await db._exec("SELECT last_viewed_challenges FROM users WHERE telegram_id = ?", (tg_user.id,))
     last_viewed = rs.rows[0][0] if rs.rows else 0
     
@@ -612,7 +612,7 @@ async def api_state(request: web.Request) -> web.Response:
             "allowed_remind_before": sorted(ALLOWED_REMIND_BEFORE),
             "my_id": tg_user.id,
             "balance": await db.get_user_balance(tg_user.id),
-            "has_new_challenges": has_new, # <--- ПЕРЕДАЕМ ФЛАГ
+            "has_new_challenges": has_new,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -1053,7 +1053,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
 PHOTO_BUCKET = os.getenv("SUPABASE_BUCKET", "challenges").strip() or "challenges"
 PHOTO_EXTS = ("jpg", "jpeg", "png", "webp", "gif", "heic", "heif")
-CHALLENGE_MAX_POINTS = 20  # в challenges.json есть задания до 20 баллов
+CHALLENGE_MAX_POINTS = 20
 _supabase = None
 
 
@@ -1086,7 +1086,6 @@ def get_supabase():
 
 
 def _storage_url(url: str) -> str:
-    """Разные версии supabase-py отдают то полную, то относительную ссылку."""
     if not url:
         return ""
     if url.startswith("http"):
@@ -1096,7 +1095,6 @@ def _storage_url(url: str) -> str:
 
 def _photo_path_ok(path: str, challenge_id: int) -> bool:
     exts = "|".join(PHOTO_EXTS)
-    # Разрешаем передавать несколько путей через запятую
     paths = path.split(",")
     for p in paths:
         if not re.fullmatch(rf"challenge_{challenge_id}_\d+_[0-9a-f]{{8}}\.({exts})", p.strip()):
@@ -1142,7 +1140,6 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     if not path:
         raise ApiError("Путь не указан", 400)
         
-    # Ищем челлендж, в котором есть это фото
     rs = await db._exec("SELECT id FROM user_challenges WHERE photo_id LIKE ? LIMIT 1", (f"%{path}%",))
     if not rs.rows:
         raise ApiError("Фото не найдено", 404)
@@ -1185,7 +1182,6 @@ async def api_set_challenge_photo(request: web.Request) -> web.Response:
 
 async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
-    # Обновляем время последнего просмотра (сбрасываем красную точку)
     await db._exec("UPDATE users SET last_viewed_challenges = ? WHERE telegram_id = ?", (int(time.time()), tg_user.id))
     
     balance = await db.get_user_balance(tg_user.id)
@@ -1311,7 +1307,6 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
         (challenge_id, tg_user.id, text, int(time.time()))
     )
     
-    # Отправляем пуш партнёру
     partner_id = challenge["target_id"] if tg_user.id == challenge["creator_id"] else challenge["creator_id"]
     notify(partner_id, f"💬 Новое сообщение по челленджу «{challenge['text']}»:\n\n{text}")
     
@@ -1431,6 +1426,7 @@ async def api_delete_challenge(request: web.Request) -> web.Response:
     
     return web.json_response({"status": "deleted"})
 
+
 async def api_archive_challenge_manually(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
@@ -1442,13 +1438,14 @@ async def api_archive_challenge_manually(request: web.Request) -> web.Response:
     if tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Нет доступа", 403)
 
-    # Ставим дедлайн на 2 дня назад, чтобы он гарантированно улетел в архив
+    # Ставим дедлайн на 2 дня назад, чтобы он улетел в архив
     past_deadline = int(time.time()) - (2 * 86400)
     await db._exec(
         "UPDATE user_challenges SET deadline = ? WHERE id = ?", 
         (past_deadline, challenge_id)
     )
     return web.json_response({"status": "archived"})
+
 
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
