@@ -494,6 +494,12 @@ try {
     });
   };
 
+    // Обработчики для окна просмотра фото
+  $("photoViewerClose").onclick = () => { $("photoViewerOverlay").hidden = true; };
+  $("photoViewerOverlay").onclick = (e) => { 
+    if (e.target === $("photoViewerOverlay")) $("photoViewerOverlay").hidden = true; 
+  };
+  
   $("chatSendBtn").onclick = sendMessage;
   $("chatMessageInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
