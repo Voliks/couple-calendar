@@ -125,8 +125,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   background: var(--bg);
   border-top: 1px solid rgba(0,0,0,0.1);
   display: flex;
-  justify-content: space-around;
+  justify-content: center; /* Центрируем всё содержимое */
   align-items: center;
+  gap: 40px; /* Расстояние между кнопками */
   padding-bottom: env(safe-area-inset-bottom, 0px);
   z-index: 10;
 }
@@ -141,7 +142,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   color: var(--hint);
   font-size: 12px;
   gap: 2px;
-  flex: 1;
+  width: 70px; /* Фиксированная ширина для каждой кнопки */
   height: 100%;
   position: relative;
   cursor: pointer;
