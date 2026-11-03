@@ -13,14 +13,8 @@ async function openChallenges() {
   try {
     const res = await api("/challenges");
     
-    // Сортируем: сначала активные (pending, submitted), затем выполненные (approved), затем отклоненные
-    const statusWeight = { pending: 1, submitted: 2, approved: 3, rejected: 4 };
-    allChallenges = (res.history || []).sort((a, b) => {
-      const wA = statusWeight[a.status] || 0;
-      const wB = statusWeight[b.status] || 0;
-      if (wA !== wB) return wA - wB;
-      return b.created_at - a.created_at; // Внутри группы новые сверху
-    });
+    // Сортируем так, чтобы новые всегда были в самом верху
+    allChallenges = (res.history || []).sort((a, b) => b.created_at - a.created_at);
     
     catalogData = res.catalog || {};
     $("challengeBalance").textContent = res.balance ?? 0;
@@ -66,10 +60,21 @@ function renderChallenges() {
       c.status === "rejected" ? "rejected" : ""
     ].filter(Boolean).join(" ");
     
+    // Форматируем дату создания (created_at приходит в секундах)
+    let dateStr = "";
+    if (c.created_at) {
+      const d = new Date(c.created_at * 1000);
+      dateStr = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) + ', ' + 
+                d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    }
+
     return `<div class="${cls}" data-challenge-id="${c.id}">
       <div class="challenge-header">
         <span>${esc(c.category)}</span>
-        <span>${statusLabel(c)}</span>
+        <span style="text-align: right; display: flex; flex-direction: column; align-items: flex-end;">
+          <span>${statusLabel(c)}</span>
+          <span style="font-size: 10px; opacity: 0.6; margin-top: 2px;">${dateStr}</span>
+        </span>
       </div>
       <div class="challenge-text">${esc(c.text)}</div>
       <div class="challenge-reward">🏆 ${c.reward} баллов</div>
