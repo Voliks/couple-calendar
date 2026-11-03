@@ -292,9 +292,13 @@ async function prepareImage(file) {
 }
 
 $("challengePhotoInput").addEventListener("change", async (ev) => {
-  const pickedFiles = ev.target.files;
-  ev.target.value = ""; 
-  if (!pickedFiles || !pickedFiles.length || !currentChallenge) return;
+  // Сохраняем файлы в массив ДО очистки инпута (это фикс для iOS)
+  const pickedFiles = Array.from(ev.target.files || []);
+  
+  if (!pickedFiles.length || !currentChallenge) {
+    ev.target.value = "";
+    return;
+  }
 
   const c = currentChallenge;
   const btn = $("chatAttachBtn");
@@ -303,27 +307,65 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
   btn.textContent = "Загрузка 0/" + pickedFiles.length + "…";
 
   const uploadedPaths = [];
+
   try {
     for (let i = 0; i < pickedFiles.length; i++) {
       const file = pickedFiles[i];
       if (file.type && !file.type.startsWith("image/")) continue;
+
       btn.textContent = `Загрузка ${i + 1}/${pickedFiles.length}…`;
-      const preparedFile = await prepareImage(file);
-      const up = await api("/challenges/upload-url", { method: "POST", body: { filename: preparedFile.name || "photo.jpg", challenge_id: c.id } });
+      
+      // Подготовка фото (сжатие). Если не удалось - грузим оригинал.
+      let preparedFile = file;
+      try {
+        preparedFile = await prepareImage(file);
+      } catch (err) {
+        console.warn("Не удалось сжать фото, грузим оригинал", err);
+      }
+
+      // 1. Получаем ссылку
+      const up = await api("/challenges/upload-url", {
+        method: "POST",
+        body: { filename: preparedFile.name || "photo.jpg", challenge_id: c.id },
+      });
+
+      // 2. Грузим в Supabase
       const form = new FormData();
       form.append("cacheControl", "3600");
       form.append("", preparedFile);
       const resp = await fetch(up.upload_url, { method: "PUT", body: form });
-      if (!resp.ok) throw new Error(`Ошибка при загрузке файла ${i + 1}`);
+      
+      if (!resp.ok) {
+        console.error("Supabase upload error", resp.status, await resp.text());
+        throw new Error(`Хранилище отклонило загрузку (${resp.status})`);
+      }
+      
       uploadedPaths.push(up.path);
     }
-    if (uploadedPaths.length === 0) throw new Error("Ни один файл не был загружен");
-    await api(`/challenges/${c.id}/photo`, { method: "POST", body: { path: uploadedPaths.join(",") } });
+
+    if (uploadedPaths.length === 0) {
+      throw new Error("Ни один файл не был загружен");
+    }
+
+    // 3. Сохраняем все пути в БД
+    await api(`/challenges/${c.id}/photo`, { 
+      method: "POST", 
+      body: { path: uploadedPaths.join(",") } 
+    });
+
     toast(`Загружено фото: ${uploadedPaths.length}`);
     tg.HapticFeedback?.notificationOccurred("success");
     closeChallengeDetails();
     await openChallenges();
-  } catch (e) { toast(e.message || "Ошибка загрузки"); } finally { btn.disabled = false; btn.textContent = original; }
+  } catch (e) {
+    console.error(e);
+    toast(e.message || "Ошибка загрузки");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+    // Очищаем инпут ТОЛЬКО в самом конце, когда всё загружено
+    ev.target.value = ""; 
+  }
 });
 
 /* ---------- Действия создателя ---------- */
