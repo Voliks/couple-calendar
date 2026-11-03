@@ -292,13 +292,9 @@ async function prepareImage(file) {
 }
 
 $("challengePhotoInput").addEventListener("change", async (ev) => {
-  // Сохраняем файлы в массив ДО очистки инпута (это фикс для iOS)
-  const pickedFiles = Array.from(ev.target.files || []);
-  
-  if (!pickedFiles.length || !currentChallenge) {
-    ev.target.value = "";
-    return;
-  }
+  const pickedFiles = ev.target.files;
+  ev.target.value = ""; 
+  if (!pickedFiles || !pickedFiles.length || !currentChallenge) return;
 
   const c = currentChallenge;
   const btn = $("chatAttachBtn");
@@ -307,65 +303,27 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
   btn.textContent = "Загрузка 0/" + pickedFiles.length + "…";
 
   const uploadedPaths = [];
-
   try {
     for (let i = 0; i < pickedFiles.length; i++) {
       const file = pickedFiles[i];
       if (file.type && !file.type.startsWith("image/")) continue;
-
       btn.textContent = `Загрузка ${i + 1}/${pickedFiles.length}…`;
-      
-      // Подготовка фото (сжатие). Если не удалось - грузим оригинал.
-      let preparedFile = file;
-      try {
-        preparedFile = await prepareImage(file);
-      } catch (err) {
-        console.warn("Не удалось сжать фото, грузим оригинал", err);
-      }
-
-      // 1. Получаем ссылку
-      const up = await api("/challenges/upload-url", {
-        method: "POST",
-        body: { filename: preparedFile.name || "photo.jpg", challenge_id: c.id },
-      });
-
-      // 2. Грузим в Supabase
+      const preparedFile = await prepareImage(file);
+      const up = await api("/challenges/upload-url", { method: "POST", body: { filename: preparedFile.name || "photo.jpg", challenge_id: c.id } });
       const form = new FormData();
       form.append("cacheControl", "3600");
       form.append("", preparedFile);
       const resp = await fetch(up.upload_url, { method: "PUT", body: form });
-      
-      if (!resp.ok) {
-        console.error("Supabase upload error", resp.status, await resp.text());
-        throw new Error(`Хранилище отклонило загрузку (${resp.status})`);
-      }
-      
+      if (!resp.ok) throw new Error(`Ошибка при загрузке файла ${i + 1}`);
       uploadedPaths.push(up.path);
     }
-
-    if (uploadedPaths.length === 0) {
-      throw new Error("Ни один файл не был загружен");
-    }
-
-    // 3. Сохраняем все пути в БД
-    await api(`/challenges/${c.id}/photo`, { 
-      method: "POST", 
-      body: { path: uploadedPaths.join(",") } 
-    });
-
+    if (uploadedPaths.length === 0) throw new Error("Ни один файл не был загружен");
+    await api(`/challenges/${c.id}/photo`, { method: "POST", body: { path: uploadedPaths.join(",") } });
     toast(`Загружено фото: ${uploadedPaths.length}`);
     tg.HapticFeedback?.notificationOccurred("success");
     closeChallengeDetails();
     await openChallenges();
-  } catch (e) {
-    console.error(e);
-    toast(e.message || "Ошибка загрузки");
-  } finally {
-    btn.disabled = false;
-    btn.textContent = original;
-    // Очищаем инпут ТОЛЬКО в самом конце, когда всё загружено
-    ev.target.value = ""; 
-  }
+  } catch (e) { toast(e.message || "Ошибка загрузки"); } finally { btn.disabled = false; btn.textContent = original; }
 });
 
 /* ---------- Действия создателя ---------- */
@@ -389,20 +347,43 @@ async function viewChallengePhoto() {
   const btn = $("chatViewPhotoBtn");
   const original = btn.textContent;
   btn.disabled = true;
-  btn.textContent = "Открываем…";
+  btn.textContent = "Загрузка фото…";
+  
   try {
     const paths = currentChallenge.photo_id.split(",").filter(Boolean);
     const urls = [];
+
+    // Получаем все ссылки
     for (const path of paths) {
       const res = await api(`/challenges/photo-url?path=${encodeURIComponent(path)}`);
       if (res.view_url) urls.push(res.view_url);
     }
+
     if (!urls.length) throw new Error("Ссылки не получены");
-    if (tg.openLink && urls.length === 1) tg.openLink(urls[0]);
-    else if (tg.showImages) tg.showImages(urls);
-    else urls.forEach(url => window.open(url, "_blank"));
-  } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = original; }
+
+    // Показываем наше модальное окно с фото
+    const container = $("photoViewerContent");
+    container.innerHTML = urls.map((url, i) => `
+      <img src="${url}" style="max-width: 100%; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);" alt="Фото ${i+1}">
+    `).join("");
+    
+    $("photoViewerOverlay").hidden = false;
+    
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
+
+// Добавьте обработчик закрытия окна просмотра в блок привязки событий (в самом низу challenges.js)
+// Найдите там строку: $("chatSendBtn").onclick = sendMessage;
+// И перед ней добавьте:
+$("photoViewerClose").onclick = () => { $("photoViewerOverlay").hidden = true; };
+$("photoViewerOverlay").onclick = (e) => { 
+  if (e.target === $("photoViewerOverlay")) $("photoViewerOverlay").hidden = true; 
+};
 
 /* ---------- Привязка событий ---------- */
 

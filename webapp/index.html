@@ -379,6 +379,18 @@
   </div>
 </div>
 
+<!-- Окно просмотра фото -->
+<div class="overlay" id="photoViewerOverlay" hidden style="z-index: 50; align-items: center; justify-content: center; background: rgba(0,0,0,0.9); padding: 10px;">
+  <div style="width: 100%; height: 100%; display: flex; flex-direction: column;">
+    <div style="display: flex; justify-content: flex-end; padding: 10px;">
+      <button id="photoViewerClose" style="color: #fff; font-size: 32px; background: none; border: none; padding: 0 10px; line-height: 1;">&times;</button>
+    </div>
+    <div id="photoViewerContent" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; align-items: center; padding-bottom: 20px;">
+      <!-- Фото будут здесь -->
+    </div>
+  </div>
+</div>
+
 <!-- Скрытый инпут для выбора фото (с атрибутом multiple) -->
 <input type="file" id="challengePhotoInput" accept="image/*" multiple style="display: none;">
 
@@ -389,7 +401,7 @@
 <script src="js/list.js?v=20"></script>
 <script src="js/ideas.js"></script>
 <script src="js/form.js"></script>
-<script src="js/challenges.js?v=45"></script>
+<script src="js/challenges.js?v=55"></script>
 <script src="js/shop.js?v=5"></script>
 <script src="js/main.js?v=100"></script>
 </body>
