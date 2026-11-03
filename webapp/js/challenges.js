@@ -26,15 +26,18 @@ async function openChallenges() {
 
   try {
     const res = await api("/challenges");
+    // Сортируем: новые сверху
     allChallenges = (res.history || []).sort((a, b) => b.created_at - a.created_at);
+    
     catalogData = res.catalog || {};
     $("challengeBalance").textContent = res.balance ?? 0;
 
+    // Показываем либо архив, либо все активные (без slice, чтобы можно было прокручивать)
     let filtered;
     if (showArchive) {
       filtered = allChallenges.filter(c => c.is_archived);
     } else {
-      filtered = allChallenges.filter(c => !c.is_archived).slice(0, 3);
+      filtered = allChallenges.filter(c => !c.is_archived);
     }
 
     // Инициализируем категории (если еще не выбрана)
@@ -292,9 +295,11 @@ async function prepareImage(file) {
 }
 
 $("challengePhotoInput").addEventListener("change", async (ev) => {
-  const pickedFiles = ev.target.files;
-  ev.target.value = ""; 
-  if (!pickedFiles || !pickedFiles.length || !currentChallenge) return;
+  const pickedFiles = Array.from(ev.target.files || []);
+  if (!pickedFiles.length || !currentChallenge) {
+    ev.target.value = "";
+    return;
+  }
 
   const c = currentChallenge;
   const btn = $("chatAttachBtn");
@@ -308,7 +313,10 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
       const file = pickedFiles[i];
       if (file.type && !file.type.startsWith("image/")) continue;
       btn.textContent = `Загрузка ${i + 1}/${pickedFiles.length}…`;
-      const preparedFile = await prepareImage(file);
+      
+      let preparedFile = file;
+      try { preparedFile = await prepareImage(file); } catch (err) {}
+
       const up = await api("/challenges/upload-url", { method: "POST", body: { filename: preparedFile.name || "photo.jpg", challenge_id: c.id } });
       const form = new FormData();
       form.append("cacheControl", "3600");
@@ -323,7 +331,7 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
     tg.HapticFeedback?.notificationOccurred("success");
     closeChallengeDetails();
     await openChallenges();
-  } catch (e) { toast(e.message || "Ошибка загрузки"); } finally { btn.disabled = false; btn.textContent = original; }
+  } catch (e) { toast(e.message || "Ошибка загрузки"); } finally { btn.disabled = false; btn.textContent = original; ev.target.value = ""; }
 });
 
 /* ---------- Действия создателя ---------- */
@@ -377,18 +385,14 @@ async function viewChallengePhoto() {
   }
 }
 
-// Добавьте обработчик закрытия окна просмотра в блок привязки событий (в самом низу challenges.js)
-// Найдите там строку: $("chatSendBtn").onclick = sendMessage;
-// И перед ней добавьте:
-$("photoViewerClose").onclick = () => { $("photoViewerOverlay").hidden = true; };
-$("photoViewerOverlay").onclick = (e) => { 
-  if (e.target === $("photoViewerOverlay")) $("photoViewerOverlay").hidden = true; 
-};
-
 /* ---------- Привязка событий ---------- */
 
 try {
   tg.BackButton?.onClick(() => {
+    if (!$("photoViewerOverlay").hidden) {
+      $("photoViewerOverlay").hidden = true;
+      return;
+    }
     if (!$("challengeChatOverlay").hidden) closeChallengeDetails();
     else if (!$("challengesOverlay").hidden) closeChallenges();
   });
@@ -475,6 +479,12 @@ try {
     if (e.target === $("challengeChatOverlay")) closeChallengeDetails();
   });
 
+  // Обработчики для окна просмотра фото
+  $("photoViewerClose").onclick = () => { $("photoViewerOverlay").hidden = true; };
+  $("photoViewerOverlay").onclick = (e) => { 
+    if (e.target === $("photoViewerOverlay")) $("photoViewerOverlay").hidden = true; 
+  };
+
   $("chatBackBtn").onclick = closeChallengeDetails;
   $("chatAttachBtn").onclick = () => $("challengePhotoInput").click();
   $("chatViewPhotoBtn").onclick = viewChallengePhoto;
@@ -494,12 +504,6 @@ try {
     });
   };
 
-    // Обработчики для окна просмотра фото
-  $("photoViewerClose").onclick = () => { $("photoViewerOverlay").hidden = true; };
-  $("photoViewerOverlay").onclick = (e) => { 
-    if (e.target === $("photoViewerOverlay")) $("photoViewerOverlay").hidden = true; 
-  };
-  
   $("chatSendBtn").onclick = sendMessage;
   $("chatMessageInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
