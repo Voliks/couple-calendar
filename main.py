@@ -1046,13 +1046,15 @@ async def api_unlink(request: web.Request) -> web.Response:
         raise ApiError("У вас нет партнёра", 409)
     notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
     return web.json_response({"status": "unlinked"})
+
+# --- SUPABASE AND CHALLENGES ---
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
 PHOTO_BUCKET = os.getenv("SUPABASE_BUCKET", "challenges").strip() or "challenges"
 PHOTO_EXTS = ("jpg", "jpeg", "png", "webp", "gif", "heic", "heif")
 CHALLENGE_MAX_POINTS = 20  # в challenges.json есть задания до 20 баллов
 _supabase = None
-_challenge_messages: dict[int, list[dict]] = {}
 
 
 def get_supabase():
@@ -1116,7 +1118,6 @@ async def api_upload_photo_url(request: web.Request) -> web.Response:
     if challenge["status"] not in ("pending", "rejected"):
         raise ApiError("Фото сейчас прикрепить нельзя", 409)
 
-    # Имя файла от клиента в путь не берём (кириллица/пробелы/«..» ломают ключ в Supabase) — только расширение
     name = str(body.get("filename") or "")
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     if ext not in PHOTO_EXTS:
@@ -1125,7 +1126,6 @@ async def api_upload_photo_url(request: web.Request) -> web.Response:
 
     sb = get_supabase()
     try:
-        # supabase-py синхронный — выносим в поток, чтобы не вешать бота и API
         res = await asyncio.to_thread(sb.storage.from_(PHOTO_BUCKET).create_signed_upload_url, path)
         upload_url = _storage_url(res.get("signed_url") or res.get("signedUrl") or res.get("signedURL"))
     except Exception:
@@ -1141,8 +1141,13 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     path = request.query.get("path", "").strip()
     if not path:
         raise ApiError("Путь не указан", 400)
-    # смотреть фото могут только двое участников этого челленджа
-    challenge = await db.get_challenge_by_photo(path)
+        
+    # Ищем челлендж, в котором есть это фото
+    rs = await db._exec("SELECT id FROM user_challenges WHERE photo_id LIKE ? LIMIT 1", (f"%{path}%",))
+    if not rs.rows:
+        raise ApiError("Фото не найдено", 404)
+        
+    challenge = await db.get_user_challenge(rs.rows[0][0])
     if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Фото не найдено", 404)
 
@@ -1210,7 +1215,6 @@ async def api_create_challenge(request: web.Request) -> web.Response:
     if not user["partner_id"]:
         raise ApiError("Сначала свяжитесь с партнёром", 409)
 
-    # Проверяем, сколько ВСЕГО челленджей создано сегодня (независимо от статуса)
     now = int(time.time())
     start_of_day = now - (now % 86400)
     rs = await db._exec(
@@ -1246,84 +1250,32 @@ async def api_create_challenge(request: web.Request) -> web.Response:
     notify(user["partner_id"], f"⚔️ Тебе бросили вызов: «{text}» ({points} б.). На выполнение {hours} ч.")
     return web.json_response({"status": "created", "challenge": challenge}, status=201)
 
-
-async def api_create_challenge(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    user = await db.get_or_create_user(tg_user.id)
-    if not user["partner_id"]:
-        raise ApiError("Сначала свяжитесь с партнёром", 409)
-
-    # Проверяем, сколько ВСЕГО челленджей создано сегодня (независимо от статуса)
-    now = int(time.time())
-    start_of_day = now - (now % 86400)
-    rs = await db._exec(
-        "SELECT COUNT(*) FROM user_challenges "
-        "WHERE creator_id = ? AND created_at >= ?",
-        (tg_user.id, start_of_day)
-    )
-    created_today = rs.rows[0][0]
-    if created_today >= 3:
-        raise ApiError("Лимит на сегодня: можно создать не более 3 челленджей.", 429)
-
-    body = await read_json(request)
-    text = str(body.get("text") or "").strip()[:300]
-    category = str(body.get("category") or "").strip()[:50] or "Своё"
-    try:
-        points = int(body.get("reward"))
-        hours = int(body.get("hours", 24))
-    except (TypeError, ValueError):
-        raise ApiError("Некорректное количество очков или времени")
-        
-    if not text:
-        raise ApiError("Укажите текст задания")
-    if not 1 <= points <= CHALLENGE_MAX_POINTS:
-        raise ApiError(f"Количество очков должно быть от 1 до {CHALLENGE_MAX_POINTS}")
-    if not 1 <= hours <= 720:
-        raise ApiError("Время на выполнение должно быть от 1 часа до 30 дней (720 часов)")
-
-    deadline = int(time.time()) + hours * 3600
-
-    challenge = await db.create_user_challenge(
-        tg_user.id, user["partner_id"], category, text, points, deadline
-    )
-    notify(user["partner_id"], f"⚔️ Тебе бросили вызов: «{text}» ({points} б.). На выполнение {hours} ч.")
-    return web.json_response({"status": "created", "challenge": challenge}, status=201)
 
 async def api_challenge_action(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
     challenge = await db.get_user_challenge(challenge_id)
-    if not challenge or challenge["creator_id"] != tg_user.id:
-        raise ApiError("Челлендж не найден или у вас нет доступа", 404)
+    
+    if not challenge:
+        raise ApiError("Челлендж не найден", 404)
+        
+    action = (await read_json(request)).get("action")
+    is_creator = tg_user.id == challenge["creator_id"]
 
-    body = await read_json(request)
-    action = str(body.get("action") or body.get("status") or "").strip().lower()
-    if action in ("approve", "approved", "accept", "accepted"):
-        new_status = "approved"
-    elif action in ("reject", "rejected"):
-        new_status = "rejected"
+    if action == "approve" and is_creator:
+        if not await db.transition_challenge(challenge_id, ("submitted",), "approved"):
+            raise ApiError("Этот вызов нельзя засчитать в текущем статусе", 409)
+        await db.add_balance(challenge["target_id"], challenge["reward"])
+        notify(challenge["target_id"], f"✅ Твой челлендж засчитан! Тебе начислено {challenge['reward']} баллов.")
+    elif action == "reject" and is_creator:
+        if not await db.transition_challenge(challenge_id, ("submitted",), "rejected"):
+            raise ApiError("Этот вызов нельзя отклонить в текущем статусе", 409)
+        notify(challenge["target_id"], f"❌ Челлендж отклонён: «{challenge['text']}». Можно прислать другое фото.")
     else:
-        raise ApiError("Некорректное действие")
+        raise ApiError("Недопустимое действие", 400)
+        
+    return web.json_response({"status": "ok"})
 
-    if not await db.transition_challenge(
-        challenge_id, ("submitted",), new_status
-    ):
-        raise ApiError("Этот челлендж уже обработан или ещё не отправлен", 409)
-
-    if new_status == "approved":
-        points = int(challenge.get("points", challenge.get("reward", 0)) or 0)
-        if points > 0:
-            await db.add_balance(challenge["target_id"], points)
-        notify(
-            challenge["target_id"],
-            f"✅ Челлендж «{challenge['text']}» принят! Начислено {points} б.",
-        )
-    else:
-        notify(
-            challenge["target_id"],
-            f"↩️ Выполнение челленджа «{challenge['text']}» отклонено. Можно отправить фото повторно.",
-        )
-    return web.json_response({"status": new_status})
 
 async def api_get_challenge_messages(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
@@ -1338,6 +1290,7 @@ async def api_get_challenge_messages(request: web.Request) -> web.Response:
     )
     messages = [{"id": r[0], "sender_id": r[1], "text": r[2], "created_at": r[3]} for r in rs.rows]
     return web.json_response({"messages": messages})
+
 
 async def api_post_challenge_message(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
@@ -1363,11 +1316,12 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
     
     return web.json_response({"status": "ok"})
 
+
 async def api_get_shop_items(request: web.Request) -> web.Response:
     authenticate(request)
-    # Читаем товары прямо из JSON-файла
     items = db.get_shop_items_json()
     return web.json_response({"items": items})
+
 
 async def api_buy_shop_item(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
@@ -1385,7 +1339,6 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
     if not valid_date(date):
         raise ApiError("Некорректная дата")
 
-    # Ищем товар в JSON
     items = db.get_shop_items_json()
     item = next((i for i in items if i.get("id") == item_id), None)
     if not item:
@@ -1395,15 +1348,12 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
     cost = item.get("cost")
     emoji = item.get("emoji", "🎁")
 
-    # Проверяем баланс
     balance = await db.get_user_balance(tg_user.id)
     if balance < cost:
         raise ApiError("Недостаточно баллов для покупки", 403)
 
-    # Списываем баллы
     await db.add_balance(tg_user.id, -cost)
 
-    # Создаем событие в календаре (Отдых)
     event = await db.create_event(
         created_by=tg_user.id,
         target_user=user["partner_id"],
@@ -1414,7 +1364,6 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
         category="rest",
     )
     
-    # Уведомляем партнёра
     notify(
         user["partner_id"], 
         f"🎁 Партнёр купил желание «{title}» на {fmt_range(date, '')}. Загляните в календарь!",
@@ -1422,12 +1371,13 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
     )
 
     return web.json_response({"status": "ok", "event": event_to_dict(event, tg_user.id)})
+
+
 async def api_get_event_comments(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     event_id = _int_param(request, "id")
     event = await member_event(request, tg_user.id)
     
-    # Комментарии доступны только для rest и sex
     if event["category"] not in ("rest", "sex"):
         return web.json_response({"comments": []})
 
@@ -1457,11 +1407,12 @@ async def api_post_event_comment(request: web.Request) -> web.Response:
         (event_id, tg_user.id, text, int(time.time()))
     )
     
-    # Отправляем уведомление партнёру
     partner_id = event["target_user"] if tg_user.id == event["created_by"] else event["created_by"]
     notify(partner_id, f"💬 Новый комментарий к событию «{event['title']}»:\n\n{text}")
     
     return web.json_response({"status": "ok"})
+
+
 async def api_delete_challenge(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
@@ -1474,18 +1425,11 @@ async def api_delete_challenge(request: web.Request) -> web.Response:
     if challenge["status"] != "pending":
         raise ApiError("Нельзя удалить челлендж, который уже выполняется или завершен", 403)
 
-    # Также удаляем сообщения из чата этого челленджа
     await db._exec("DELETE FROM challenge_messages WHERE challenge_id = ?", (challenge_id,))
     await db.delete_user_challenge(challenge_id, tg_user.id)
     
     return web.json_response({"status": "deleted"})
 
-async def api_add_custom_challenge(request: web.Request) -> web.Response:
-    # Пока просто возвращаем успех, чтобы фронтенд знал, что можно добавить в список
-    # (Мы будем сохранять пользовательские задания прямо в challenges.json? 
-    # Нет, лучше хранить их в отдельной таблице или просто в оперативной памяти.
-    # Для простоты разрешим создавать прямо при броске вызова.)
-    pass
 
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
@@ -1511,7 +1455,6 @@ async def send_due_reminders() -> None:
             except Exception:
                 continue
             remind_at = event_dt_local - timedelta(minutes=c["remind_before"])
-            # шлём, как только время подошло и пока событие не началось — пропущенные при простое тоже уйдут
             if not (remind_at <= local_now < event_dt_local):
                 continue
             if not await db.mark_reminded(c["event_id"], c["user_id"]):
@@ -1623,18 +1566,26 @@ async def main() -> None:
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
+    
+    # Челленджи и магазин
     app.router.add_get("/api/challenges", api_get_challenges_data)
     app.router.add_post("/api/challenges", api_create_challenge)
     app.router.add_post("/api/challenges/{id}/action", api_challenge_action)
     app.router.add_post("/api/challenges/upload-url", api_upload_photo_url)
     app.router.add_get("/api/challenges/photo-url", api_challenge_photo_url)
     app.router.add_post("/api/challenges/{id}/photo", api_set_challenge_photo)
+    app.router.add_delete("/api/challenges/{id}", api_delete_challenge)
     app.router.add_get("/api/challenges/{id}/messages", api_get_challenge_messages)
     app.router.add_post("/api/challenges/{id}/messages", api_post_challenge_message)
+    
+    # Магазин
     app.router.add_get("/api/shop", api_get_shop_items)
     app.router.add_post("/api/shop/buy", api_buy_shop_item)
+    
+    # Комментарии
     app.router.add_get("/api/events/{id}/comments", api_get_event_comments)
     app.router.add_post("/api/events/{id}/comments", api_post_event_comment)
+    
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
