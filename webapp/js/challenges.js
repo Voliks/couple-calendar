@@ -34,12 +34,11 @@ async function openChallenges() {
 
     let filtered;
     if (showArchive) {
-      filtered = allChallenges.filter(c => c.is_archived);
+      // В архиве показываем те, которые вручную отправлены в архив (статус archived) или у которых истёк дедлайн
+      filtered = allChallenges.filter(c => c.status === "archived" || c.is_archived);
     } else {
-      // В основном списке показываем активные и недавно завершенные, которые еще не ушли в архив
-      const active = allChallenges.filter(c => c.status === "pending" || c.status === "submitted");
-      const recentlyDone = allChallenges.filter(c => (c.status === "approved" || c.status === "rejected") && !c.is_archived).slice(0, 3);
-      filtered = [...active, ...recentlyDone].sort((a, b) => b.created_at - a.created_at);
+      // В основном списке показываем всё, кроме прямо архивированных
+      filtered = allChallenges.filter(c => c.status !== "archived" && !c.is_archived);
     }
 
     // Инициализируем категории (если еще не выбрана)
@@ -64,6 +63,7 @@ function statusLabel(c) {
     case "submitted": return "🔍 На проверке";
     case "approved":  return "✅ Выполнено";
     case "rejected":  return "❌ Отклонено";
+    case "archived":  return "🗄 В архиве";
     default:          return c.status;
   }
 }
@@ -89,8 +89,8 @@ function renderChallenges(listToRender = []) {
       dateStr = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
     }
 
-    // Крестик (только если не в архиве)
-    const archiveIcon = !c.is_archived && !showArchive 
+    // Крестик отображается только если карточка не в архиве
+    const archiveIcon = c.status !== "archived" && !c.is_archived && !showArchive 
       ? `<button class="archive-btn" data-archive-id="${c.id}" style="background:none; border:none; color:var(--hint); font-size:22px; cursor:pointer; padding: 0 8px; line-height:1;" title="Убрать в архив">×</button>` 
       : "";
 
@@ -472,7 +472,7 @@ try {
   $("challengesClose").onclick = closeChallenges;
   $("createChallengeBtn").onclick = createChallenge;
 
-  // Клик по крестику — архивация карточки
+  // Нажатие на крестик карточки для переноса в архив
   $("challengesList").addEventListener("click", async (ev) => {
     const archiveBtn = ev.target.closest(".archive-btn");
     if (!archiveBtn) return;
@@ -481,8 +481,10 @@ try {
     ev.preventDefault();
     
     const id = archiveBtn.dataset.archiveId;
-    archiveBtn.textContent = "⏳";
-    archiveBtn.disabled = true;
+    const card = archiveBtn.closest(".challenge-card");
+    
+    // Мгновенно убираем из верстки
+    if (card) card.style.display = "none";
     
     try {
       await api(`/challenges/${id}/archive`, { method: "POST" });
@@ -491,12 +493,11 @@ try {
       await openChallenges();
     } catch (err) {
       toast(err.message);
-      archiveBtn.textContent = "×";
-      archiveBtn.disabled = false;
+      if (card) card.style.display = "flex";
     }
   });
 
-  // Клик по карточке для открытия деталей
+  // Клик по всей карточке открывает детали (чат)
   $("challengesList").addEventListener("click", (ev) => {
     if (ev.target.closest(".archive-btn")) return;
     const card = ev.target.closest("[data-challenge-id]");

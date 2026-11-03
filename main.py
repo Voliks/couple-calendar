@@ -1438,11 +1438,10 @@ async def api_archive_challenge_manually(request: web.Request) -> web.Response:
     if tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Нет доступа", 403)
 
-    # Ставим дедлайн на 2 дня назад, чтобы он улетел в архив
-    past_deadline = int(time.time()) - (2 * 86400)
+    # Меняем статус прямо на 'archived'
     await db._exec(
-        "UPDATE user_challenges SET deadline = ? WHERE id = ?", 
-        (past_deadline, challenge_id)
+        "UPDATE user_challenges SET status = 'archived' WHERE id = ?", 
+        (challenge_id,)
     )
     return web.json_response({"status": "archived"})
 
