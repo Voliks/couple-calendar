@@ -223,11 +223,13 @@
 <!-- Окно со списком челленджей -->
 <div class="overlay" id="challengesOverlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
       <h2 style="margin:0;">Челленджи</h2>
-      <div style="font-weight:700;">🏆 <span id="challengeBalance">0</span></div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <button id="toggleArchiveBtn" class="btn ghost" style="padding: 4px 8px; font-size: 12px; font-weight:600;">🗄 Архив</button>
+        <div style="font-weight:700;">🏆 <span id="challengeBalance">0</span></div>
+      </div>
     </div>
-
     <div id="challengesList"></div>
 
     <label for="challengeCategorySelect">Категория</label>
@@ -343,7 +345,7 @@
 <script src="js/list.js"></script>
 <script src="js/ideas.js"></script>
 <script src="js/form.js"></script>
-<script src="js/challenges.js?v=16"></script>
+<script src="js/challenges.js?v=17"></script>
 <script src="js/shop.js?v=1"></script>
 <script src="js/main.js"></script>
 </body>

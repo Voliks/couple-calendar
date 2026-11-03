@@ -2,6 +2,7 @@ let allChallenges = [];
 let catalogData = {};
 let currentChallenge = null;
 let chatPollTimer = null;
+let showArchive = false; // Флаг: показываем ли мы сейчас архив
 
 /* ---------- Список ---------- */
 
@@ -9,16 +10,39 @@ async function openChallenges() {
   $("challengesOverlay").hidden = false;
   tg.BackButton?.show();
   $("challengesList").innerHTML = `<div class="spinner" style="margin:20px auto;"></div>`;
+  
+  // Обновляем кнопку архива
+  const archiveBtn = $("toggleArchiveBtn");
+  if (archiveBtn) {
+    archiveBtn.textContent = showArchive ? "⬅️ Назад" : "🗄 Архив";
+    archiveBtn.style.background = showArchive ? "var(--accent)" : "var(--bg2)";
+    archiveBtn.style.color = showArchive ? "#fff" : "var(--text)";
+  }
 
   try {
     const res = await api("/challenges");
-    
-    // Сортируем так, чтобы новые всегда были в самом верху
+    // Сортируем: новые сверху
     allChallenges = (res.history || []).sort((a, b) => b.created_at - a.created_at);
-    
     catalogData = res.catalog || {};
     $("challengeBalance").textContent = res.balance ?? 0;
 
+    // Скрываем интерфейс создания, если мы в архиве
+    const formRow = document.querySelector(".row:has(#createChallengeBtn)");
+    if (formRow) formRow.style.display = showArchive ? "none" : "grid";
+    
+    const elementsToToggle = [
+      "label[for='challengeCategorySelect']", "#challengeCategorySelect",
+      "label[for='challengeIdeaSelect']", "#challengeIdeaSelect",
+      "label[for='newChallengeReward']", "#newChallengeReward",
+      "label[for='challengeDeadlineSelect']", "#challengeDeadlineSelect"
+    ];
+    elementsToToggle.forEach(sel => {
+      const el = document.querySelector(sel);
+      if (el) el.style.display = showArchive ? "none" : "block";
+    });
+
+    const filtered = allChallenges.filter(c => showArchive ? c.is_archived : !c.is_archived);
+    
     const catSelect = $("challengeCategorySelect");
     const prevCat = catSelect.value;
     catSelect.innerHTML = Object.keys(catalogData).map(cat =>
@@ -27,7 +51,7 @@ async function openChallenges() {
     if (prevCat && catalogData[prevCat]) catSelect.value = prevCat;
 
     updateIdeaSelect();
-    renderChallenges();
+    renderChallenges(filtered);
   } catch (e) {
     $("challengesList").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
     toast(e.message);
@@ -45,14 +69,14 @@ function statusLabel(c) {
   }
 }
 
-function renderChallenges() {
+function renderChallenges(listToRender = []) {
   const list = $("challengesList");
-  if (!allChallenges.length) {
-    list.innerHTML = `<div class="empty">Пока нет вызовов. Брось первый!</div>`;
+  if (!listToRender.length) {
+    list.innerHTML = `<div class="empty">${showArchive ? "Архив пуст" : "Пока нет вызовов. Брось первый!"}</div>`;
     return;
   }
 
-  list.innerHTML = allChallenges.map(c => {
+  list.innerHTML = listToRender.map(c => {
     const cls = [
       "challenge-card",
       c.is_creator ? "" : "them",
@@ -60,12 +84,10 @@ function renderChallenges() {
       c.status === "rejected" ? "rejected" : ""
     ].filter(Boolean).join(" ");
     
-    // Форматируем дату создания (created_at приходит в секундах)
     let dateStr = "";
     if (c.created_at) {
       const d = new Date(c.created_at * 1000);
-      dateStr = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) + ', ' + 
-                d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      dateStr = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
     }
 
     return `<div class="${cls}" data-challenge-id="${c.id}">
@@ -379,6 +401,15 @@ try {
 
   const createBtn = $("createChallengeBtn");
   if (createBtn) createBtn.onclick = createChallenge;
+
+  // Кнопка переключения Архива
+  const archiveBtn = $("toggleArchiveBtn");
+  if (archiveBtn) {
+    archiveBtn.onclick = () => {
+      showArchive = !showArchive;
+      openChallenges();
+    };
+  }
 
   $("challengesList").addEventListener("click", (ev) => {
     const card = ev.target.closest("[data-challenge-id]");

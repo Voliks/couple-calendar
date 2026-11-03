@@ -1138,8 +1138,19 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
     balance = await db.get_user_balance(tg_user.id)
     history = await db.get_all_user_challenges(tg_user.id)
     catalog = await db.get_challenges_json()
+    
+    now = int(time.time())
     for h in history:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
+        # Если статус approved и прошло больше 24 часов (86400 секунд) с момента завершения (deadline)
+        if h["status"] == "approved" and h.get("deadline", 0) > 0:
+            if now - h["deadline"] > 86400:
+                h["is_archived"] = True
+            else:
+                h["is_archived"] = False
+        else:
+            h["is_archived"] = False
+
     return web.json_response({
         "balance": balance,
         "history": history,
@@ -1202,11 +1213,12 @@ async def api_challenge_action(request: web.Request) -> web.Response:
     action = (await read_json(request)).get("action")
     is_creator = tg_user.id == challenge["creator_id"]
 
-    # переход статуса атомарный: повторное нажатие «Засчитать» не начислит баллы дважды
     if action == "approve" and is_creator:
         if not await db.transition_challenge(challenge_id, ("submitted",), "approved"):
             raise ApiError("Этот вызов нельзя засчитать в текущем статусе", 409)
         await db.add_balance(challenge["target_id"], challenge["reward"])
+        # Записываем время завершения в поле deadline для будущего архивирования
+        await db._exec("UPDATE user_challenges SET deadline = ? WHERE id = ?", (int(time.time()), challenge_id))
         notify(challenge["target_id"], f"✅ Твой челлендж засчитан! Тебе начислено {challenge['reward']} баллов.")
     elif action == "reject" and is_creator:
         if not await db.transition_challenge(challenge_id, ("submitted",), "rejected"):
