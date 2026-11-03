@@ -3,7 +3,8 @@ let catalogData = {};
 let currentChallenge = null;
 let chatPollTimer = null;
 let showArchive = false;
-let selectedIdeaData = null; // Хранит выбранную идею (текст и баллы)
+let selectedIdeaData = null; 
+let selectedCategory = ""; 
 
 /* ---------- Список ---------- */
 
@@ -20,44 +21,29 @@ async function openChallenges() {
     archiveBtn.style.color = showArchive ? "#fff" : "var(--text)";
   }
 
+  // Скрываем блок создания в архиве
+  $("createChallengeArea").style.display = showArchive ? "none" : "block";
+
   try {
     const res = await api("/challenges");
-    
-    // Сортируем: новые сверху
     allChallenges = (res.history || []).sort((a, b) => b.created_at - a.created_at);
-    
     catalogData = res.catalog || {};
     $("challengeBalance").textContent = res.balance ?? 0;
 
-    // Скрываем интерфейс создания, если мы в архиве
-    const elementsToHide = [
-      "label[for='challengeCategorySelect']", "#challengeCategorySelect",
-      "#challengeIdeaLabel", "#challengeIdeaList",
-      "#customChallengeBlock", 
-      "label[for='newChallengeReward']", "#newChallengeReward",
-      "label[for='challengeDeadlineSelect']", "#challengeDeadlineSelect",
-      ".row:has(#createChallengeBtn)"
-    ];
-    elementsToHide.forEach(sel => {
-      const el = document.querySelector(sel);
-      if (el) el.style.display = showArchive ? "none" : (sel === "#customChallengeBlock" ? "flex" : "block");
-    });
-
-    // Фильтруем: в основном списке только 3 последних неархивных, в архиве — все архивные
     let filtered;
     if (showArchive) {
       filtered = allChallenges.filter(c => c.is_archived);
     } else {
       filtered = allChallenges.filter(c => !c.is_archived).slice(0, 3);
     }
-    
-    const catSelect = $("challengeCategorySelect");
-    const prevCat = catSelect.value;
-    catSelect.innerHTML = Object.keys(catalogData).map(cat =>
-      `<option value="${esc(cat)}">${esc(cat)}</option>`
-    ).join("");
-    if (prevCat && catalogData[prevCat]) catSelect.value = prevCat;
 
+    // Инициализируем категории (если еще не выбрана)
+    if (!selectedCategory && Object.keys(catalogData).length > 0) {
+      selectedCategory = Object.keys(catalogData)[0];
+      $("selectedCatText").textContent = selectedCategory;
+    }
+
+    renderCategories();
     updateIdeaList();
     renderChallenges(filtered);
   } catch (e) {
@@ -112,11 +98,20 @@ function renderChallenges(listToRender = []) {
   }).join("");
 }
 
-/* ---------- Кастомный список заданий (как в магазине) ---------- */
+/* ---------- Категории и Задания (аккордеоны) ---------- */
+
+function renderCategories() {
+  const list = $("catAccordionContent");
+  list.innerHTML = Object.keys(catalogData).map(cat => {
+    const isSelected = cat === selectedCategory;
+    return `<div class="card accepted" style="margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-left: 4px solid ${isSelected ? 'var(--accent)' : 'transparent'}; cursor: pointer; background: ${isSelected ? 'rgba(36,129,204,0.1)' : 'var(--bg2)'};" data-cat="${esc(cat)}">
+      <div style="font-size: 14px; font-weight: 500;">${esc(cat)}</div>
+    </div>`;
+  }).join("");
+}
 
 function updateIdeaList() {
-  const cat = $("challengeCategorySelect").value;
-  const ideas = catalogData[cat] || [];
+  const ideas = catalogData[selectedCategory] || [];
   const list = $("challengeIdeaList");
   
   if (!ideas.length) {
@@ -132,6 +127,7 @@ function updateIdeaList() {
     if (index === 0 && !selectedIdeaData) {
       selectedIdeaData = { text, points };
       $("newChallengeReward").value = points;
+      $("selectedIdeaText").textContent = text;
     }
     
     const isSelected = selectedIdeaData && selectedIdeaData.text === text;
@@ -143,12 +139,9 @@ function updateIdeaList() {
   }).join("");
 }
 
-/* ---------- Создание челленджа ---------- */
+/* ---------- Создание ---------- */
 
 async function createChallenge() {
-  const cat = $("challengeCategorySelect").value;
-  
-  // Берем либо выбранную из списка, либо кастомную (если она в приоритете)
   let text = selectedIdeaData ? selectedIdeaData.text : "";
   const customInput = $("customChallengeInput");
   if (customInput && customInput.value.trim()) {
@@ -164,7 +157,7 @@ async function createChallenge() {
   btn.disabled = true;
   btn.textContent = "Отправка…";
   try {
-    await api("/challenges", { method: "POST", body: { category: cat, text, reward: points, hours } });
+    await api("/challenges", { method: "POST", body: { category: selectedCategory, text, reward: points, hours } });
     toast("Вызов брошен!");
     tg.HapticFeedback?.notificationOccurred("success");
     await openChallenges();
@@ -196,7 +189,6 @@ function openChallengeDetails(id) {
   $("chatTaskText").textContent = c.text;
   $("chatReward").textContent = `🏆 ${c.reward} баллов`;
   
-  // Вывод дедлайна
   let deadlineStr = "";
   if (c.deadline > 0) {
     const d = new Date(c.deadline * 1000);
@@ -204,40 +196,31 @@ function openChallengeDetails(id) {
   }
   $("chatStatus").textContent = `Статус: ${statusLabel(c)}${deadlineStr}`;
 
-  // Фото
   const hasPhoto = !!c.photo_id;
   $("chatPhotoBlock").style.display = hasPhoto ? "block" : "none";
   
   if (hasPhoto) {
     const count = c.photo_id.split(",").filter(Boolean).length;
-    $("chatViewPhotoBtn").textContent = count > 1 
-      ? `🖼 Посмотреть фото (${count} шт.)` 
-      : `🖼 Посмотреть прикрепленное фото`;
+    $("chatViewPhotoBtn").textContent = count > 1 ? `🖼 Посмотреть фото (${count} шт.)` : `🖼 Посмотреть фото`;
   }
 
-  // Исполнитель: прикрепить фото, если pending или rejected
   const isTarget = !c.is_creator;
   const canAttach = isTarget && (c.status === "pending" || c.status === "rejected");
   $("chatActionBlock").style.display = canAttach ? "block" : "none";
 
-  // Создатель: засчитать/отклонить, если submitted
   const isCreator = c.is_creator;
   const canReview = isCreator && c.status === "submitted";
   $("chatCreatorActions").style.display = canReview ? "flex" : "none";
 
-  // Показываем кнопку удаления (только создатель и только в статусе pending)
   const canDelete = isCreator && c.status === "pending";
-  const delBlock = $("chatDeleteBlock");
-  if (delBlock) delBlock.style.display = canDelete ? "block" : "none";
+  $("chatDeleteBlock").style.display = canDelete ? "block" : "none";
 
-  // Загружаем историю сообщений
   loadMessages(id);
 
-  // Запускаем автообновление чата каждые 4 секунды
   if (chatPollTimer) clearInterval(chatPollTimer);
   chatPollTimer = setInterval(() => {
     if (!$("challengeChatOverlay").hidden && currentChallenge?.id === id) {
-      loadMessages(id, true); // true = тихая загрузка
+      loadMessages(id, true);
     }
   }, 4000);
 }
@@ -245,12 +228,7 @@ function openChallengeDetails(id) {
 function closeChallengeDetails() {
   $("challengeChatOverlay").hidden = true;
   currentChallenge = null;
-  
-  if (chatPollTimer) {
-    clearInterval(chatPollTimer);
-    chatPollTimer = null;
-  }
-
+  if (chatPollTimer) { clearInterval(chatPollTimer); chatPollTimer = null; }
   if (!$("challengesOverlay").hidden) tg.BackButton?.show();
   else tg.BackButton?.hide();
 }
@@ -260,33 +238,24 @@ function closeChallengeDetails() {
 async function loadMessages(challengeId, silent = false) {
   const list = $("chatMessagesList");
   if (!list) return;
-  
-  if (!silent) {
-    list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Загрузка...</div>`;
-  }
+  if (!silent) list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Загрузка...</div>`;
   
   try {
     const res = await api(`/challenges/${challengeId}/messages`);
     const msgs = res.messages || [];
-    
     if (!msgs.length) {
-      if (!silent) list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Сообщений пока нет. Напишите первым!</div>`;
+      if (!silent) list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Сообщений пока нет.</div>`;
       return;
     }
-    
     const myId = state?.my_id || 0; 
-    
     const currentCount = list.querySelectorAll('div').length;
     if (silent && currentCount === msgs.length) return;
 
     list.innerHTML = msgs.map(m => {
       const isMine = m.sender_id === myId;
       const align = isMine ? "align-self: flex-end; background: var(--accent); color: #fff;" : "align-self: flex-start; background: var(--bg2); color: var(--text);";
-      return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; ${align}">
-        ${esc(m.text)}
-      </div>`;
+      return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; ${align}">${esc(m.text)}</div>`;
     }).join("");
-    
     list.scrollTop = list.scrollHeight;
   } catch (e) {
     if (!silent) list.innerHTML = `<div style="text-align:center; color:rgb(var(--declined)); font-size:12px; padding:10px;">Ошибка: ${esc(e.message)}</div>`;
@@ -298,25 +267,14 @@ async function sendMessage() {
   const input = $("chatMessageInput");
   const text = input.value.trim();
   if (!text) return;
-  
-  input.value = "";
-  input.disabled = true;
-  
+  input.value = ""; input.disabled = true;
   try {
-    await api(`/challenges/${currentChallenge.id}/messages`, {
-      method: "POST",
-      body: { text }
-    });
+    await api(`/challenges/${currentChallenge.id}/messages`, { method: "POST", body: { text } });
     await loadMessages(currentChallenge.id);
-  } catch (e) {
-    toast(e.message);
-  } finally {
-    input.disabled = false;
-    input.focus();
-  }
+  } catch (e) { toast(e.message); } finally { input.disabled = false; input.focus(); }
 }
 
-/* ---------- Загрузка фото в Supabase (мультизагрузка) ---------- */
+/* ---------- Загрузка фото ---------- */
 
 async function prepareImage(file) {
   try {
@@ -329,13 +287,13 @@ async function prepareImage(file) {
     bmp.close?.();
     const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
     if (blob && blob.size < file.size) return new File([blob], "photo.jpg", { type: "image/jpeg" });
-  } catch (e) { /* оставляем оригинал */ }
+  } catch (e) {}
   return file;
 }
 
 $("challengePhotoInput").addEventListener("change", async (ev) => {
   const pickedFiles = ev.target.files;
-  ev.target.value = ""; // Очищаем инпут
+  ev.target.value = ""; 
   if (!pickedFiles || !pickedFiles.length || !currentChallenge) return;
 
   const c = currentChallenge;
@@ -345,56 +303,27 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
   btn.textContent = "Загрузка 0/" + pickedFiles.length + "…";
 
   const uploadedPaths = [];
-
   try {
     for (let i = 0; i < pickedFiles.length; i++) {
       const file = pickedFiles[i];
       if (file.type && !file.type.startsWith("image/")) continue;
-
       btn.textContent = `Загрузка ${i + 1}/${pickedFiles.length}…`;
-      
       const preparedFile = await prepareImage(file);
-
-      const up = await api("/challenges/upload-url", {
-        method: "POST",
-        body: { filename: preparedFile.name || "photo.jpg", challenge_id: c.id },
-      });
-
+      const up = await api("/challenges/upload-url", { method: "POST", body: { filename: preparedFile.name || "photo.jpg", challenge_id: c.id } });
       const form = new FormData();
       form.append("cacheControl", "3600");
       form.append("", preparedFile);
       const resp = await fetch(up.upload_url, { method: "PUT", body: form });
-      
-      if (!resp.ok) {
-        console.error("Supabase upload error", resp.status);
-        throw new Error(`Ошибка при загрузке файла ${i + 1}`);
-      }
-      
+      if (!resp.ok) throw new Error(`Ошибка при загрузке файла ${i + 1}`);
       uploadedPaths.push(up.path);
     }
-
-    if (uploadedPaths.length === 0) {
-      throw new Error("Ни один файл не был загружен");
-    }
-
-    // Сохраняем все пути в БД через запятую
-    const allPathsString = uploadedPaths.join(",");
-    
-    await api(`/challenges/${c.id}/photo`, { 
-      method: "POST", 
-      body: { path: allPathsString } 
-    });
-
+    if (uploadedPaths.length === 0) throw new Error("Ни один файл не был загружен");
+    await api(`/challenges/${c.id}/photo`, { method: "POST", body: { path: uploadedPaths.join(",") } });
     toast(`Загружено фото: ${uploadedPaths.length}`);
     tg.HapticFeedback?.notificationOccurred("success");
     closeChallengeDetails();
     await openChallenges();
-  } catch (e) {
-    toast(e.message || "Не удалось загрузить фото");
-  } finally {
-    btn.disabled = false;
-    btn.textContent = original;
-  }
+  } catch (e) { toast(e.message || "Ошибка загрузки"); } finally { btn.disabled = false; btn.textContent = original; }
 });
 
 /* ---------- Действия создателя ---------- */
@@ -408,12 +337,10 @@ async function challengeAction(action) {
     tg.HapticFeedback?.notificationOccurred("success");
     closeChallengeDetails();
     await openChallenges();
-  } catch (e) {
-    toast(e.message);
-  }
+  } catch (e) { toast(e.message); }
 }
 
-/* ---------- Просмотр фото (галерея) ---------- */
+/* ---------- Просмотр фото ---------- */
 
 async function viewChallengePhoto() {
   if (!currentChallenge?.photo_id) return;
@@ -421,34 +348,18 @@ async function viewChallengePhoto() {
   const original = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Открываем…";
-  
   try {
     const paths = currentChallenge.photo_id.split(",").filter(Boolean);
     const urls = [];
-
-    // Получаем ссылки для всех фото
     for (const path of paths) {
       const res = await api(`/challenges/photo-url?path=${encodeURIComponent(path)}`);
       if (res.view_url) urls.push(res.view_url);
     }
-
     if (!urls.length) throw new Error("Ссылки не получены");
-
-    if (tg.openLink && urls.length === 1) {
-      tg.openLink(urls[0]);
-    } else if (tg.showImages) {
-      // Встроенный просмотрщик Telegram (для нескольких фото)
-      tg.showImages(urls);
-    } else {
-      // Фолбэк: открываем каждую ссылку в новой вкладке
-      urls.forEach(url => window.open(url, "_blank"));
-    }
-  } catch (e) {
-    toast(e.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = original;
-  }
+    if (tg.openLink && urls.length === 1) tg.openLink(urls[0]);
+    else if (tg.showImages) tg.showImages(urls);
+    else urls.forEach(url => window.open(url, "_blank"));
+  } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = original; }
 }
 
 /* ---------- Привязка событий ---------- */
@@ -461,54 +372,76 @@ try {
 } catch (e) {}
 
 (() => {
-  const btn = $("challengeBtn");
-  if (btn) btn.onclick = openChallenges;
-
-  const closeBtn = $("challengesClose");
-  if (closeBtn) closeBtn.onclick = closeChallenges;
-
-  const catSelect = $("challengeCategorySelect");
-  if (catSelect) catSelect.onchange = () => {
-    // При смене категории сбрасываем выбранное
-    selectedIdeaData = null;
-    updateIdeaList();
+  // Аккордеон категорий
+  $("catAccordionHeader").onclick = () => {
+    const content = $("catAccordionContent");
+    content.style.display = content.style.display === "none" ? "block" : "none";
   };
 
-  const createBtn = $("createChallengeBtn");
-  if (createBtn) createBtn.onclick = createChallenge;
+  // Аккордеон заданий
+  $("ideaAccordionHeader").onclick = () => {
+    const content = $("ideaAccordionContent");
+    content.style.display = content.style.display === "none" ? "block" : "none";
+  };
 
-  // Кнопка переключения Архива
-  const archiveBtn = $("toggleArchiveBtn");
-  if (archiveBtn) {
-    archiveBtn.onclick = () => {
-      showArchive = !showArchive;
-      openChallenges();
-    };
-  }
+  // Выбор категории
+  $("catAccordionContent").addEventListener("click", (e) => {
+    const card = e.target.closest("[data-cat]");
+    if (!card) return;
+    selectedCategory = card.dataset.cat;
+    selectedIdeaData = null; // Сбрасываем выбранное задание
+    $("selectedCatText").textContent = selectedCategory;
+    $("selectedIdeaText").textContent = "Не выбрано";
+    renderCategories();
+    updateIdeaList();
+    $("catAccordionContent").style.display = "none"; // Закрываем аккордеон
+  });
 
-  // Обработка выбора задания из кастомного списка
+  // Выбор задания
   $("challengeIdeaList").addEventListener("click", (e) => {
     const card = e.target.closest("[data-idea-idx]");
     if (!card) return;
-    
     const text = card.dataset.ideaText;
     const points = parseInt(card.dataset.ideaPoints, 10);
     selectedIdeaData = { text, points };
-    
-    // Очищаем кастомный инпут, так как выбрали из списка
-    $("customChallengeInput").value = "";
-
-    // Подсвечиваем выбранную карточку
-    $("challengeIdeaList").querySelectorAll("[data-idea-idx]").forEach(el => {
-      el.style.borderLeftColor = "transparent";
-      el.style.background = "var(--bg2)";
-    });
-    card.style.borderLeftColor = "var(--accent)";
-    card.style.background = "rgba(36,129,204,0.1)";
-    
-    // Обновляем баллы
+    $("customChallengeInput").value = ""; // Очищаем кастомный инпут
     $("newChallengeReward").value = points;
+    $("selectedIdeaText").textContent = text;
+    
+    // Обновляем подсветку
+    updateIdeaList();
+    $("ideaAccordionContent").style.display = "none"; // Закрываем аккордеон
   });
+
+  // Кастомное задание
+  $("customChallengeBtn").onclick = () => {
+    const text = $("customChallengeInput").value.trim();
+    if (!text) return toast("Введите текст задания");
+    selectedIdeaData = null; 
+    $("selectedIdeaText").textContent = text;
+    $("customChallengeInput").value = "";
+    $("newChallengeReward").value = "10";
+    toast("Своё задание добавлено!");
+    $("ideaAccordionContent").style.display = "none";
+  };
+
+  $("customChallengeInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      $("customChallengeBtn").click();
+    }
+  });
+
+  // Переключение архива
+  $("toggleArchiveBtn").onclick = () => {
+    showArchive = !showArchive;
+    openChallenges();
+  };
+
+  // Кнопки челленджей
+  $("challengeBtn").onclick = openChallenges;
+  $("challengesClose").onclick = closeChallenges;
+  $("createChallengeBtn").onclick = createChallenge;
 
   $("challengesList").addEventListener("click", (ev) => {
     const card = ev.target.closest("[data-challenge-id]");
@@ -523,79 +456,27 @@ try {
     if (e.target === $("challengeChatOverlay")) closeChallengeDetails();
   });
 
-  const backBtn = $("chatBackBtn");
-  if (backBtn) backBtn.onclick = closeChallengeDetails;
-
-  const attachBtn = $("chatAttachBtn");
-  if (attachBtn) attachBtn.onclick = () => $("challengePhotoInput").click();
-
-  const viewBtn = $("chatViewPhotoBtn");
-  if (viewBtn) viewBtn.onclick = viewChallengePhoto;
-
-  const approveBtn = $("chatApproveBtn");
-  if (approveBtn) approveBtn.onclick = () => challengeAction("approve");
-
-  const rejectBtn = $("chatRejectBtn");
-  if (rejectBtn) rejectBtn.onclick = () => challengeAction("reject");
-
-  // Кнопка удаления
-  const deleteBtn = $("chatDeleteBtn");
-  if (deleteBtn) {
-    deleteBtn.onclick = async () => {
-      if (!currentChallenge) return;
-      confirmDialog("Точно удалить этот вызов?", async () => {
-        try {
-          await api(`/challenges/${currentChallenge.id}`, { method: "DELETE" });
-          toast("Вызов удален");
-          tg.HapticFeedback?.notificationOccurred("success");
-          closeChallengeDetails();
-          await openChallenges();
-        } catch (e) {
-          toast(e.message);
-        }
-      });
-    };
-  }
-
-  // Добавление своего задания
-  const customBtn = $("customChallengeBtn");
-  const customInput = $("customChallengeInput");
+  $("chatBackBtn").onclick = closeChallengeDetails;
+  $("chatAttachBtn").onclick = () => $("challengePhotoInput").click();
+  $("chatViewPhotoBtn").onclick = viewChallengePhoto;
+  $("chatApproveBtn").onclick = () => challengeAction("approve");
+  $("chatRejectBtn").onclick = () => challengeAction("reject");
   
-  if (customBtn && customInput) {
-    customBtn.onclick = () => {
-      const text = customInput.value.trim();
-      if (!text) return toast("Введите текст задания");
-      
-      // Снимаем выделение со старых карточек, так как выбрано кастомное
-      $("challengeIdeaList").querySelectorAll("[data-idea-idx]").forEach(el => {
-        el.style.borderLeftColor = "transparent";
-        el.style.background = "var(--bg2)";
-      });
-      selectedIdeaData = null; 
-      
-      customInput.value = "";
-      $("newChallengeReward").value = "10"; // По умолчанию 10 баллов
-      toast("Своё задание добавлено. Нажмите Отправить.");
-    };
-    
-    customInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        customBtn.click();
-      }
+  $("chatDeleteBtn").onclick = async () => {
+    if (!currentChallenge) return;
+    confirmDialog("Точно удалить этот вызов?", async () => {
+      try {
+        await api(`/challenges/${currentChallenge.id}`, { method: "DELETE" });
+        toast("Вызов удален");
+        tg.HapticFeedback?.notificationOccurred("success");
+        closeChallengeDetails();
+        await openChallenges();
+      } catch (e) { toast(e.message); }
     });
-  }
+  };
 
-  const sendBtn = $("chatSendBtn");
-  if (sendBtn) sendBtn.onclick = sendMessage;
-
-  const msgInput = $("chatMessageInput");
-  if (msgInput) {
-    msgInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        sendMessage();
-      }
-    });
-  }
+  $("chatSendBtn").onclick = sendMessage;
+  $("chatMessageInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
+  });
 })();
