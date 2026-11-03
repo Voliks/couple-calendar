@@ -1439,7 +1439,6 @@ async def api_archive_challenge_manually(request: web.Request) -> web.Response:
     if not challenge:
         raise ApiError("Челлендж не найден", 404)
         
-    # Архивировать может только создатель или исполнитель
     if tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Нет доступа", 403)
 
