@@ -45,8 +45,9 @@
 
   <button class="link-btn" id="unlink">Отвязать партнёра</button>
   
-  <button class="fab" id="shopBtn" aria-label="Магазин" style="right: 154px; background: #8b5cf6; font-size: 26px;">🛒</button>
-  <button class="fab" id="challengeBtn" aria-label="Челленджи" style="right: 86px; background: #eab308; font-size: 26px;">
+  <!-- Кнопки без инлайн-стилей -->
+  <button class="fab" id="shopBtn" aria-label="Магазин">🛒</button>
+  <button class="fab" id="challengeBtn" aria-label="Челленджи">
     ⚔️
     <span id="challengeBadge" style="position: absolute; top: -2px; right: -2px; width: 14px; height: 14px; background: red; border-radius: 50%; border: 2px solid var(--bg);" hidden></span>
   </button>
@@ -300,8 +301,6 @@
 <!-- Окно магазина -->
 <div class="overlay" id="shopOverlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true">
-    
-    <!-- Шапка как в челленджах -->
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
       <h2 style="margin:0;">Магазин</h2>
       <div style="display:flex; align-items:center; gap:10px;">
@@ -309,10 +308,7 @@
         <button id="shopClose" class="icon-btn" aria-label="Закрыть" style="font-size:26px; opacity:0.7; padding:0 4px; line-height:1;">×</button>
       </div>
     </div>
-
-    <!-- Список товаров -->
     <div id="shopList" style="max-height: 65vh; overflow-y: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;"></div>
-
   </div>
 </div>
 
@@ -391,18 +387,6 @@
   </div>
 </div>
 
-<!-- Окно просмотра фото -->
-<div class="overlay" id="photoViewerOverlay" hidden style="z-index: 50; align-items: center; justify-content: center; background: rgba(0,0,0,0.9); padding: 10px;">
-  <div style="width: 100%; height: 100%; display: flex; flex-direction: column;">
-    <div style="display: flex; justify-content: flex-end; padding: 10px;">
-      <button id="photoViewerClose" style="color: #fff; font-size: 32px; background: none; border: none; padding: 0 10px; line-height: 1;">&times;</button>
-    </div>
-    <div id="photoViewerContent" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; align-items: center; padding-bottom: 20px;">
-      <!-- Фото будут здесь -->
-    </div>
-  </div>
-</div>
-
 <!-- Скрытый инпут для выбора фото (с атрибутом multiple) -->
 <input type="file" id="challengePhotoInput" accept="image/*" multiple style="display: none;">
 
@@ -413,8 +397,8 @@
 <script src="js/list.js?v=20"></script>
 <script src="js/ideas.js"></script>
 <script src="js/form.js"></script>
-<script src="js/challenges.js?v=63"></script>
-<script src="js/shop.js?v=5"></script>
+<script src="js/challenges.js?v=65"></script>
+<script src="js/shop.js?v=6"></script>
 <script src="js/main.js?v=100"></script>
 </body>
 </html>

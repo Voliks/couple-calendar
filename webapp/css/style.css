@@ -111,12 +111,29 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .stat-cell.declined .num { color: rgb(var(--declined)); }
 .stat-cell.pending  .num { color: rgb(var(--pending)); }
 
-.fab { position: fixed; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom, 0px));
-  width: 58px; height: 58px; border-radius: 50%; background: var(--accent); color: var(--accent-text);
-  font-size: 32px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.25);
-  transition: transform .18s ease, opacity .18s ease;
-  z-index: 5; }
-.fab:active { transform: scale(.94); }
+/* --- ОБНОВЛЕННЫЕ КНОПКИ --- */
+.fab { 
+  position: fixed; 
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  width: 56px; 
+  height: 56px; 
+  border-radius: 50%; 
+  color: #fff; 
+  line-height: 1; 
+  box-shadow: 0 4px 12px rgba(0,0,0,.3); 
+  transition: transform .18s ease, opacity .18s ease; 
+  z-index: 5; 
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+}
+
+#shopBtn { background: #7c3aed; font-size: 24px; right: calc(18px + 56px + 12px + 56px + 12px); }
+#challengeBtn { background: #ca8a04; font-size: 24px; right: calc(18px + 56px + 12px); }
+#add { background: var(--accent); right: 18px; font-size: 30px; }
+
+.fab:active { transform: scale(.92); }
 .fab.fab-hidden { transform: translateY(120px); opacity: 0; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .fab { transition: none; } }
 
@@ -180,7 +197,6 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
   font-size: 18px; line-height: 1; user-select: none; flex-shrink: 0;
   touch-action: none; letter-spacing: -3px; }
 .cl-drag:active { cursor: grabbing; opacity: .9; }
-
 .checklist-item.dragging { opacity: .4; background: rgba(36,129,204,.1); }
 
 .cl-empty { padding: 8px 0; font-size: 14px; color: var(--hint); }
@@ -295,7 +311,8 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
 .cat-btn .cat-icon { font-size: 22px; line-height: 1; }
 .cat-cancel { width: 100%; margin-top: 14px; padding: 12px; border-radius: 12px;
   background: transparent; color: var(--hint); font-weight: 600; }
-  /* Стили для челленджей */
+  
+/* Стили для челленджей */
 .challenge-card {
   padding: 12px;
   border-radius: 12px;
