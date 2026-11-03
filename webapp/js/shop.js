@@ -20,10 +20,19 @@ async function openShop() {
 
     $("shopList").innerHTML = items.map(item => {
       const afford = currentBalance >= item.cost;
-
-      return `<div class="card accepted" style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; padding: 12px; border-left: 4px solid #8b5cf6; cursor: pointer;" data-item-id="${item.id}" data-item-title="${esc(item.title)}" data-item-cost="${item.cost}" data-item-emoji="${esc(item.emoji)}">
-        <div style="font-size: 16px; font-weight: 600; word-break: break-word; margin-right: 10px;">${esc(item.emoji)} ${esc(item.title)}</div>
-        <div style="font-size: 16px; font-weight: bold; white-space: nowrap; color: ${afford ? '#eab308' : 'var(--declined)'};">🏆 ${item.cost}</div>
+      
+      // Дизайн карточки подстроен под челленджи:
+      // padding 10px 12px, border-left 3px (фиолетовый), цвета и шрифты такие же
+      return `<div class="challenge-card" style="padding: 10px 12px; margin-bottom: 0; border-radius: 12px; border-left: 3px solid #8b5cf6; display: flex; justify-content: space-between; align-items: center; cursor: pointer; gap: 10px;" data-item-id="${item.id}" data-item-title="${esc(item.title)}" data-item-cost="${item.cost}" data-item-emoji="${esc(item.emoji)}">
+        
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+          <div style="font-size: 14px; font-weight: 600; line-height: 1.3; word-break: break-word;">${esc(item.emoji)} ${esc(item.title)}</div>
+        </div>
+        
+        <div style="font-size: 13px; font-weight: bold; white-space: nowrap; color: ${afford ? '#eab308' : 'var(--hint)'};">
+          🏆 ${item.cost}
+        </div>
+        
       </div>`;
     }).join("");
   } catch (e) {

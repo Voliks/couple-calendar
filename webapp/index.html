@@ -300,14 +300,19 @@
 <!-- Окно магазина -->
 <div class="overlay" id="shopOverlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true">
+    
+    <!-- Шапка как в челленджах -->
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-      <h2 style="margin:0;">Магазин желаний</h2>
+      <h2 style="margin:0;">Магазин</h2>
       <div style="display:flex; align-items:center; gap:10px;">
-        <div style="font-weight:700;">🏆 <span id="shopBalance">0</span></div>
-        <button id="shopClose" class="icon-btn" aria-label="Закрыть" style="font-size:24px; opacity:0.7; padding:0 8px; line-height:1;">×</button>
+        <div style="font-weight:700; font-size: 16px;">🏆 <span id="shopBalance">0</span></div>
+        <button id="shopClose" class="icon-btn" aria-label="Закрыть" style="font-size:26px; opacity:0.7; padding:0 4px; line-height:1;">×</button>
       </div>
     </div>
-    <div id="shopList" style="max-height: 60vh; overflow-y: auto; padding-right: 4px;"></div>
+
+    <!-- Список товаров -->
+    <div id="shopList" style="max-height: 65vh; overflow-y: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;"></div>
+
   </div>
 </div>
 
@@ -385,7 +390,7 @@
 <script src="js/ideas.js"></script>
 <script src="js/form.js"></script>
 <script src="js/challenges.js?v=45"></script>
-<script src="js/shop.js?v=4"></script>
+<script src="js/shop.js?v=5"></script>
 <script src="js/main.js?v=100"></script>
 </body>
 </html>
