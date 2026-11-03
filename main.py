@@ -1154,6 +1154,7 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     sb = get_supabase()
     try:
         res = await asyncio.to_thread(sb.storage.from_(PHOTO_BUCKET).create_signed_url, path, 3600)
+        logging.info("SUPABASE_SIGNED_URL_RESPONSE: %s", res)
         view_url = _storage_url(res.get("signedURL") or res.get("signedUrl"))
     except Exception:
         logging.exception("Supabase: не удалось создать ссылку на просмотр")
