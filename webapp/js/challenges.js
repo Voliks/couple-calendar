@@ -190,8 +190,9 @@ async function createChallenge() {
 }
 
 function closeChallenges() {
-  challengesRequestSeq++;
   $("challengesOverlay").hidden = true;
+  // Сбрасываем режим архива, чтобы при следующем открытии показать основной список
+  showArchive = false;
   if (!$("overlay").hidden || !$("challengeChatOverlay").hidden) tg.BackButton?.show();
   else tg.BackButton?.hide();
 }

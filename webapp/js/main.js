@@ -156,13 +156,17 @@ $("challengeBtn").onclick = async () => {
     const oldText = icon.textContent;
     icon.textContent = "⏳";
     try {
-      await loadScript("js/challenges.js?v=72");
+      await loadScript("js/challenges.js?v=73");
     } catch (e) {
       toast("Не удалось загрузить челленджи");
       icon.textContent = oldText;
       return;
     }
     icon.textContent = oldText;
+  }
+  // Принудительно сбрасываем архив перед открытием
+  if (typeof showArchive !== "undefined") {
+    showArchive = false;
   }
   openChallenges();
 };
