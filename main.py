@@ -1196,9 +1196,11 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
         h["is_archived"] = False
         
-        if h["status"] in ("approved", "rejected"):
-            dl = h.get("deadline") or 0
-            if dl > 0 and now > dl:
+        # В архив попадают завершённые (approved / rejected) с истёкшим дедлайном,
+        # а также просроченные (expired) — по ним уже списан штраф.
+        dl = h.get("deadline") or 0
+        if h["status"] in ("approved", "rejected", "expired"):
+            if h["status"] == "expired" or (dl > 0 and now > dl):
                 h["is_archived"] = True
 
     return web.json_response({
@@ -1261,6 +1263,10 @@ async def api_challenge_action(request: web.Request) -> web.Response:
         
     action = (await read_json(request)).get("action")
     is_creator = tg_user.id == challenge["creator_id"]
+
+    # Просроченный челлендж засчитать/отклонить нельзя — штраф уже списан.
+    if challenge["status"] == "expired":
+        raise ApiError("Срок челленджа истёк, штраф уже списан", 409)
 
     if action == "approve" and is_creator:
         if not await db.transition_challenge(challenge_id, ("submitted",), "approved"):
@@ -1529,6 +1535,39 @@ async def reminder_loop() -> None:
         await asyncio.sleep(60)
 
 
+async def penalty_loop() -> None:
+    """Раз в минуту ищет просроченные pending-челленджи и списывает штраф с исполнителя.
+
+    Штраф = половина reward с округлением вниз, но не меньше 1.
+    После списания статус челленджа становится 'expired' и penalty_applied = 1,
+    поэтому повторно штраф не снимется.
+    """
+    while True:
+        try:
+            now = int(time.time())
+            expired = await db.find_expired_pending_challenges(now)
+            for c in expired:
+                penalty = db.challenge_penalty_amount(c["reward"])
+                if not await db.apply_challenge_penalty(c["id"], c["target_id"], penalty):
+                    continue  # кто-то другой уже обработал (или гонка)
+                # Уведомления: исполнителю и создателю
+                notify(
+                    c["target_id"],
+                    f"⏰ Время на челлендж «{c['text']}» истекло.\n"
+                    f"Списано {penalty} б. (из {c['reward']} возможных).",
+                )
+                notify(
+                    c["creator_id"],
+                    f"⏰ Партнёр не выполнил челлендж «{c['text']}» вовремя.\n"
+                    f"С исполнителя списано {penalty} б.",
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("Ошибка обработки просроченных челленджей")
+        await asyncio.sleep(60)
+
+
 async def main() -> None:
     global bot_username
     logging.basicConfig(level=logging.INFO)
@@ -1591,12 +1630,16 @@ async def main() -> None:
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     logging.info("Web app: http://0.0.0.0:%s  (public: %s)", PORT, WEBAPP_URL)
     reminders = asyncio.create_task(reminder_loop())
+    penalties = asyncio.create_task(penalty_loop())
     try:
         await dp.start_polling(bot)
     finally:
         reminders.cancel()
+        penalties.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reminders
+        with contextlib.suppress(asyncio.CancelledError):
+            await penalties
         await runner.cleanup()
         await bot.session.close()
         await db.close_db()

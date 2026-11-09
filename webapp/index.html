@@ -346,6 +346,11 @@
       <div style="font-size: 16px; font-weight: 600; margin-bottom: 10px;" id="chatTaskText">Задание...</div>
       <div style="font-size: 14px; font-weight: bold; color: #eab308;" id="chatReward">🏆 0 баллов</div>
       <div style="font-size: 12px; color: var(--hint); margin-top: 8px;" id="chatStatus">Статус</div>
+
+      <!-- Дополнительное инфо для просроченных челленджей -->
+      <div id="chatPenaltyInfo" style="display:none; margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: rgba(239, 68, 68, 0.1); color: rgb(var(--declined)); font-size: 13px; font-weight: 600;">
+        ⏰ Срок истёк, штраф списан
+      </div>
       
       <div id="chatPhotoBlock" style="margin-top: 12px; display: none;">
         <button class="btn primary" id="chatViewPhotoBtn" style="width: 100%; font-size: 14px; padding: 10px;">🖼 Посмотреть прикрепленное фото</button>
@@ -370,10 +375,10 @@
       <!-- Сообщения будут появляться здесь -->
     </div>
 
-    <!-- Поле ввода -->
-    <div style="display: flex; gap: 8px;">
-      <input type="text" id="chatMessageInput" placeholder="Написать сообщение..." maxlength="500" style="flex: 1; padding: 12px; border-radius: 12px; border: none; background: var(--bg2); color: var(--text); outline: none;">
-      <button id="chatSendBtn" class="btn primary" style="padding: 0 16px; border-radius: 12px; font-weight: bold;">➤</button>
+    <!-- Поле ввода (скрывается для завершённых/просроченных челленджей) -->
+    <div id="chatInputRow" style="display: flex; gap: 8px;">
+      <input type="text" id="chatMessageInput" placeholder="Написать сообщение..." maxlength="500" autocomplete="off" style="flex: 1; padding: 12px; border-radius: 12px; border: none; background: var(--bg2); color: var(--text); outline: none;">
+      <button id="chatSendBtn" class="btn primary" aria-label="Отправить" style="padding: 0 16px; border-radius: 12px; font-weight: bold;">➤</button>
     </div>
 
   </div>
@@ -389,7 +394,7 @@
 <script src="js/list.js?v=20"></script>
 <script src="js/ideas.js"></script>
 <script src="js/form.js"></script>
-<script src="js/challenges.js?v=45"></script>
+<script src="js/challenges.js?v=46"></script>
 <script src="js/shop.js?v=5"></script>
 <script src="js/main.js?v=100"></script>
 </body>

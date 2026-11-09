@@ -59,6 +59,7 @@ function statusLabel(c) {
     case "submitted": return "🔍 На проверке";
     case "approved":  return "✅ Выполнено";
     case "rejected":  return "❌ Отклонено";
+    case "expired":   return "⏰ Просрочен";
     default:          return c.status;
   }
 }
@@ -75,7 +76,7 @@ function renderChallenges(listToRender = []) {
     const cls = [
       "challenge-card",
       c.is_creator ? "" : "them",
-      c.status === "approved" ? "done" : "",
+      (c.status === "approved" || c.status === "expired") ? "done" : "",
       c.status === "rejected" ? "rejected" : ""
     ].filter(Boolean).join(" ");
     
@@ -205,24 +206,37 @@ function openChallengeDetails(id) {
   }
 
   const isTarget = !c.is_creator;
+  // Прикреплять фото можно только в pending/rejected, и НЕЛЬЗЯ для expired.
   const canAttach = isTarget && (c.status === "pending" || c.status === "rejected");
   $("chatActionBlock").style.display = canAttach ? "block" : "none";
 
   const isCreator = c.is_creator;
+  // Засчитать/отклонить можно только submitted. Для expired действий нет.
   const canReview = isCreator && c.status === "submitted";
   $("chatCreatorActions").style.display = canReview ? "flex" : "none";
 
+  // Удалить можно только pending (у expired уже списан штраф — удалять нельзя).
   const canDelete = isCreator && c.status === "pending";
   $("chatDeleteBlock").style.display = canDelete ? "block" : "none";
+
+  // Инфо-блок про штраф — только для expired.
+  $("chatPenaltyInfo").style.display = (c.status === "expired") ? "block" : "none";
+
+  // Поле ввода сообщений: скрываем для финальных статусов.
+  const isFinal = ["approved", "rejected", "expired"].includes(c.status);
+  $("chatInputRow").style.display = isFinal ? "none" : "flex";
 
   loadMessages(id);
 
   if (chatPollTimer) clearInterval(chatPollTimer);
-  chatPollTimer = setInterval(() => {
-    if (!$("challengeChatOverlay").hidden && currentChallenge?.id === id) {
-      loadMessages(id, true);
-    }
-  }, 4000);
+  // Для завершённых/просроченных чат уже не меняется — поллинг не нужен.
+  if (!isFinal) {
+    chatPollTimer = setInterval(() => {
+      if (!$("challengeChatOverlay").hidden && currentChallenge?.id === id) {
+        loadMessages(id, true);
+      }
+    }, 4000);
+  }
 }
 
 function closeChallengeDetails() {
@@ -264,6 +278,10 @@ async function loadMessages(challengeId, silent = false) {
 
 async function sendMessage() {
   if (!currentChallenge) return;
+  // Для завершённых/просроченных чат только для чтения
+  if (["approved", "rejected", "expired"].includes(currentChallenge.status)) {
+    return toast("Челлендж завершён, чат закрыт");
+  }
   const input = $("chatMessageInput");
   const text = input.value.trim();
   if (!text) return;
@@ -297,6 +315,11 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
   if (!pickedFiles || !pickedFiles.length || !currentChallenge) return;
 
   const c = currentChallenge;
+  // Дополнительная защита: не грузим фото в завершённые/просроченные
+  if (["approved", "rejected", "expired"].includes(c.status)) {
+    return toast("Челлендж уже завершён");
+  }
+
   const btn = $("chatAttachBtn");
   const original = btn.textContent;
   btn.disabled = true;
@@ -331,6 +354,9 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
 async function challengeAction(action) {
   if (!currentChallenge) return;
   const c = currentChallenge;
+  if (c.status === "expired") {
+    return toast("Срок челленджа истёк, штраф уже списан");
+  }
   try {
     await api(`/challenges/${c.id}/action`, { method: "POST", body: { action } });
     toast(action === "approve" ? "Засчитано!" : "Отклонено");
