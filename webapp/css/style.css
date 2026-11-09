@@ -387,17 +387,38 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
 .btn-send-comment { background: var(--accent); color: #fff; border-radius: 8px; padding: 0 12px; font-weight: 700; }
 
 /* ============================================================
-   Блок «Настроение дня»
+   Блок «Настроение дня» (компактный, сверху)
    ============================================================ */
 
 .mood-block {
-  margin: 18px 0 4px;
-  padding: 12px 14px;
-  border-radius: 14px;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-radius: 12px;
   background: var(--bg2);
+  transition: background .15s;
 }
-.mood-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.mood-title { font-size: 13px; color: var(--hint); }
+.mood-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+.mood-title {
+  font-size: 13px;
+  color: var(--hint);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mood-chevron {
+  font-size: 9px;
+  opacity: .6;
+  transition: transform .2s;
+}
+.mood-block.collapsed .mood-chevron {
+  transform: rotate(-90deg);
+}
 .mood-edit {
   font-size: 13px;
   padding: 4px 10px;
@@ -407,21 +428,30 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
   font-weight: 600;
 }
 .mood-edit:active { background: rgba(36,129,204,.2); }
-.mood-row { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.mood-body {
+  margin-top: 8px;
+  overflow: hidden;
+}
+.mood-block.collapsed .mood-body {
+  display: none;
+}
+
+.mood-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .mood-cell {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  border-radius: 12px;
+  padding: 6px 10px;
+  border-radius: 10px;
   background: var(--bg);
-  font-size: 14px;
+  font-size: 13px;
   min-width: 0;
   flex: 1 1 45%;
 }
-.mood-cell .m-emoji { font-size: 22px; line-height: 1; flex-shrink: 0; }
+.mood-cell .m-emoji { font-size: 20px; line-height: 1; flex-shrink: 0; }
 .mood-cell .m-text { flex: 1; word-break: break-word; }
-.mood-cell .m-label { font-size: 11px; color: var(--hint); margin-bottom: 2px; }
+.mood-cell .m-label { font-size: 10px; color: var(--hint); margin-bottom: 1px; }
 .mood-cell.empty { opacity: .65; }
 
 .mood-emoji-grid {

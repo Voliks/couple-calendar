@@ -7,6 +7,7 @@
 <title>Календарь на двоих</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="stylesheet" href="css/style.css?v=9">
+<link rel="icon" href="data:,">
 </head>
 <body>
 
@@ -31,6 +32,17 @@
     <button class="today-btn" id="archiveBtn" aria-label="Архив дел">Архив</button>
   </div>
 
+  <!-- Блок «Настроение дня» (перенесён наверх, компактный) -->
+  <div id="moodBlock" class="mood-block" hidden>
+    <div class="mood-head" id="moodToggle">
+      <div class="mood-title">💭 Настроение дня <span class="mood-chevron">▼</span></div>
+      <button class="mood-edit" id="moodEditBtn" type="button">Изменить</button>
+    </div>
+    <div class="mood-body" id="moodBody">
+      <div class="mood-row" id="moodRow"></div>
+    </div>
+  </div>
+
   <div class="weekdays" aria-hidden="true">
     <span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span>
   </div>
@@ -42,15 +54,6 @@
   <div id="statsBlock" class="stats" hidden>
     <div class="stats-title">Статистика пары</div>
     <div class="stats-grid" id="statsGrid"></div>
-  </div>
-
-  <!-- Блок «Настроение дня» (заполняется mood.js) -->
-  <div id="moodBlock" class="mood-block" hidden>
-    <div class="mood-head">
-      <div class="mood-title">💭 Настроение дня</div>
-      <button class="mood-edit" id="moodEditBtn" type="button">Изменить</button>
-    </div>
-    <div class="mood-row" id="moodRow"></div>
   </div>
 
   <button class="link-btn" id="unlink">Отвязать партнёра</button>
@@ -419,7 +422,7 @@
 <script src="js/list.js?v=21" defer></script>
 <script src="js/ideas.js" defer></script>
 <script src="js/form.js" defer></script>
-<script src="js/mood.js?v=1" defer></script>
+<script src="js/mood.js?v=2" defer></script>
 <script src="js/main.js?v=123" defer></script>
 </body>
 </html>
