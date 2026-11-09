@@ -1086,6 +1086,59 @@ async def api_unlink(request: web.Request) -> web.Response:
     notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
     return web.json_response({"status": "unlinked"})
 
+async def api_get_mood(request: web.Request) -> web.Response:
+    tg_user = authenticate(request)
+    user = await db.get_or_create_user(tg_user.id)
+    if not user["partner_id"]:
+        raise ApiError("Сначала свяжитесь с партнёром", 409)
+    date = request.query.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if not valid_date(date):
+        raise ApiError("Некорректная дата")
+    pk = db.pair_key(tg_user.id, user["partner_id"])
+    moods = await db.get_moods(pk, date)
+    by_user = {m["user_id"]: m for m in moods}
+    mine = by_user.get(tg_user.id) or {"emoji": "", "text": "", "updated_at": 0}
+    partner = by_user.get(user["partner_id"]) or {"emoji": "", "text": "", "updated_at": 0}
+    return web.json_response({
+        "date": date,
+        "my_id": tg_user.id,
+        "partner_id": user["partner_id"],
+        "mine": mine,
+        "partner": partner,
+    })
+
+
+async def api_set_mood(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    user = await db.get_or_create_user(tg_user.id)
+    if not user["partner_id"]:
+        raise ApiError("Сначала свяжитесь с партнёром", 409)
+    body = await read_json(request)
+    date = str(body.get("date") or "").strip()
+    if not valid_date(date):
+        raise ApiError("Некорректная дата")
+    emoji = str(body.get("emoji") or "").strip()
+    text = str(body.get("text") or "").strip()
+    if emoji and len(emoji) > 8:
+        raise ApiError("Слишком длинный эмодзи")
+    if len(text) > 280:
+        raise ApiError("Слишком длинный текст")
+
+    pk = db.pair_key(tg_user.id, user["partner_id"])
+    before = await db.get_moods(pk, date)
+    partner_had = any(m["user_id"] == user["partner_id"] for m in before)
+    await db.set_mood(pk, tg_user.id, date, emoji, text)
+
+    # Уведомляем партнёра только при первом за день изменении (не спамим на каждое редактирование)
+    if (emoji or text) and not partner_had:
+        part = f" {emoji}" if emoji else ""
+        msg = f"💭 {tg_user.first_name} поделился(ась) настроением{part}"
+        if text:
+            msg += f": {text}"
+        notify(user["partner_id"], msg)
+
+    return web.json_response({"status": "ok"})
+
 # --- SUPABASE AND CHALLENGES ---
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
@@ -1123,6 +1176,51 @@ def get_supabase():
             _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     return _supabase
 
+BACKUP_BUCKET = os.getenv("SUPABASE_BACKUP_BUCKET", "").strip()
+BACKUP_KEEP_DAYS = int(os.getenv("SUPABASE_BACKUP_KEEP_DAYS", "14"))
+
+
+async def backup_database() -> None:
+    """Дамп всех таблиц в JSON.gz → Supabase Storage. Раз в сутки из reminder_loop.
+    Тихо пропускается, если бакет/ключи не заданы."""
+    if not SUPABASE_URL or not SUPABASE_KEY or not BACKUP_BUCKET:
+        return
+    try:
+        data = await db.dump_all_tables()
+        body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
+        gz = gzip.compress(body, 6)
+        name = f"backup_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.json.gz"
+        sb = get_supabase()
+        await asyncio.to_thread(
+            sb.storage.from_(BACKUP_BUCKET).upload,
+            name,
+            gz,
+            {"content-type": "application/gzip", "upsert": "true"},
+        )
+        logging.info("Бэкап БД загружен: %s (%s байт)", name, len(gz))
+
+        # Чистим старые бэкапы (по дате в имени)
+        try:
+            listing = await asyncio.to_thread(sb.storage.from_(BACKUP_BUCKET).list)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=BACKUP_KEEP_DAYS)
+            old = []
+            for item in listing or []:
+                nm = item.get("name", "")
+                if not nm.startswith("backup_") or not nm.endswith(".json.gz"):
+                    continue
+                try:
+                    d = datetime.strptime(nm[7:17], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                if d < cutoff:
+                    old.append(nm)
+            if old:
+                await asyncio.to_thread(sb.storage.from_(BACKUP_BUCKET).remove, old)
+                logging.info("Удалено старых бэкапов: %s", len(old))
+        except Exception:
+            logging.exception("Не удалось почистить старые бэкапы")
+    except Exception:
+        logging.exception("Не удалось сделать резервную копию БД")
 
 def _storage_url(url: str) -> str:
     if not url:
@@ -1675,11 +1773,12 @@ async def reminder_loop() -> None:
                     f"⌛ Челлендж «{c['text']}» просрочен. Партнёр потерял {c['penalty']} баллов."
                 )
             
-            # 3. Ежедневная очистка
+            # 3. Ежедневная очистка + резервная копия
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             if today != _last_cleanup_day:
                 _last_cleanup_day = today
                 await cleanup_old_reminders()
+                await backup_database()
                 
         except asyncio.CancelledError:
             raise
@@ -1720,10 +1819,14 @@ async def main() -> None:
     app.router.add_post("/api/events/{id}/idea", api_set_idea_response)
     app.router.add_post("/api/events/{id}/reaction", api_set_reaction)
     app.router.add_post("/api/events/{id}/comment", api_set_decline_comment)
+    app.router.add_get("/api/events/{id}/comments", api_get_event_comments)
+    app.router.add_post("/api/events/{id}/comments", api_post_event_comment)
     app.router.add_post("/api/events/{id}/items", api_add_item)
     app.router.add_put("/api/events/{id}/items/{item_id}", api_set_item)
     app.router.add_delete("/api/events/{id}/items/{item_id}", api_delete_item)
     app.router.add_post("/api/events/{id}/items/{item_id}/move", api_move_item)
+    app.router.add_get("/api/mood", api_get_mood)
+    app.router.add_post("/api/mood", api_set_mood)
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)

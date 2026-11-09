@@ -30,6 +30,10 @@
     <button class="today-btn" id="todayBtn" aria-label="Сегодня">Сегодня</button>
     <button class="today-btn" id="archiveBtn" aria-label="Архив дел">Архив</button>
   </div>
+
+  <!-- Плашка «сегодня» (клиентская, заполняется mood.js) -->
+  <div id="todayBanner" class="today-banner" hidden></div>
+
   <div class="weekdays" aria-hidden="true">
     <span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span>
   </div>
@@ -41,6 +45,15 @@
   <div id="statsBlock" class="stats" hidden>
     <div class="stats-title">Статистика пары</div>
     <div class="stats-grid" id="statsGrid"></div>
+  </div>
+
+  <!-- Блок «Настроение дня» (заполняется mood.js) -->
+  <div id="moodBlock" class="mood-block" hidden>
+    <div class="mood-head">
+      <div class="mood-title">💭 Настроение дня</div>
+      <button class="mood-edit" id="moodEditBtn" type="button">Изменить</button>
+    </div>
+    <div class="mood-row" id="moodRow"></div>
   </div>
 
   <button class="link-btn" id="unlink">Отвязать партнёра</button>
@@ -383,6 +396,21 @@
   </div>
 </div>
 
+<!-- Модалка выбора настроения дня -->
+<div class="overlay" id="moodOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true">
+    <h2>Настроение на сегодня</h2>
+    <label>Эмодзи</label>
+    <div class="mood-emoji-grid" id="moodEmojiGrid"></div>
+    <label for="moodText">Коротко (необязательно)</label>
+    <textarea id="moodText" maxlength="280" placeholder="Что происходит?"></textarea>
+    <div class="row">
+      <button class="btn ghost" id="moodCancel" type="button">Отмена</button>
+      <button class="btn primary" id="moodSave" type="button">Сохранить</button>
+    </div>
+  </div>
+</div>
+
 <!-- Скрытый инпут для выбора фото (с атрибутом multiple) -->
 <input type="file" id="challengePhotoInput" accept="image/*" multiple style="display: none;">
 
@@ -394,6 +422,7 @@
 <script src="js/list.js?v=21" defer></script>
 <script src="js/ideas.js" defer></script>
 <script src="js/form.js" defer></script>
+<script src="js/mood.js?v=1" defer></script>
 <script src="js/main.js?v=123" defer></script>
 </body>
 </html>

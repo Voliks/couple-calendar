@@ -134,5 +134,5 @@ let etag = null, etagKey = "";
 
 // Все модальные окна приложения; используется для блокировки жестов, опроса сервера и FAB-кнопок
 const OVERLAY_IDS = ["overlay", "ideasOverlay", "archiveOverlay", "catOverlay", "challengesOverlay", "shopOverlay", "buyDateOverlay",
-  "challengeChatOverlay", "photoViewerOverlay"];
+  "challengeChatOverlay", "photoViewerOverlay", "moodOverlay"];
 const anyOverlayOpen = () => OVERLAY_IDS.some((id) => { const el = $(id); return el && !el.hidden; });

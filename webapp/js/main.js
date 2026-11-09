@@ -67,6 +67,11 @@ function render() {
     if (badge) {
       badge.hidden = !state.has_new_challenges;
     }
+
+    // Плашка «сегодня» + настроение дня (mood.js)
+    if (typeof window.refreshMoodAndBanner === "function") {
+      window.refreshMoodAndBanner();
+    }
   }
 }
 

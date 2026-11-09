@@ -597,6 +597,21 @@ async def _m23_performance_indexes() -> None:
     await _exec("CREATE INDEX IF NOT EXISTS idx_challenge_messages_challenge_created ON challenge_messages (challenge_id, created_at)")
     await _exec("CREATE INDEX IF NOT EXISTS idx_event_comments_event_created ON event_comments (event_id, created_at)")
 
+async def _m24_moods() -> None:
+    await _exec("""
+        CREATE TABLE IF NOT EXISTS moods (
+            pair_key   TEXT NOT NULL,
+            user_id    INTEGER NOT NULL,
+            date       TEXT NOT NULL,
+            emoji      TEXT NOT NULL DEFAULT '',
+            text       TEXT NOT NULL DEFAULT '',
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (pair_key, user_id, date)
+        )
+    """)
+    await _exec(
+        "CREATE INDEX IF NOT EXISTS idx_moods_pair_date ON moods (pair_key, date)"
+    )
 
 MIGRATIONS = [
     (1, _m1_base),
@@ -622,7 +637,8 @@ MIGRATIONS = [
     (20, _m20_shop_items),
     (21, _m21_event_comments),
     (22, _m22_last_viewed),
-    (23, _m23_performance_indexes)
+    (23, _m23_performance_indexes),
+    (24, _m24_moods),
 ]
 
 
@@ -1315,6 +1331,46 @@ async def pair_stats(user_id: int, partner_id: int) -> dict:
         "by_category": by_category,
     }
 
+def pair_key(a: int, b: int) -> str:
+    """Стабильный ключ пары: одинаковый для обоих участников."""
+    x, y = sorted((int(a), int(b)))
+    return f"{x}:{y}"
+
+
+async def get_moods(pair_key_value: str, date: str) -> list[dict]:
+    """Настроения обоих участников на указанную дату (0, 1 или 2 записи)."""
+    rs = await _exec(
+        "SELECT user_id, emoji, text, updated_at FROM moods "
+        "WHERE pair_key = ? AND date = ? ORDER BY user_id",
+        (pair_key_value, date),
+    )
+    return [
+        {"user_id": r[0], "emoji": r[1] or "", "text": r[2] or "", "updated_at": r[3]}
+        for r in rs.rows
+    ]
+
+
+async def set_mood(
+    pair_key_value: str, user_id: int, date: str, emoji: str, text: str
+) -> dict:
+    """Ставит/обновляет настроение. Пустые emoji+text — удаляют запись."""
+    emoji = (emoji or "")[:8]
+    text = (text or "")[:280]
+    if not emoji and not text:
+        await _exec(
+            "DELETE FROM moods WHERE pair_key = ? AND user_id = ? AND date = ?",
+            (pair_key_value, user_id, date),
+        )
+        return {"user_id": user_id, "emoji": "", "text": "", "updated_at": 0}
+    now = int(time.time())
+    await _exec(
+        "INSERT INTO moods (pair_key, user_id, date, emoji, text, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(pair_key, user_id, date) DO UPDATE SET "
+        "emoji = excluded.emoji, text = excluded.text, updated_at = excluded.updated_at",
+        (pair_key_value, user_id, date, emoji, text, now),
+    )
+    return {"user_id": user_id, "emoji": emoji, "text": text, "updated_at": now}
 
 # === ЧЕЛЛЕНДЖИ И БАЛЛЫ ===
 
@@ -1484,3 +1540,23 @@ async def process_expired_challenges() -> list[dict]:
             "text": text, "reward": reward, "penalty": actual_penalty
         })
     return expired
+
+async def dump_all_tables() -> dict:
+    """Полный снимок всех таблиц для резервной копии. Без секретов."""
+    tables = [
+        "users", "events", "checklist_items", "reminders", "sex_ideas",
+        "hidden_ideas", "archived_ideas", "reactions", "idea_responses",
+        "user_challenges", "challenge_messages", "shop_items",
+        "event_comments", "moods",
+    ]
+    out: dict = {"exported_at": int(time.time()), "tables": {}}
+    for table in tables:
+        try:
+            rs = await _exec(f"SELECT * FROM {table}")
+        except DbError as e:
+            log.warning("dump: таблица %s недоступна: %s", table, e)
+            continue
+        cols_rs = await _exec(f"PRAGMA table_info({table})")
+        columns = [r[1] for r in cols_rs.rows]
+        out["tables"][table] = {"columns": columns, "rows": rs.rows}
+    return out
