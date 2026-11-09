@@ -79,6 +79,11 @@ function renderCalendar() {
       .sort((a, b) => a.id - b.id);
     const restRangeLast = restRange.length ? restRange[restRange.length - 1] : null;
 
+    const sexRange = list
+      .filter(x => x.category === "sex" && x.date_end && x.date_end !== x.date)
+      .sort((a, b) => a.id - b.id);
+    const sexRangeLast = sexRange.length ? sexRange[sexRange.length - 1] : null;
+
     let personalStyle = "";
     let hasPersonal = false;
     let fillColor = "";
@@ -91,6 +96,9 @@ function renderCalendar() {
     } else if (restRangeLast) {
       hasPersonal = true;
       fillColor = hexToRgb(restRangeLast.color || "#22c55e");
+    } else if (sexRangeLast) {
+      hasPersonal = true;
+      fillColor = hexToRgb(sexRangeLast.color || "#f97316");
     }
     if (hasPersonal) {
       personalStyle = ` style="--personal-bg: rgba(${fillColor}, .28); --personal-border: rgba(${fillColor}, .55); --personal-fg: var(--text);"`;
@@ -107,6 +115,7 @@ function renderCalendar() {
     const nonTodos = list.filter(x => {
       if (x.category === "todo" || x.category === "personal") return false;
       if (x.category === "rest" && x.date_end && x.date_end !== x.date) return false;
+      if (x.category === "sex" && x.date_end && x.date_end !== x.date) return false;
       return true;
     });
     const st = new Set(nonTodos.map(statusKey));
@@ -262,7 +271,7 @@ function openCategoryPicker(dates) {
 
   document.querySelectorAll(".cat-btn").forEach(btn => {
     const cat = btn.dataset.cat;
-    btn.hidden = isRange && (cat === "sex" || cat === "shop");
+    btn.hidden = isRange && (cat === "shop");
   });
 
   $("catOverlay").hidden = false;

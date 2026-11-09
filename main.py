@@ -436,9 +436,9 @@ def parse_event_payload(body: dict) -> dict:
     else:
         remind_before = 0
         visibility = "shared"
-        if category != "rest":
+        if category not in ("rest", "sex"):
             date_end = ""
-        if category == "rest" and date_end:
+        if category in ("rest", "sex") and date_end:
             if color and color not in db.TODO_COLORS:
                 raise ApiError("Некорректный цвет")
         else:

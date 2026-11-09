@@ -49,12 +49,12 @@ function updateFormSections() {
   $("sexIdeasSection").hidden = !isSex;
   $("todoSection").hidden = !isTodo;
   $("personalSection").hidden = !isPersonal;
-  $("restSection").hidden = !(isRest && isRange);
+  $("restSection").hidden = !((isRest || isSex) && isRange);
 
   if (isShop && !editingEvent) renderFormChecklist();
   if (isTodo) renderColors("todoColors");
   if (isPersonal) renderColors("personalColors");
-  if (isRest && isRange) renderColors("restColors");
+  if ((isRest || isSex) && isRange) renderColors("restColors");
   updateRemindAvailability();
 
   if (!isSex) {
@@ -136,7 +136,7 @@ function openForm(event = null) {
       $("fPersonalDateEnd").value = event.date_end && event.date_end !== event.date ? event.date_end : "";
       $("fPersonalPublic").checked = event.visibility === "shared";
     }
-  } else if (event && event.category === "rest" && event.date_end && event.date_end !== event.date) {
+  } else if (event && (event.category === "rest" || event.category === "sex") && event.date_end && event.date_end !== event.date) {
     formColor = event.color || availableTodoColors()[3];
     $("fRemindBefore").value = "0";
     $("fPersonalRemind").value = "0";
@@ -167,8 +167,8 @@ function openFormForRange(dates, category) {
   const start = sorted[0];
   const end = sorted[sorted.length - 1];
 
-  if ((category === "sex" || category === "shop") && end !== start) {
-    toast("Для этой категории диапазон не поддерживается — выберите один день");
+  if (category === "shop" && end !== start) {
+    toast("Для магазина диапазон не поддерживается — выберите один день");
     clearMultiSelect();
     return;
   }
@@ -181,7 +181,7 @@ function openFormForRange(dates, category) {
   if (category === "personal") {
     $("fPersonalDateEnd").value = formDateEnd;
   }
-  if (category === "rest" && formDateEnd) {
+  if ((category === "rest" || category === "sex") && formDateEnd) {
     if (!formColor || formColor === availableTodoColors()[6]) {
       formColor = availableTodoColors()[3];
     }
@@ -297,7 +297,7 @@ $("fSave").onclick = async () => {
     }
   }
 
-  if (category === "rest") {
+  if (category === "rest" || category === "sex") {
     payload.date_end = endForSave;
     if (endForSave) {
       if (!formColor) { $("fError").textContent = "Выберите цвет заливки"; return; }
