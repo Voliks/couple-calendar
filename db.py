@@ -11,6 +11,7 @@ import secrets
 import sqlite3
 import threading
 import time
+import aiohttp
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -98,36 +99,33 @@ class _TursoBackend:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        self._session = None
+        self._session: aiohttp.ClientSession | None = None
 
     async def start(self) -> None:
-        return None
+        # Один пул соединений на весь срок жизни приложения.
+        timeout = aiohttp.ClientTimeout(total=20, connect=10)
+        self._session = aiohttp.ClientSession(
+            headers=self._headers,
+            timeout=timeout,
+            connector=aiohttp.TCPConnector(limit=50, ttl_dns_cache=300),
+        )
 
     async def close(self) -> None:
-        return None
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
 
     async def _pipeline(self, requests: list, retries: int = 0) -> list:
-        import urllib.error
-        import urllib.request
+        if self._session is None or self._session.closed:
+            raise DbError("HTTP-сессия Turso не инициализирована")
 
         payload = {"requests": requests + [{"type": "close"}]}
         for attempt in range(retries + 1):
             try:
-                def send():
-                    request = urllib.request.Request(
-                        self._endpoint,
-                        data=json.dumps(payload).encode("utf-8"),
-                        headers=self._headers,
-                        method="POST",
-                    )
-                    try:
-                        with urllib.request.urlopen(request, timeout=20) as resp:
-                            return resp.status, resp.read().decode("utf-8")
-                    except urllib.error.HTTPError as resp:
-                        return resp.code, resp.read().decode("utf-8", errors="replace")
-
-                status, body = await asyncio.to_thread(send)
-            except (urllib.error.URLError, TimeoutError, asyncio.TimeoutError) as e:
+                async with self._session.post(self._endpoint, json=payload) as resp:
+                    status = resp.status
+                    body = await resp.text()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 err = DbError(f"Нет связи с Turso: {e!r}")
             else:
                 if status == 200:
@@ -478,7 +476,6 @@ async def _m16_indexes_and_idea_keys() -> None:
     await _exec("CREATE INDEX IF NOT EXISTS idx_events_created ON events (created_by, date)")
     await _exec("CREATE INDEX IF NOT EXISTS idx_events_target ON events (target_user, date)")
     await _exec("CREATE INDEX IF NOT EXISTS idx_checklist_event ON checklist_items (event_id)")
-    # старые ключи json_N (позиция в файле) -> стабильные ключи по хэшу текста
     raw = _read_json_ideas_raw()
     rs = await _exec("SELECT user_id, idea_key FROM hidden_ideas")
     stmts = []
@@ -493,8 +490,8 @@ async def _m16_indexes_and_idea_keys() -> None:
         stmts.append(("DELETE FROM hidden_ideas WHERE user_id = ? AND idea_key = ?", (user_id, key)))
     await _batch(stmts)
 
+
 async def _m16_add_done_status() -> None:
-    # Пересоздаем таблицу events, чтобы разрешить статус 'done'
     await _exec("""
         CREATE TABLE IF NOT EXISTS events_new (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -524,11 +521,10 @@ async def _m16_add_done_status() -> None:
     await _exec("DROP TABLE events")
     await _exec("ALTER TABLE events_new RENAME TO events")
 
+
 async def _m17_challenges() -> None:
-    # 1. Добавляем баланс пользователям
     await _add_column("users", "balance", "INTEGER NOT NULL DEFAULT 0")
 
-    # 2. Таблица для выданных челленджей
     await _exec("""
         CREATE TABLE IF NOT EXISTS user_challenges (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -537,11 +533,12 @@ async def _m17_challenges() -> None:
             category    TEXT NOT NULL,
             text        TEXT NOT NULL,
             reward      INTEGER NOT NULL DEFAULT 10,
-            status      TEXT NOT NULL DEFAULT 'pending', -- pending, submitted, approved, rejected
-            photo_id    TEXT NOT NULL DEFAULT '',        -- ID фото в Supabase
+            status      TEXT NOT NULL DEFAULT 'pending', -- pending, submitted, approved, rejected, archived
+            photo_id    TEXT NOT NULL DEFAULT '',
             created_at  INTEGER NOT NULL
         )
     """)
+
 
 async def _m18_challenge_messages() -> None:
     await _exec("""
@@ -553,8 +550,11 @@ async def _m18_challenge_messages() -> None:
             created_at INTEGER NOT NULL
         )
     """)
+
+
 async def _m19_challenge_deadline() -> None:
     await _add_column("user_challenges", "deadline", "INTEGER NOT NULL DEFAULT 0")
+
 
 async def _m20_shop_items() -> None:
     await _exec("""
@@ -565,12 +565,12 @@ async def _m20_shop_items() -> None:
             emoji TEXT DEFAULT '🎁'
         )
     """)
-    # Добавим пару товаров по умолчанию, чтобы магазин не был пустым
     rs = await _exec("SELECT COUNT(*) FROM shop_items")
     if rs.rows[0][0] == 0:
         await _exec("INSERT INTO shop_items (title, cost, emoji) VALUES (?, ?, ?)", ("Массаж", 50, "💆"))
         await _exec("INSERT INTO shop_items (title, cost, emoji) VALUES (?, ?, ?)", ("Ужин в ресторане", 150, "🍷"))
         await _exec("INSERT INTO shop_items (title, cost, emoji) VALUES (?, ?, ?)", ("Поход в кино", 80, "🍿"))
+
 
 async def _m21_event_comments() -> None:
     await _exec("""
@@ -582,8 +582,21 @@ async def _m21_event_comments() -> None:
             created_at INTEGER NOT NULL
         )
     """)
+
+
 async def _m22_last_viewed() -> None:
     await _add_column("users", "last_viewed_challenges", "INTEGER NOT NULL DEFAULT 0")
+
+
+async def _m23_performance_indexes() -> None:
+    # Migration 16 rebuilds events and drops its earlier indexes.
+    await _exec("CREATE INDEX IF NOT EXISTS idx_events_created ON events (created_by, date)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_events_target ON events (target_user, date)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_challenges_target_created ON user_challenges (target_id, created_at)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_challenges_creator_created ON user_challenges (creator_id, created_at)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_challenge_messages_challenge_created ON challenge_messages (challenge_id, created_at)")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_event_comments_event_created ON event_comments (event_id, created_at)")
+
 
 MIGRATIONS = [
     (1, _m1_base),
@@ -608,9 +621,9 @@ MIGRATIONS = [
     (19, _m19_challenge_deadline),
     (20, _m20_shop_items),
     (21, _m21_event_comments),
-    (22, _m22_last_viewed)
+    (22, _m22_last_viewed),
+    (23, _m23_performance_indexes)
 ]
-
 
 
 _REQUIRED_COLUMNS = {
@@ -663,7 +676,6 @@ async def _migrate() -> None:
 
 
 def _idea_key(category: str, text: str) -> str:
-    """Стабильный ключ встроенной идеи: не зависит от порядка строк в sex_ideas.json."""
     return "json_h" + hashlib.sha1(f"{category}\n{text}".encode("utf-8")).hexdigest()[:12]
 
 
@@ -690,7 +702,6 @@ _ideas_cache: list[dict] | None = None
 
 
 def _json_ideas() -> list[dict]:
-    """Встроенные идеи (читаются один раз). Одинаковый текст в нескольких категориях остаётся один раз."""
     global _ideas_cache
     if _ideas_cache is None:
         raw = _read_json_ideas_raw()
@@ -834,38 +845,56 @@ def _event(r) -> dict | None:
 
 
 async def _attach_items(events: list[dict]) -> list[dict]:
-    shop = [e for e in events if e["category"] == "shop"]
-    if shop:
-        by_id = {e["id"]: e for e in shop}
-        marks = ",".join("?" * len(by_id))
-        rs = await _exec(
-            f"SELECT id, event_id, text, checked FROM checklist_items "
-            f"WHERE event_id IN ({marks}) ORDER BY position, id",
-            tuple(by_id),
-        )
-        for item_id, event_id, text, checked in rs.rows:
-            by_id[event_id]["checklist"].append({"id": item_id, "text": text, "checked": bool(checked)})
+    if not events:
+        return events
 
-    if events:
-        ids = [e["id"] for e in events]
-        marks = ",".join("?" * len(ids))
-        rs = await _exec(
-            f"SELECT event_id, user_id, emoji FROM reactions WHERE event_id IN ({marks})",
-            tuple(ids),
-        )
-        by_id = {e["id"]: e for e in events}
-        for event_id, user_id, emoji in rs.rows:
-            by_id[event_id]["reactions"][user_id] = emoji
+    ids = [e["id"] for e in events]
+    marks = ",".join("?" for _ in ids)
+    by_id = {e["id"]: e for e in events}
 
-        rs2 = await _exec(
-            f"SELECT event_id, idea_idx, status, user_id, ts FROM idea_responses "
-            f"WHERE event_id IN ({marks})",
-            tuple(ids),
-        )
-        for event_id, idx, status, uid, ts in rs2.rows:
-            by_id[event_id]["idea_responses"][idx] = {
-                "status": status, "user_id": uid, "ts": ts,
-            }
+    # Все связанные данные независимы — читаем их параллельно.
+    tasks = []
+    task_names = []
+
+    shop_ids = [e["id"] for e in events if e["category"] == "shop"]
+    if shop_ids:
+        shop_marks = ",".join("?" for _ in shop_ids)
+        tasks.append(_exec(
+            "SELECT id, event_id, text, checked FROM checklist_items "
+            f"WHERE event_id IN ({shop_marks}) ORDER BY position, id",
+            tuple(shop_ids),
+        ))
+        task_names.append("checklist")
+
+    tasks.append(_exec(
+        f"SELECT event_id, user_id, emoji FROM reactions WHERE event_id IN ({marks})",
+        tuple(ids),
+    ))
+    task_names.append("reactions")
+
+    tasks.append(_exec(
+        "SELECT event_id, idea_idx, status, user_id, ts FROM idea_responses "
+        f"WHERE event_id IN ({marks})",
+        tuple(ids),
+    ))
+    task_names.append("ideas")
+
+    results = await asyncio.gather(*tasks)
+    result_by_name = dict(zip(task_names, results))
+
+    if "checklist" in result_by_name:
+        for item_id, event_id, text, checked in result_by_name["checklist"].rows:
+            by_id[event_id]["checklist"].append({
+                "id": item_id, "text": text, "checked": bool(checked)
+            })
+
+    for event_id, user_id, emoji in result_by_name["reactions"].rows:
+        by_id[event_id]["reactions"][user_id] = emoji
+
+    for event_id, idx, status, uid, ts in result_by_name["ideas"].rows:
+        by_id[event_id]["idea_responses"][idx] = {
+            "status": status, "user_id": uid, "ts": ts,
+        }
 
     return events
 
@@ -902,7 +931,6 @@ async def create_event(created_by, target_user, title, description, date, event_
 
 
 async def list_events_range(user_id: int, start: str, end: str) -> list[dict]:
-    """События, пересекающиеся с [start, end). Personal виден только автору/партнёру (shared)."""
     rs = await _exec(
         f"SELECT {EVENT_COLS} FROM events "
         "WHERE ("
@@ -924,13 +952,11 @@ async def get_event(event_id: int) -> dict | None:
         return None
     return (await _attach_items([_event(rs.rows[0])]))[0]
 
+
 async def set_status(event_id: int, status: str) -> None:
-    # Разрешаем новый статус 'done'
     if status not in ("pending", "accepted", "declined", "done"):
         raise ValueError("bad status")
     await _exec("UPDATE events SET status = ? WHERE id = ?", (status, event_id))
-
-
 
 
 async def set_target_user(event_id: int, target_user: int) -> None:
@@ -1034,8 +1060,6 @@ async def set_reaction(event_id: int, emoji: str, by_user_id: int) -> None:
     )
 
 
-
-
 async def set_idea_response(event_id: int, idea_idx: int, status: str, user_id: int) -> None:
     if status not in ("accepted", "declined"):
         raise ValueError("bad status")
@@ -1046,12 +1070,6 @@ async def set_idea_response(event_id: int, idea_idx: int, status: str, user_id: 
         "status = excluded.status, user_id = excluded.user_id, ts = excluded.ts",
         (event_id, idea_idx, status, user_id, int(time.time())),
     )
-
-
-
-
-
-
 
 
 async def set_decline_comment_slot(event_id: int, slot: str, comment: str) -> None:
@@ -1132,7 +1150,7 @@ async def delete_sex_idea(idea_id: int, archived_by: int | None = None) -> bool:
 async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key: str) -> None:
     idea = next((i for i in _json_ideas() if i["id"] == idea_key), None)
     if idea is None:
-        return  # неизвестный ключ — ничего не скрываем
+        return
     try:
         await archive_idea(idea["category_title"], idea["text"], "builtin", user_id)
     except Exception:
@@ -1166,7 +1184,6 @@ async def get_archived_ideas(limit: int = 2000) -> list[dict]:
 
 
 async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
-    """Кандидаты на напоминание. Private personal-события — только автору."""
     rs = await _exec(
         "SELECT e.id, e.title, e.date, COALESCE(NULLIF(e.date_end,''), e.date) AS date_end, "
         "       e.time, u.telegram_id, u.tz, e.category, e.remind_before, e.visibility "
@@ -1239,10 +1256,6 @@ async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
 
 
 async def pair_stats(user_id: int, partner_id: int) -> dict:
-    """Статистика пары по событиям, на которые нужен ответ (rest/sex).
-
-    Дела, покупки и личное создаются сразу «принятыми» и в счёт не идут.
-    """
     rs = await _exec(
         "SELECT category, status, COUNT(*) FROM events "
         "WHERE ((created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)) "
@@ -1262,14 +1275,18 @@ async def pair_stats(user_id: int, partner_id: int) -> dict:
         "declined": by_status.get("declined", 0),
         "by_category": by_category,
     }
+
+
 # === ЧЕЛЛЕНДЖИ И БАЛЛЫ ===
 
 async def get_user_balance(user_id: int) -> int:
     rs = await _exec("SELECT balance FROM users WHERE telegram_id = ?", (user_id,))
     return rs.rows[0][0] if rs.rows else 0
 
+
 async def add_balance(user_id: int, amount: int) -> None:
     await _exec("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (amount, user_id))
+
 
 async def create_user_challenge(creator_id: int, target_id: int, category: str, text: str, reward: int, deadline: int = 0) -> dict:
     rs = await _exec(
@@ -1279,6 +1296,7 @@ async def create_user_challenge(creator_id: int, target_id: int, category: str, 
     )
     return await get_user_challenge(rs.last_id)
 
+
 async def get_user_challenge(challenge_id: int) -> dict | None:
     rs = await _exec("SELECT * FROM user_challenges WHERE id = ?", (challenge_id,))
     if not rs.rows: return None
@@ -1286,8 +1304,9 @@ async def get_user_challenge(challenge_id: int) -> dict | None:
     return {
         "id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3],
         "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8],
-        "deadline": r[9] if len(r) > 9 else 0  # <--- ДОБАВИТЬ ЭТО
+        "deadline": r[9] if len(r) > 9 else 0
     }
+
 
 async def get_all_user_challenges(user_id: int) -> list[dict]:
     rs = await _exec(
@@ -1297,9 +1316,11 @@ async def get_all_user_challenges(user_id: int) -> list[dict]:
     return [
         {
             "id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3],
-            "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8]
+            "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8],
+            "deadline": r[9] if len(r) > 9 else 0
         } for r in rs.rows
     ]
+
 
 async def update_user_challenge(challenge_id: int, status: str, photo_id: str | None = None) -> None:
     if photo_id is not None:
@@ -1307,37 +1328,45 @@ async def update_user_challenge(challenge_id: int, status: str, photo_id: str | 
     else:
         await _exec("UPDATE user_challenges SET status = ? WHERE id = ?", (status, challenge_id))
 
+
+_challenges_json_cache: tuple[int, dict] | None = None
+
+
 async def get_challenges_json() -> dict:
-    """Читает файл challenges.json с категориями и заданиями."""
+    global _challenges_json_cache
     path = Path(__file__).parent / "challenges.json"
-    if not path.exists(): 
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+        if _challenges_json_cache is not None and _challenges_json_cache[0] == mtime_ns:
+            return _challenges_json_cache[1]
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+        _challenges_json_cache = (mtime_ns, data)
+        logging.info("Загружено %s категорий из challenges.json", len(data))
+        return data
+    except FileNotFoundError:
         logging.error("ФАЙЛ challenges.json НЕ НАЙДЕН ПО ПУТИ: %s", path)
         return {}
-    try:
-        import json
-        data = json.loads(path.read_text(encoding="utf-8"))
-        logging.info("УСПЕХ: прочитано %s категорий из challenges.json", len(data))
-        return data if isinstance(data, dict) else {}
     except Exception as e:
         logging.error("ОШИБКА ЧТЕНИЯ challenges.json: %s", e)
         return {}
 
+
 def get_shop_items_json() -> list[dict]:
-    """Читает файл shop_items.json со списком товаров."""
     path = Path(__file__).parent / "shop_items.json"
     if not path.exists():
         logging.error("ФАЙЛ shop_items.json НЕ НАЙДЕН")
         return []
     try:
-        import json
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, list) else []
     except Exception as e:
         logging.error("ОШИБКА ЧТЕНИЯ shop_items.json: %s", e)
         return []
 
+
 async def update_challenge_photo(challenge_id: int, photo_path: str) -> None:
-    """Сохраняет путь к загруженному фото в БД."""
     await _exec(
         "UPDATE user_challenges SET photo_id = ? WHERE id = ?",
         (photo_path, challenge_id)
@@ -1349,10 +1378,8 @@ async def get_challenge_by_photo(photo_path: str) -> dict | None:
     return await get_user_challenge(rs.rows[0][0]) if rs.rows else None
 
 
-
 async def transition_challenge(challenge_id: int, from_statuses: Sequence[str], new_status: str,
                                photo_id: str | None = None) -> bool:
-    """Атомарно меняет статус, только если текущий статус один из from_statuses."""
     marks = ",".join("?" for _ in from_statuses)
     if photo_id is None:
         sql = f"UPDATE user_challenges SET status = ? WHERE id = ? AND status IN ({marks})"
@@ -1363,8 +1390,8 @@ async def transition_challenge(challenge_id: int, from_statuses: Sequence[str], 
     rs = await _exec(sql, args)
     return rs.affected == 1
 
+
 async def delete_user_challenge(challenge_id: int, user_id: int) -> bool:
-    # Удаляем только если создатель совпадает и статус pending
     rs = await _exec(
         "DELETE FROM user_challenges WHERE id = ? AND creator_id = ? AND status = 'pending'",
         (challenge_id, user_id)

@@ -17,7 +17,9 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text);
   font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-body { padding: 12px 14px calc(96px + env(safe-area-inset-bottom, 0px)); max-width: 560px; margin: 0 auto; }
+  
+/* Увеличили нижний отступ, чтобы контент не залезал под таб-бар */
+body { padding: 12px 14px calc(90px + env(safe-area-inset-bottom, 0px)); max-width: 560px; margin: 0 auto; }
 button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 [hidden] { display: none !important; }
@@ -75,8 +77,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .list-title { margin: 20px 0 10px; font-size: 15px; font-weight: 600; color: var(--hint); }
 .empty { padding: 28px 12px; text-align: center; color: var(--hint); }
-.card { border-radius: 14px; padding: 12px 14px; margin-bottom: 10px;
-  border-left: 5px solid rgb(var(--c)); background: rgba(var(--c), .13); }
+
+/* Оптимизация рендеринга карточек (браузер не будет рисовать то, что не видно) */
+.card { 
+  border-radius: 14px; 
+  padding: 12px 14px; 
+  margin-bottom: 10px;
+  border-left: 5px solid rgb(var(--c)); 
+  background: rgba(var(--c), .13); 
+  content-visibility: auto;
+  contain-intrinsic-size: 100px;
+}
 .card.pending  { --c: var(--pending); }
 .card.accepted { --c: var(--accepted); }
 .card.declined { --c: var(--declined); }
@@ -111,16 +122,39 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .stat-cell.declined .num { color: rgb(var(--declined)); }
 .stat-cell.pending  .num { color: rgb(var(--pending)); }
 
-.fab { position: fixed; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom, 0px));
-  width: 58px; height: 58px; border-radius: 50%; background: var(--accent); color: var(--accent-text);
-  font-size: 32px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.25);
-  transition: transform .18s ease, opacity .18s ease;
-  z-index: 5; }
-.fab:active { transform: scale(.94); }
-.fab.fab-hidden { transform: translateY(120px); opacity: 0; pointer-events: none; }
-@media (prefers-reduced-motion: reduce) { .fab { transition: none; } }
+/* --- НИЖНЯЯ ПАНЕЛЬ (зафиксирована в index.html, но стили для кнопок) --- */
+.nav-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--hint);
+  font-size: 12px;
+  gap: 2px;
+  width: 80px;
+  height: 100%;
+  position: relative;
+  cursor: pointer;
+}
 
-.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; z-index: 10; }
+.nav-btn:active {
+  opacity: 0.6;
+}
+
+.nav-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.nav-label {
+  font-size: 10px;
+  font-weight: 500;
+}
+
+/* --- МОДАЛЬНЫЕ ОКНА И ФОРМЫ --- */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; z-index: 20; }
 .sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
   max-height: 92vh; overflow-y: auto;
   padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px)); animation: up .18s ease-out; }
@@ -180,7 +214,6 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
   font-size: 18px; line-height: 1; user-select: none; flex-shrink: 0;
   touch-action: none; letter-spacing: -3px; }
 .cl-drag:active { cursor: grabbing; opacity: .9; }
-
 .checklist-item.dragging { opacity: .4; background: rgba(36,129,204,.1); }
 
 .cl-empty { padding: 8px 0; font-size: 14px; color: var(--hint); }
@@ -295,7 +328,8 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
 .cat-btn .cat-icon { font-size: 22px; line-height: 1; }
 .cat-cancel { width: 100%; margin-top: 14px; padding: 12px; border-radius: 12px;
   background: transparent; color: var(--hint); font-weight: 600; }
-  /* Стили для челленджей */
+  
+/* Стили для челленджей */
 .challenge-card {
   padding: 12px;
   border-radius: 12px;

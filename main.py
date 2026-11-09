@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import gzip
 import hashlib
 import json
 import logging
@@ -270,6 +271,32 @@ def _add_cors(request: web.Request, response: web.StreamResponse) -> None:
         h["Access-Control-Max-Age"] = "86400"
 
 
+# --- НОВЫЙ MIDDLEWARE ДЛЯ СЖАТИЯ (GZIP) ---
+@web.middleware
+async def gzip_middleware(request: web.Request, handler):
+    response = await handler(request)
+    
+    # Сжимаем только если это не файл из storage и клиент поддерживает gzip
+    if (
+        isinstance(response, web.Response)
+        and response.body
+        and response.status == 200
+        and request.path.startswith(("/api", "/js", "/css"))
+        and "gzip" in request.headers.get("Accept-Encoding", "").lower()
+    ):
+        try:
+            compressed = gzip.compress(response.body)
+            response.body = compressed
+            response.headers["Content-Encoding"] = "gzip"
+            response.headers["Vary"] = "Accept-Encoding"
+            # Убираем Content-Length, так как он изменился
+            response.headers.pop("Content-Length", None)
+        except Exception as e:
+            logging.error("Gzip compression failed: %s", e)
+            
+    return response
+
+
 @web.middleware
 async def api_middleware(request: web.Request, handler):
     try:
@@ -290,9 +317,7 @@ async def api_middleware(request: web.Request, handler):
         logging.exception("Необработанная ошибка в API")
         response = web.json_response({"error": "Внутренняя ошибка сервера"}, status=500)
     if request.path.startswith(("/css/", "/js/")):
-        response.headers["Cache-Control"] = (
-            "no-cache"  # проверять обновления при каждом открытии
-        )
+        response.headers["Cache-Control"] = "no-cache"
     _add_cors(request, response)
     return response
 
@@ -550,54 +575,55 @@ async def api_state(request: web.Request) -> web.Response:
         user = await db.ensure_invite(user)
         events = await db.list_events_range(tg_user.id, start, end)
         link = invite_link(user["invite_code"])
-    try:
-        sex_ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
-    except Exception:
-        logging.exception("Не удалось получить идеи")
-        sex_ideas = []
-    stats = None
-    if has_partner:
+    # Независимые чтения выполняем одновременно
+    async def _safe_ideas():
         try:
-            stats = await db.pair_stats(tg_user.id, user["partner_id"])
+            return await db.get_sex_ideas(tg_user.id, user["partner_id"])
+        except Exception:
+            logging.exception("Не удалось получить идеи")
+            return []
+
+    async def _safe_stats():
+        if not has_partner:
+            return None
+        try:
+            return await db.pair_stats(tg_user.id, user["partner_id"])
         except Exception:
             logging.exception("Не удалось получить статистику")
-    
-    # --- НОВАЯ ПРОВЕРКА НА КРАСНУЮ ТОЧКУ ---
-    rs = await db._exec("SELECT last_viewed_challenges FROM users WHERE telegram_id = ?", (tg_user.id,))
-    last_viewed = rs.rows[0][0] if rs.rows else 0
-    
-    has_new = False
-    if last_viewed > 0:
-        # 1. Новые челленджи от партнёра
-        rs_c = await db._exec(
-            "SELECT COUNT(*) FROM user_challenges WHERE target_id = ? AND created_at > ?",
-            (tg_user.id, last_viewed)
-        )
-        if rs_c.rows[0][0] > 0:
-            has_new = True
-            
-        # 2. Новые сообщения в челленджах
-        if not has_new:
-            rs_m = await db._exec(
-                "SELECT COUNT(*) FROM challenge_messages m "
-                "JOIN user_challenges c ON c.id = m.challenge_id "
-                "WHERE (c.creator_id = ? OR c.target_id = ?) AND m.sender_id != ? AND m.created_at > ?",
-                (tg_user.id, tg_user.id, tg_user.id, last_viewed)
-            )
-            if rs_m.rows[0][0] > 0:
-                has_new = True
+            return None
 
-        # 3. Новые комментарии к событиям
-        if not has_new:
-            rs_e = await db._exec(
-                "SELECT COUNT(*) FROM event_comments e "
-                "JOIN events ev ON ev.id = e.event_id "
-                "WHERE (ev.created_by = ? OR ev.target_user = ?) AND e.user_id != ? AND e.created_at > ?",
-                (tg_user.id, tg_user.id, tg_user.id, last_viewed)
-            )
-            if rs_e.rows[0][0] > 0:
-                has_new = True
-    # ---------------------------------------
+    async def _has_new_activity():
+        rs = await db._exec(
+            "WITH v AS ("
+            " SELECT COALESCE(last_viewed_challenges, 0) AS ts "
+            " FROM users WHERE telegram_id = ?"
+            ") "
+            "SELECT EXISTS ("
+            " SELECT 1 FROM user_challenges c, v "
+            " WHERE v.ts > 0 AND c.target_id = ? AND c.created_at > v.ts "
+            " UNION ALL "
+            " SELECT 1 FROM challenge_messages m "
+            " JOIN user_challenges c ON c.id = m.challenge_id, v "
+            " WHERE v.ts > 0 AND (c.creator_id = ? OR c.target_id = ?) "
+            " AND m.sender_id != ? AND m.created_at > v.ts "
+            " UNION ALL "
+            " SELECT 1 FROM event_comments e "
+            " JOIN events ev ON ev.id = e.event_id, v "
+            " WHERE v.ts > 0 AND (ev.created_by = ? OR ev.target_user = ?) "
+            " AND e.user_id != ? AND e.created_at > v.ts"
+            ")",
+            (tg_user.id, tg_user.id, tg_user.id, tg_user.id, tg_user.id,
+             tg_user.id, tg_user.id, tg_user.id),
+        )
+        return bool(rs.rows and rs.rows[0][0])
+
+    events, sex_ideas, stats, has_new, balance = await asyncio.gather(
+        db.list_events_range(tg_user.id, start, end),
+        _safe_ideas(),
+        _safe_stats(),
+        _has_new_activity(),
+        db.get_user_balance(tg_user.id),
+    )
 
     body = json.dumps(
         {
@@ -611,8 +637,8 @@ async def api_state(request: web.Request) -> web.Response:
             "allowed_reactions": ALLOWED_REACTIONS,
             "allowed_remind_before": sorted(ALLOWED_REMIND_BEFORE),
             "my_id": tg_user.id,
-            "balance": await db.get_user_balance(tg_user.id),
-            "has_new_challenges": has_new, # <--- ПЕРЕДАЕМ ФЛАГ
+            "balance": balance,
+            "has_new_challenges": has_new,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -1053,7 +1079,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
 PHOTO_BUCKET = os.getenv("SUPABASE_BUCKET", "challenges").strip() or "challenges"
 PHOTO_EXTS = ("jpg", "jpeg", "png", "webp", "gif", "heic", "heif")
-CHALLENGE_MAX_POINTS = 20  # в challenges.json есть задания до 20 баллов
+CHALLENGE_MAX_POINTS = 20
 _supabase = None
 
 
@@ -1086,7 +1112,6 @@ def get_supabase():
 
 
 def _storage_url(url: str) -> str:
-    """Разные версии supabase-py отдают то полную, то относительную ссылку."""
     if not url:
         return ""
     if url.startswith("http"):
@@ -1096,7 +1121,6 @@ def _storage_url(url: str) -> str:
 
 def _photo_path_ok(path: str, challenge_id: int) -> bool:
     exts = "|".join(PHOTO_EXTS)
-    # Разрешаем передавать несколько путей через запятую
     paths = path.split(",")
     for p in paths:
         if not re.fullmatch(rf"challenge_{challenge_id}_\d+_[0-9a-f]{{8}}\.({exts})", p.strip()):
@@ -1142,7 +1166,6 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     if not path:
         raise ApiError("Путь не указан", 400)
         
-    # Ищем челлендж, в котором есть это фото
     rs = await db._exec("SELECT id FROM user_challenges WHERE photo_id LIKE ? LIMIT 1", (f"%{path}%",))
     if not rs.rows:
         raise ApiError("Фото не найдено", 404)
@@ -1154,6 +1177,7 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     sb = get_supabase()
     try:
         res = await asyncio.to_thread(sb.storage.from_(PHOTO_BUCKET).create_signed_url, path, 3600)
+        logging.info("SUPABASE_SIGNED_URL_RESPONSE: %s", res)
         view_url = _storage_url(res.get("signedURL") or res.get("signedUrl"))
     except Exception:
         logging.exception("Supabase: не удалось создать ссылку на просмотр")
@@ -1184,12 +1208,14 @@ async def api_set_challenge_photo(request: web.Request) -> web.Response:
 
 async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
-    # Обновляем время последнего просмотра (сбрасываем красную точку)
-    await db._exec("UPDATE users SET last_viewed_challenges = ? WHERE telegram_id = ?", (int(time.time()), tg_user.id))
     
-    balance = await db.get_user_balance(tg_user.id)
-    history = await db.get_all_user_challenges(tg_user.id)
-    catalog = await db.get_challenges_json()
+    # Выполняем все чтения одновременно
+    _, balance, history, catalog = await asyncio.gather(
+        db._exec("UPDATE users SET last_viewed_challenges = ? WHERE telegram_id = ?", (int(time.time()), tg_user.id)),
+        db.get_user_balance(tg_user.id),
+        db.get_all_user_challenges(tg_user.id),
+        db.get_challenges_json()
+    )
     
     now = int(time.time())
     for h in history:
@@ -1217,14 +1243,17 @@ async def api_create_challenge(request: web.Request) -> web.Response:
 
     now = int(time.time())
     start_of_day = now - (now % 86400)
+    
     rs = await db._exec(
         "SELECT COUNT(*) FROM user_challenges "
-        "WHERE creator_id = ? AND created_at >= ?",
+        "WHERE creator_id = ? AND created_at >= ? "
+        "AND status IN ('pending', 'submitted')", 
         (tg_user.id, start_of_day)
     )
-    created_today = rs.rows[0][0]
-    if created_today >= 3:
-        raise ApiError("Лимит на сегодня: можно создать не более 3 челленджей.", 429)
+    active_today = rs.rows[0][0]
+    
+    if active_today >= 3:
+        raise ApiError("Лимит на сегодня: можно иметь не более 3 активных челленджей.", 429)
 
     body = await read_json(request)
     text = str(body.get("text") or "").strip()[:300]
@@ -1310,7 +1339,6 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
         (challenge_id, tg_user.id, text, int(time.time()))
     )
     
-    # Отправляем пуш партнёру
     partner_id = challenge["target_id"] if tg_user.id == challenge["creator_id"] else challenge["creator_id"]
     notify(partner_id, f"💬 Новое сообщение по челленджу «{challenge['text']}»:\n\n{text}")
     
@@ -1431,6 +1459,25 @@ async def api_delete_challenge(request: web.Request) -> web.Response:
     return web.json_response({"status": "deleted"})
 
 
+async def api_archive_challenge_manually(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    challenge_id = _int_param(request, "id")
+    challenge = await db.get_user_challenge(challenge_id)
+    
+    if not challenge:
+        raise ApiError("Челлендж не найден", 404)
+        
+    if tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
+        raise ApiError("Нет доступа", 403)
+
+    # Меняем статус прямо на 'archived'
+    await db._exec(
+        "UPDATE user_challenges SET status = 'archived' WHERE id = ?", 
+        (challenge_id,)
+    )
+    return web.json_response({"status": "archived"})
+
+
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
@@ -1544,7 +1591,10 @@ async def main() -> None:
                 BotCommand(command="unlink", description="Отвязать партнёра"),
             ]
         )
-    app = web.Application(middlewares=[api_middleware], client_max_size=1024 * 1024)
+    
+    # Подключаем gzip_middleware ПЕРЕД api_middleware
+    app = web.Application(middlewares=[gzip_middleware, api_middleware], client_max_size=1024 * 1024)
+    
     app.router.add_get("/", index)
     app.router.add_get("/health", health_check)
     app.router.add_static("/css", INDEX_FILE.parent / "css")
@@ -1566,6 +1616,7 @@ async def main() -> None:
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
+    app.router.add_post("/api/challenges/{id}/archive", api_archive_challenge_manually)
     
     # Челленджи и магазин
     app.router.add_get("/api/challenges", api_get_challenges_data)
