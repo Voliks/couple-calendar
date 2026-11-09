@@ -62,6 +62,7 @@ function render() {
     renderList(); 
     renderStats(); 
     
+    // Показываем/скрываем красную точку на мечах
     const badge = $("challengeBadge");
     if (badge) {
       badge.hidden = !state.has_new_challenges;
@@ -106,7 +107,6 @@ $("archiveBtn").onclick = async () => {
     tg.BackButton?.show();
   } catch (e) { toast(e.message); }
 };
-
 $("archiveClose").onclick = () => {
   $("archiveOverlay").hidden = true;
   if (!$("overlay").hidden) tg.BackButton?.show(); else tg.BackButton?.hide();
@@ -136,68 +136,56 @@ $("unlink").onclick = () => {
   });
 };
 
-/* ---------- ТУРБО-ЗАГРУЗКА МОДУЛЕЙ ---------- */
+(() => {
+  const fabAdd = $("add");
+  const fabChallenge = $("challengeBtn");
+  const fabShop = $("shopBtn");
+  
+  let lastY = window.scrollY;
+  let ticking = false;
+  const THRESHOLD = 8;
 
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) return resolve();
-    const s = document.createElement("script");
-    s.src = src;
-    s.async = true;
-    s.onload = resolve;
-    s.onerror = () => reject(new Error("Ошибка загрузки"));
-    document.head.appendChild(s);
+  function onScroll() {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const y = window.scrollY;
+      const diff = y - lastY;
+      
+      const fabs = [fabAdd, fabChallenge, fabShop].filter(Boolean);
+
+      if (y < 40) {
+        fabs.forEach(f => f.classList.remove("fab-hidden"));
+      } else if (diff > THRESHOLD) {
+        fabs.forEach(f => f.classList.add("fab-hidden"));
+      } else if (diff < -THRESHOLD) {
+        fabs.forEach(f => f.classList.remove("fab-hidden"));
+      }
+      
+      lastY = y;
+      ticking = false;
+    });
+  }
+
+  window.addEventListener("scroll", onScroll, { passive: true });
+
+  const observer = new MutationObserver(() => {
+    const anyOpen = !$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden || !$("catOverlay").hidden 
+                 || !$("challengesOverlay").hidden || !$("shopOverlay").hidden;
+    if (anyOpen) {
+      [fabAdd, fabChallenge, fabShop].forEach(f => f && f.classList.remove("fab-hidden"));
+    }
   });
-}
-
-$("challengeBtn").onclick = async () => {
-  if (typeof openChallenges !== "function") {
-    const icon = $("challengeBtn").querySelector(".nav-icon");
-    const oldText = icon.textContent;
-    icon.textContent = "⏳";
-    try {
-      await loadScript("js/challenges.js?v=73");
-    } catch (e) {
-      toast("Не удалось загрузить челленджи");
-      icon.textContent = oldText;
-      return;
-    }
-    icon.textContent = oldText;
-  }
-  // Принудительно сбрасываем архив перед открытием
-  if (typeof showArchive !== "undefined") {
-    showArchive = false;
-  }
-  openChallenges();
-};
-
-$("shopBtn").onclick = async () => {
-  if (typeof openShop !== "function") {
-    const icon = $("shopBtn").querySelector(".nav-icon");
-    const oldText = icon.textContent;
-    icon.textContent = "⏳";
-    try {
-      await loadScript("js/shop.js?v=12");
-    } catch (e) {
-      toast("Не удалось загрузить магазин");
-      icon.textContent = oldText;
-      return;
-    }
-    icon.textContent = oldText;
-  }
-  openShop();
-};
-
-/* ---------- ОПРОС СЕРВЕРА ---------- */
+  ["overlay", "ideasOverlay", "archiveOverlay", "catOverlay", "challengesOverlay", "shopOverlay"].forEach(id => {
+    if ($(id)) observer.observe($(id), { attributes: true, attributeFilter: ["hidden"] });
+  });
+})();
 
 function startPolling() {
   const canPoll = () => !sessionDead && !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
     && $("archiveOverlay").hidden && $("catOverlay").hidden
-    && $("challengesOverlay").hidden && $("shopOverlay").hidden
     && pendingOps === 0 && !reactionPickerEl && !dragState && !gridDrag;
-    
-  // Раз в 20 секунд
-  setInterval(() => { if (canPoll()) load(true); }, 20000);
+  setInterval(() => { if (canPoll()) load(true); }, 15000);
   document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
 }
 
