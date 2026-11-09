@@ -387,33 +387,8 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
 .btn-send-comment { background: var(--accent); color: #fff; border-radius: 8px; padding: 0 12px; font-weight: 700; }
 
 /* ============================================================
-   Плашка «сегодня» и блок «Настроение дня»
+   Блок «Настроение дня»
    ============================================================ */
-
-.today-banner {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 0 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(var(--accepted), .12);
-  border-left: 4px solid rgb(var(--accepted));
-  font-size: 14px;
-  line-height: 1.35;
-  color: var(--text);
-  flex-wrap: wrap;
-}
-.today-banner b { color: rgb(var(--accepted)); font-weight: 700; }
-.today-banner .tb-close {
-  margin-left: auto;
-  font-size: 18px;
-  opacity: .5;
-  padding: 0 4px;
-  line-height: 1;
-  flex-shrink: 0;
-}
-.today-banner .tb-close:hover { opacity: 1; }
 
 .mood-block {
   margin: 18px 0 4px;

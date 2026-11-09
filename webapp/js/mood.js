@@ -1,4 +1,4 @@
-// Настроение дня + плашка «сегодня». Ленивый модуль, грузится вместе с main.js.
+// Настроение дня. Ленивый модуль, грузится вместе с main.js.
 
 const MOOD_EMOJIS = ["😊","😐","😔","😡","🥰","😴","🤒","🤩","😢","😤","🥳","🤔"];
 
@@ -8,50 +8,6 @@ let moodLoadSeq = 0;
 
 function moodDateStr() {
   return todayStr();
-}
-
-/* ---------- Плашка «сегодня» ---------- */
-
-function renderTodayBanner() {
-  const el = $("todayBanner");
-  if (!el) return;
-  const today = todayStr();
-  const items = (state.events || []).filter((e) => dayHasDate(e, today));
-  if (!items.length) {
-    el.hidden = true;
-    return;
-  }
-
-  const pending  = items.filter((e) => e.status === "pending").length;
-  const accepted = items.filter((e) => e.status === "accepted" || e.status === "done").length;
-  const todo     = items.filter((e) => e.category === "todo").length;
-  const personal = items.filter((e) => e.category === "personal").length;
-  const sex      = items.filter((e) => e.category === "sex").length;
-  const rest     = items.filter((e) => e.category === "rest").length;
-  const shop     = items.filter((e) => e.category === "shop").length;
-
-  const parts = [];
-  if (accepted) parts.push(`✓ ${accepted}`);
-  if (pending)  parts.push(`⏳ ${pending}`);
-  if (todo)     parts.push(`📌 ${todo}`);
-  if (personal) parts.push(`📝 ${personal}`);
-  if (sex)      parts.push(`🔥 ${sex}`);
-  if (rest)     parts.push(`🌿 ${rest}`);
-  if (shop)     parts.push(`🛒 ${shop}`);
-
-  if (!parts.length) {
-    el.hidden = true;
-    return;
-  }
-
-  el.hidden = false;
-  el.innerHTML =
-    `<span>Сегодня</span><b>${items.length}</b><span>·</span>` +
-    `<span>${parts.join(" · ")}</span>` +
-    `<button class="tb-close" type="button" aria-label="Скрыть">×</button>`;
-
-  const closeBtn = el.querySelector(".tb-close");
-  if (closeBtn) closeBtn.onclick = () => { el.hidden = true; };
 }
 
 /* ---------- Блок «Настроение дня» ---------- */
@@ -208,8 +164,7 @@ async function saveMood() {
   });
 })();
 
-// Точка входа из main.js#render(): плашку рисуем всегда, настроение — только если есть пара
+// Точка входа из main.js#render(): подтягиваем настроение после каждого load()
 window.refreshMoodAndBanner = () => {
-  renderTodayBanner();
   if (state.has_partner) loadMood();
 };
