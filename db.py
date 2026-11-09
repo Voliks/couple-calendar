@@ -493,7 +493,6 @@ async def _m16_indexes_and_idea_keys() -> None:
         stmts.append(("DELETE FROM hidden_ideas WHERE user_id = ? AND idea_key = ?", (user_id, key)))
     await _batch(stmts)
 
-
 async def _m16_add_done_status() -> None:
     # Пересоздаем таблицу events, чтобы разрешить статус 'done'
     await _exec("""
@@ -525,7 +524,6 @@ async def _m16_add_done_status() -> None:
     await _exec("DROP TABLE events")
     await _exec("ALTER TABLE events_new RENAME TO events")
 
-
 async def _m17_challenges() -> None:
     # 1. Добавляем баланс пользователям
     await _add_column("users", "balance", "INTEGER NOT NULL DEFAULT 0")
@@ -539,12 +537,11 @@ async def _m17_challenges() -> None:
             category    TEXT NOT NULL,
             text        TEXT NOT NULL,
             reward      INTEGER NOT NULL DEFAULT 10,
-            status      TEXT NOT NULL DEFAULT 'pending', -- pending, submitted, approved, rejected, expired
+            status      TEXT NOT NULL DEFAULT 'pending', -- pending, submitted, approved, rejected
             photo_id    TEXT NOT NULL DEFAULT '',        -- ID фото в Supabase
             created_at  INTEGER NOT NULL
         )
     """)
-
 
 async def _m18_challenge_messages() -> None:
     await _exec("""
@@ -556,11 +553,8 @@ async def _m18_challenge_messages() -> None:
             created_at INTEGER NOT NULL
         )
     """)
-
-
 async def _m19_challenge_deadline() -> None:
     await _add_column("user_challenges", "deadline", "INTEGER NOT NULL DEFAULT 0")
-
 
 async def _m20_shop_items() -> None:
     await _exec("""
@@ -578,7 +572,6 @@ async def _m20_shop_items() -> None:
         await _exec("INSERT INTO shop_items (title, cost, emoji) VALUES (?, ?, ?)", ("Ужин в ресторане", 150, "🍷"))
         await _exec("INSERT INTO shop_items (title, cost, emoji) VALUES (?, ?, ?)", ("Поход в кино", 80, "🍿"))
 
-
 async def _m21_event_comments() -> None:
     await _exec("""
         CREATE TABLE IF NOT EXISTS event_comments (
@@ -589,16 +582,8 @@ async def _m21_event_comments() -> None:
             created_at INTEGER NOT NULL
         )
     """)
-
-
 async def _m22_last_viewed() -> None:
     await _add_column("users", "last_viewed_challenges", "INTEGER NOT NULL DEFAULT 0")
-
-
-async def _m23_challenge_penalty() -> None:
-    """Флаг, что штраф за просрочку уже списан — защита от двойного списания."""
-    await _add_column("user_challenges", "penalty_applied", "INTEGER NOT NULL DEFAULT 0")
-
 
 MIGRATIONS = [
     (1, _m1_base),
@@ -623,18 +608,15 @@ MIGRATIONS = [
     (19, _m19_challenge_deadline),
     (20, _m20_shop_items),
     (21, _m21_event_comments),
-    (22, _m22_last_viewed),
-    (23, _m23_challenge_penalty),
+    (22, _m22_last_viewed)
 ]
+
 
 
 _REQUIRED_COLUMNS = {
     15: [
         ("events", "date_end", "TEXT NOT NULL DEFAULT ''"),
         ("events", "visibility", "TEXT NOT NULL DEFAULT 'shared'"),
-    ],
-    23: [
-        ("user_challenges", "penalty_applied", "INTEGER NOT NULL DEFAULT 0"),
     ],
 }
 
@@ -942,12 +924,13 @@ async def get_event(event_id: int) -> dict | None:
         return None
     return (await _attach_items([_event(rs.rows[0])]))[0]
 
-
 async def set_status(event_id: int, status: str) -> None:
     # Разрешаем новый статус 'done'
     if status not in ("pending", "accepted", "declined", "done"):
         raise ValueError("bad status")
     await _exec("UPDATE events SET status = ? WHERE id = ?", (status, event_id))
+
+
 
 
 async def set_target_user(event_id: int, target_user: int) -> None:
@@ -1051,6 +1034,8 @@ async def set_reaction(event_id: int, emoji: str, by_user_id: int) -> None:
     )
 
 
+
+
 async def set_idea_response(event_id: int, idea_idx: int, status: str, user_id: int) -> None:
     if status not in ("accepted", "declined"):
         raise ValueError("bad status")
@@ -1061,6 +1046,12 @@ async def set_idea_response(event_id: int, idea_idx: int, status: str, user_id: 
         "status = excluded.status, user_id = excluded.user_id, ts = excluded.ts",
         (event_id, idea_idx, status, user_id, int(time.time())),
     )
+
+
+
+
+
+
 
 
 async def set_decline_comment_slot(event_id: int, slot: str, comment: str) -> None:
@@ -1271,18 +1262,14 @@ async def pair_stats(user_id: int, partner_id: int) -> dict:
         "declined": by_status.get("declined", 0),
         "by_category": by_category,
     }
-
-
 # === ЧЕЛЛЕНДЖИ И БАЛЛЫ ===
 
 async def get_user_balance(user_id: int) -> int:
     rs = await _exec("SELECT balance FROM users WHERE telegram_id = ?", (user_id,))
     return rs.rows[0][0] if rs.rows else 0
 
-
 async def add_balance(user_id: int, amount: int) -> None:
     await _exec("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (amount, user_id))
-
 
 async def create_user_challenge(creator_id: int, target_id: int, category: str, text: str, reward: int, deadline: int = 0) -> dict:
     rs = await _exec(
@@ -1292,35 +1279,27 @@ async def create_user_challenge(creator_id: int, target_id: int, category: str, 
     )
     return await get_user_challenge(rs.last_id)
 
-
 async def get_user_challenge(challenge_id: int) -> dict | None:
     rs = await _exec("SELECT * FROM user_challenges WHERE id = ?", (challenge_id,))
-    if not rs.rows:
-        return None
+    if not rs.rows: return None
     r = rs.rows[0]
     return {
         "id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3],
         "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8],
-        "deadline": r[9] if len(r) > 9 else 0,
-        "penalty_applied": r[10] if len(r) > 10 else 0,
+        "deadline": r[9] if len(r) > 9 else 0  # <--- ДОБАВИТЬ ЭТО
     }
-
 
 async def get_all_user_challenges(user_id: int) -> list[dict]:
     rs = await _exec(
-        "SELECT id, creator_id, target_id, category, text, reward, status, photo_id, created_at, "
-        "       deadline, penalty_applied "
-        "FROM user_challenges WHERE creator_id = ? OR target_id = ? ORDER BY created_at DESC",
+        "SELECT * FROM user_challenges WHERE creator_id = ? OR target_id = ? ORDER BY created_at DESC",
         (user_id, user_id)
     )
     return [
         {
             "id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3],
-            "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8],
-            "deadline": r[9] or 0, "penalty_applied": r[10] or 0,
+            "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8]
         } for r in rs.rows
     ]
-
 
 async def update_user_challenge(challenge_id: int, status: str, photo_id: str | None = None) -> None:
     if photo_id is not None:
@@ -1328,11 +1307,10 @@ async def update_user_challenge(challenge_id: int, status: str, photo_id: str | 
     else:
         await _exec("UPDATE user_challenges SET status = ? WHERE id = ?", (status, challenge_id))
 
-
 async def get_challenges_json() -> dict:
     """Читает файл challenges.json с категориями и заданиями."""
     path = Path(__file__).parent / "challenges.json"
-    if not path.exists():
+    if not path.exists(): 
         logging.error("ФАЙЛ challenges.json НЕ НАЙДЕН ПО ПУТИ: %s", path)
         return {}
     try:
@@ -1343,7 +1321,6 @@ async def get_challenges_json() -> dict:
     except Exception as e:
         logging.error("ОШИБКА ЧТЕНИЯ challenges.json: %s", e)
         return {}
-
 
 def get_shop_items_json() -> list[dict]:
     """Читает файл shop_items.json со списком товаров."""
@@ -1359,7 +1336,6 @@ def get_shop_items_json() -> list[dict]:
         logging.error("ОШИБКА ЧТЕНИЯ shop_items.json: %s", e)
         return []
 
-
 async def update_challenge_photo(challenge_id: int, photo_path: str) -> None:
     """Сохраняет путь к загруженному фото в БД."""
     await _exec(
@@ -1371,6 +1347,7 @@ async def update_challenge_photo(challenge_id: int, photo_path: str) -> None:
 async def get_challenge_by_photo(photo_path: str) -> dict | None:
     rs = await _exec("SELECT id FROM user_challenges WHERE photo_id = ? LIMIT 1", (photo_path,))
     return await get_user_challenge(rs.rows[0][0]) if rs.rows else None
+
 
 
 async def transition_challenge(challenge_id: int, from_statuses: Sequence[str], new_status: str,
@@ -1386,7 +1363,6 @@ async def transition_challenge(challenge_id: int, from_statuses: Sequence[str], 
     rs = await _exec(sql, args)
     return rs.affected == 1
 
-
 async def delete_user_challenge(challenge_id: int, user_id: int) -> bool:
     # Удаляем только если создатель совпадает и статус pending
     rs = await _exec(
@@ -1394,50 +1370,3 @@ async def delete_user_challenge(challenge_id: int, user_id: int) -> bool:
         (challenge_id, user_id)
     )
     return rs.affected == 1
-
-
-# === ШТРАФЫ ЗА ПРОСРОЧКУ ===
-
-def challenge_penalty_amount(reward: int) -> int:
-    """Половина стоимости с округлением вниз, но минимум 1.
-
-    reward=1 → 1, reward=2 → 1, reward=3 → 1, reward=5 → 2,
-    reward=7 → 3, reward=15 → 7, reward=20 → 10.
-    """
-    return max(1, reward // 2)
-
-
-async def find_expired_pending_challenges(now_ts: int) -> list[dict]:
-    """Просроченные pending-челленджи, по которым ещё не списан штраф."""
-    rs = await _exec(
-        "SELECT id, creator_id, target_id, reward, deadline, text, category "
-        "FROM user_challenges "
-        "WHERE status = 'pending' AND deadline > 0 AND deadline < ? "
-        "AND penalty_applied = 0",
-        (now_ts,),
-    )
-    return [
-        {
-            "id": r[0], "creator_id": r[1], "target_id": r[2],
-            "reward": r[3], "deadline": r[4], "text": r[5], "category": r[6],
-        }
-        for r in rs.rows
-    ]
-
-
-async def apply_challenge_penalty(challenge_id: int, user_id: int, amount: int) -> bool:
-    """Списывает штраф с исполнителя и помечает челлендж как expired.
-
-    Возвращает True, если именно этот вызов применил штраф (защита от гонок).
-    Баланс может уйти в минус — это долг, а не блокировка.
-    """
-    rs = await _batch([
-        ("UPDATE users SET balance = balance - ? WHERE telegram_id = ?", (amount, user_id)),
-        (
-            "UPDATE user_challenges SET penalty_applied = 1, status = 'expired' "
-            "WHERE id = ? AND penalty_applied = 0",
-            (challenge_id,),
-        ),
-    ])
-    # Вторая команда затронула 1 строку — значит именно мы применили штраф.
-    return rs[1].affected == 1
