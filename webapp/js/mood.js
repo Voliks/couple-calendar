@@ -13,4 +13,4 @@ function moodDateStr() {
 
 /* ---------- Сворачивание/разворачивание ---------- */
 
-function apply
+function apply() {}
