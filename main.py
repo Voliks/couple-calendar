@@ -1564,11 +1564,30 @@ async def reminder_loop() -> None:
     global _last_cleanup_day
     while True:
         try:
+            # 1. Отправляем обычные напоминания
             await send_due_reminders()
+            
+            # 2. Проверяем просроченные челленджи
+            expired = await db.process_expired_challenges()
+            for c in expired:
+                # Уведомляем того, кому кинули (он потерял баллы)
+                notify(
+                    c["target_id"],
+                    f"⌛ Челлендж «{c['text']}» не выполнен в срок. "
+                    f"С твоего баланса списано {c['penalty']} баллов."
+                )
+                # Уведомляем автора (по желанию)
+                notify(
+                    c["creator_id"],
+                    f"⌛ Челлендж «{c['text']}» просрочен. Партнёр потерял {c['penalty']} баллов."
+                )
+            
+            # 3. Ежедневная очистка
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             if today != _last_cleanup_day:
                 _last_cleanup_day = today
                 await cleanup_old_reminders()
+                
         except asyncio.CancelledError:
             raise
         except Exception:

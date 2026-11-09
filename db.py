@@ -1397,3 +1397,41 @@ async def delete_user_challenge(challenge_id: int, user_id: int) -> bool:
         (challenge_id, user_id)
     )
     return rs.affected == 1
+
+async def process_expired_challenges() -> list[dict]:
+    """
+    Находит челленджи с истёкшим дедлайном (status='pending'),
+    списывает половину стоимости с исполнителя (но не больше, чем у него есть),
+    чтобы баланс не ушёл в минус. Округление вниз для нечётных.
+    """
+    now = int(time.time())
+    rs = await _exec(
+        "SELECT id, creator_id, target_id, text, reward, status FROM user_challenges "
+        "WHERE status = 'pending' AND deadline > 0 AND deadline < ?",
+        (now,)
+    )
+    expired = []
+    for r in rs.rows:
+        cid, creator_id, target_id, text, reward, status = r
+        penalty = reward // 2  # Округление вниз
+
+        # Получаем текущий баланс исполнителя
+        bal_rs = await _exec("SELECT balance FROM users WHERE telegram_id = ?", (target_id,))
+        current_balance = bal_rs.rows[0][0] if bal_rs.rows else 0
+
+        actual_penalty = min(penalty, current_balance)  # Не больше, чем есть
+
+        if actual_penalty > 0:
+            await _exec(
+                "UPDATE users SET balance = balance - ? WHERE telegram_id = ?",
+                (actual_penalty, target_id)
+            )
+
+        # Меняем статус, чтобы не штрафовать повторно
+        await _exec("UPDATE user_challenges SET status = 'rejected' WHERE id = ?", (cid,))
+        
+        expired.append({
+            "id": cid, "creator_id": creator_id, "target_id": target_id,
+            "text": text, "reward": reward, "penalty": actual_penalty
+        })
+    return expired
