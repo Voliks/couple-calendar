@@ -841,6 +841,7 @@ def _event(r) -> dict | None:
         "reactions": {},
         "idea_responses": {},
         "checklist": [],
+        "comments": [],
     }
 
 
@@ -879,8 +880,26 @@ async def _attach_items(events: list[dict]) -> list[dict]:
     ))
     task_names.append("ideas")
 
+    # Комментарии к «Отдых»/«Секс» едут вместе со state: раньше фронтенд
+    # делал отдельный запрос на каждую карточку при каждой перерисовке.
+    chat_ids = [e["id"] for e in events if e["category"] in ("rest", "sex")]
+    if chat_ids:
+        chat_marks = ",".join("?" for _ in chat_ids)
+        tasks.append(_exec(
+            "SELECT event_id, id, user_id, text, created_at FROM event_comments "
+            f"WHERE event_id IN ({chat_marks}) ORDER BY created_at, id",
+            tuple(chat_ids),
+        ))
+        task_names.append("comments")
+
     results = await asyncio.gather(*tasks)
     result_by_name = dict(zip(task_names, results))
+
+    if "comments" in result_by_name:
+        for event_id, cid, uid, text, created_at in result_by_name["comments"].rows:
+            by_id[event_id]["comments"].append({
+                "id": cid, "sender_id": uid, "text": text, "created_at": created_at,
+            })
 
     if "checklist" in result_by_name:
         for item_id, event_id, text, checked in result_by_name["checklist"].rows:
@@ -998,6 +1017,26 @@ async def delete_event(event_id: int) -> None:
             ("DELETE FROM events WHERE id = ?", (event_id,)),
         ]
     )
+
+
+async def add_items(event_id: int, texts: list[str]) -> int:
+    """Добавляет пункты одним запросом-транзакцией, уважая лимит. Возвращает, сколько добавлено."""
+    if not texts:
+        return 0
+    rs = await _exec(
+        "SELECT COUNT(*), COALESCE(MAX(position), 0) FROM checklist_items WHERE event_id = ?",
+        (event_id,),
+    )
+    count, last_pos = rs.rows[0]
+    texts = texts[: max(0, MAX_ITEMS_PER_EVENT - count)]
+    if not texts:
+        return 0
+    await _batch([
+        ("INSERT INTO checklist_items (event_id, text, checked, position) VALUES (?, ?, 0, ?)",
+         (event_id, t, last_pos + i + 1))
+        for i, t in enumerate(texts)
+    ])
+    return len(texts)
 
 
 async def add_item(event_id: int, text: str) -> bool:
@@ -1353,17 +1392,27 @@ async def get_challenges_json() -> dict:
         return {}
 
 
+_shop_cache: tuple[int, list[dict]] | None = None
+
+
 def get_shop_items_json() -> list[dict]:
+    global _shop_cache
     path = Path(__file__).parent / "shop_items.json"
-    if not path.exists():
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except FileNotFoundError:
         logging.error("ФАЙЛ shop_items.json НЕ НАЙДЕН")
         return []
+    if _shop_cache is not None and _shop_cache[0] == mtime_ns:
+        return _shop_cache[1]
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
+        data = data if isinstance(data, list) else []
     except Exception as e:
         logging.error("ОШИБКА ЧТЕНИЯ shop_items.json: %s", e)
         return []
+    _shop_cache = (mtime_ns, data)
+    return data
 
 
 async def update_challenge_photo(challenge_id: int, photo_path: str) -> None:

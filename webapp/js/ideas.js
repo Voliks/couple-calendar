@@ -80,12 +80,16 @@ function renderChosen() {
 }
 
 function updateTriggersCount() {
+  // один Map текст → категория вместо поиска по всему массиву для каждой выбранной идеи
+  const catByText = new Map();
+  for (const i of state.sex_ideas || []) if (!catByText.has(i.text)) catByText.set(i.text, i.category_title);
+  const counts = {};
+  for (const t of selectedIdeas) {
+    const c = catByText.get(t);
+    if (c) counts[c] = (counts[c] || 0) + 1;
+  }
   document.querySelectorAll(".sex-idea-trigger").forEach(btn => {
-    const title = btn.dataset.title;
-    const n = selectedIdeas.filter(t => {
-      const idea = (state.sex_ideas || []).find(i => i.text === t);
-      return idea && idea.category_title === title;
-    }).length;
+    const n = counts[btn.dataset.title] || 0;
     const badge = btn.querySelector("[data-count]");
     if (!badge) return;
     if (n > 0) { badge.textContent = n; badge.hidden = false; }

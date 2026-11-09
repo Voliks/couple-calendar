@@ -11,13 +11,27 @@ function applyMultiSelect(dates) {
   if (cur && cur.size === next.size && [...next].every((d) => cur.has(d))) return;
   state.multi_select = next;
   updateMultiColorPreview();
-  renderCalendar();
+  syncGridClasses();
 }
 
 function clearMultiSelect() {
   state.multi_select = new Set();
   updateMultiColorPreview();
-  renderCalendar();
+  syncGridClasses();
+}
+
+// Выделение диапазона меняет только классы существующих кнопок, а не пересобирает всю сетку:
+// иначе при перетаскивании пальцем на каждый шаг заново строится весь innerHTML.
+function syncGridClasses() {
+  const multi = state.multi_select || new Set();
+  for (const el of $("grid").children) {
+    const date = el.dataset.date;
+    if (!date) continue;
+    const on = multi.has(date);
+    el.classList.toggle("multi", on);
+    el.classList.toggle("selected", date === selected);
+    el.setAttribute("aria-pressed", String(on));
+  }
 }
 
 function updateMultiColorPreview() {
@@ -39,88 +53,63 @@ function dayHasDate(event, date) {
   return date >= event.date && date <= end;
 }
 
+const FILL_DEFAULT = { personal: "#6366f1", todo: "#8b5cf6", rest: "#22c55e", sex: "#f97316" };
+const FILL_ORDER = ["personal", "todo", "rest", "sex"];
+const DOT_ORDER = ["pending", "accepted", "declined", "expired"];
+
 function renderCalendar() {
   $("title").textContent = MONTHS_FORMAT.format(new Date(view.y, view.m, 1));
 
+  const days = new Date(view.y, view.m + 1, 0).getDate();
+  const prefix = `${view.y}-${pad(view.m + 1)}-`;
+  const first = prefix + "01", last = prefix + pad(days);
+  const today = todayStr();
+  const keyOf = (e) => (e.status === "pending" && e.date < today ? "expired" : e.status);
+
+  // Один проход по событиям: раскладываем их по дням строковыми датами, без циклов по Date.
+  // События идут по возрастанию id, поэтому «последнее» для заливки — с наибольшим id.
   const byDay = {};
-  for (const e of state.events) {
-    const start = e.date;
+  const events = state.events.slice().sort((a, b) => a.id - b.id);
+  for (const e of events) {
+    if (!e.date) continue;
     const end = e.date_end || e.date;
-    if (!start || !end) continue;
-    const startD = parse(start), endD = parse(end);
-    const cur = new Date(startD);
-    while (cur <= endD) {
-      const key = fmt(cur.getFullYear(), cur.getMonth(), cur.getDate());
-      (byDay[key] ||= []).push(e);
-      cur.setDate(cur.getDate() + 1);
+    const lo = e.date > first ? e.date : first;   // обрезаем по границам видимого месяца
+    const hi = end < last ? end : last;
+    if (lo > hi) continue;
+    const cat = e.category;
+    const isRange = end !== e.date;
+    // заливку дают личные события и диапазоны дел/отдыха/секса
+    const fills = cat === "personal" || (isRange && (cat === "todo" || cat === "rest" || cat === "sex"));
+    for (let d = Number(lo.slice(8)); d <= Number(hi.slice(8)); d++) {
+      const slot = (byDay[prefix + pad(d)] ||= { n: 0, fill: {}, todos: [], st: new Set() });
+      slot.n++;
+      if (fills) slot.fill[cat] = e;
+      else if (cat === "todo") slot.todos.push(e);
+      else slot.st.add(keyOf(e));
     }
   }
 
   const offset = (new Date(view.y, view.m, 1).getDay() + 6) % 7;
-  const days = new Date(view.y, view.m + 1, 0).getDate();
-  const today = todayStr();
   const multi = state.multi_select || new Set();
-  let html = "";
-  for (let i = 0; i < offset; i++) html += "<div></div>";
+  let html = "<div></div>".repeat(offset);
   for (let d = 1; d <= days; d++) {
-    const date = fmt(view.y, view.m, d);
-    const list = byDay[date] || [];
+    const date = prefix + pad(d);
+    const s = byDay[date];
 
-    const personals = list.filter(x => x.category === "personal").slice().sort((a, b) => a.id - b.id);
-    const personalLast = personals.length ? personals[personals.length - 1] : null;
-
-    const todoRange = list
-      .filter(x => x.category === "todo" && x.date_end && x.date_end !== x.date)
-      .sort((a, b) => a.id - b.id);
-    const todoRangeLast = todoRange.length ? todoRange[todoRange.length - 1] : null;
-
-    const restRange = list
-      .filter(x => x.category === "rest" && x.date_end && x.date_end !== x.date)
-      .sort((a, b) => a.id - b.id);
-    const restRangeLast = restRange.length ? restRange[restRange.length - 1] : null;
-
-    const sexRange = list
-      .filter(x => x.category === "sex" && x.date_end && x.date_end !== x.date)
-      .sort((a, b) => a.id - b.id);
-    const sexRangeLast = sexRange.length ? sexRange[sexRange.length - 1] : null;
-
-    let personalStyle = "";
-    let hasPersonal = false;
-    let fillColor = "";
-    if (personalLast) {
-      hasPersonal = true;
-      fillColor = hexToRgb(personalLast.color || "#6366f1");
-    } else if (todoRangeLast) {
-      hasPersonal = true;
-      fillColor = hexToRgb(todoRangeLast.color || "#8b5cf6");
-    } else if (restRangeLast) {
-      hasPersonal = true;
-      fillColor = hexToRgb(restRangeLast.color || "#22c55e");
-    } else if (sexRangeLast) {
-      hasPersonal = true;
-      fillColor = hexToRgb(sexRangeLast.color || "#f97316");
+    let personalStyle = "", todoBar = "", dots = "", hasPersonal = false;
+    if (s) {
+      const f = FILL_ORDER.map((c) => s.fill[c]).find(Boolean);
+      if (f) {
+        const rgb = hexToRgb(f.color || FILL_DEFAULT[f.category]);
+        hasPersonal = true;
+        personalStyle = ` style="--personal-bg: rgba(${rgb}, .28); --personal-border: rgba(${rgb}, .55); --personal-fg: var(--text);"`;
+      }
+      if (s.todos.length) {
+        todoBar = `<span class="todo-bar" aria-hidden="true">${s.todos.map((t) =>
+          `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`;
+      }
+      dots = DOT_ORDER.filter((x) => s.st.has(x)).map((x) => `<i class="dot ${x}"></i>`).join("");
     }
-    if (hasPersonal) {
-      personalStyle = ` style="--personal-bg: rgba(${fillColor}, .28); --personal-border: rgba(${fillColor}, .55); --personal-fg: var(--text);"`;
-    }
-
-    const todos = list
-      .filter(x => x.category === "todo" && !(x.date_end && x.date_end !== x.date))
-      .slice().sort((a, b) => a.id - b.id);
-    const todoBar = todos.length
-      ? `<span class="todo-bar" aria-hidden="true">${todos.map(t =>
-          `<i style="background:${esc(t.color || "#8b5cf6")}"></i>`).join("")}</span>`
-      : "";
-
-    const nonTodos = list.filter(x => {
-      if (x.category === "todo" || x.category === "personal") return false;
-      if (x.category === "rest" && x.date_end && x.date_end !== x.date) return false;
-      if (x.category === "sex" && x.date_end && x.date_end !== x.date) return false;
-      return true;
-    });
-    const st = new Set(nonTodos.map(statusKey));
-    const dots = ["pending", "accepted", "declined", "expired"]
-      .filter((s) => st.has(s)).map((s) => `<i class="dot ${s}"></i>`).join("");
 
     const isMulti = multi.has(date);
     const cls = ["day",
@@ -130,7 +119,7 @@ function renderCalendar() {
       hasPersonal && "has-personal",
     ].filter(Boolean).join(" ");
     const label = DAY_FORMAT.format(new Date(view.y, view.m, d))
-      + (list.length ? `, событий: ${list.length}` : "");
+      + (s ? `, событий: ${s.n}` : "");
     html += `<button class="${cls}" data-date="${date}" aria-pressed="${isMulti}" aria-label="${esc(label)}"${personalStyle}>
                ${todoBar}
                <span class="num">${d}</span><span class="dots" aria-hidden="true">${dots}</span>
@@ -152,7 +141,7 @@ $("grid").addEventListener("pointerdown", (ev) => {
   if (ev.button !== undefined && ev.button !== 0) return;
   const day = ev.target.closest(".day");
   if (!day) return;
-  if (!$("overlay").hidden || !$("ideasOverlay").hidden || !$("archiveOverlay").hidden || !$("catOverlay").hidden) return;
+  if (anyOverlayOpen()) return;
 
   const isTouch = ev.pointerType === "touch";
   gridDrag = {

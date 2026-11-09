@@ -15,13 +15,14 @@ async function load(silent = false) {
   const key = monthKey();
   try {
     const r = await request("/state?month=" + key, { etag: etagKey === key ? etag : null });
-    if (key !== monthKey()) return;
-    if (r.status === 304) return;
+    if (key !== monthKey()) return false;
+    if (r.status === 304) return false;
     state = { ...state, ...r.data };
     if (!(state.multi_select instanceof Set)) state.multi_select = new Set();
     etag = r.etag; etagKey = key;
     monthCache[key] = state.events;
     render();
+    return true;
   } catch (e) {
     if (e.status === 401 && loaded) { showSessionExpired(); return; }
     if (!loaded) throw e;
@@ -138,6 +139,9 @@ $("unlink").onclick = () => {
 
 /* ---------- ТУРБО-ЗАГРУЗКА МОДУЛЕЙ ---------- */
 
+// ?v=<mtime> подставляет сервер (window.ASSET_V), поэтому ручные номера версий не нужны
+const assetUrl = (name) => `js/${name}` + (window.ASSET_V?.[name] ? `?v=${window.ASSET_V[name]}` : "");
+
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) return resolve();
@@ -156,7 +160,7 @@ $("challengeBtn").onclick = async () => {
     const oldText = icon.textContent;
     icon.textContent = "⏳";
     try {
-      await loadScript("js/challenges.js?v=73");
+      await loadScript(assetUrl("challenges.js"));
     } catch (e) {
       toast("Не удалось загрузить челленджи");
       icon.textContent = oldText;
@@ -177,7 +181,7 @@ $("shopBtn").onclick = async () => {
     const oldText = icon.textContent;
     icon.textContent = "⏳";
     try {
-      await loadScript("js/shop.js?v=12");
+      await loadScript(assetUrl("shop.js"));
     } catch (e) {
       toast("Не удалось загрузить магазин");
       icon.textContent = oldText;
@@ -191,14 +195,29 @@ $("shopBtn").onclick = async () => {
 /* ---------- ОПРОС СЕРВЕРА ---------- */
 
 function startPolling() {
-  const canPoll = () => !sessionDead && !document.hidden && $("overlay").hidden && $("ideasOverlay").hidden
-    && $("archiveOverlay").hidden && $("catOverlay").hidden
-    && $("challengesOverlay").hidden && $("shopOverlay").hidden
+  const canPoll = () => !sessionDead && !document.hidden && !anyOverlayOpen()
     && pendingOps === 0 && !reactionPickerEl && !dragState && !gridDrag;
-    
-  // Раз в 20 секунд
-  setInterval(() => { if (canPoll()) load(true); }, 20000);
-  document.addEventListener("visibilitychange", () => { if (canPoll()) load(true); });
+
+  // 20 с → 40 с → 60 с, пока на сервере ничего не менялось; любое касание возвращает 20 с
+  const BASE = 20000, MAX = 60000;
+  let delay = BASE;
+  const tick = async () => {
+    try {
+      if (canPoll()) {
+        const changed = await load(true);
+        delay = changed ? BASE : Math.min(delay * 2, MAX);
+      }
+    } finally {
+      setTimeout(tick, delay);
+    }
+  };
+  setTimeout(tick, delay);
+  document.addEventListener("pointerdown", () => { delay = BASE; }, { passive: true });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    delay = BASE;
+    if (canPoll()) load(true);
+  });
 }
 
 bootstrap();

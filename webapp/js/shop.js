@@ -1,17 +1,21 @@
 let selectedShopItem = null;
 let currentBalance = 0;
+let shopItems = null; // каталог статичен: грузим один раз за сессию
 
 async function openShop() {
   $("shopOverlay").hidden = false;
   tg.BackButton?.show();
-  $("shopList").innerHTML = `<div class="spinner" style="margin:20px auto;"></div>`;
+  if (!shopItems) $("shopList").innerHTML = `<div class="spinner" style="margin:20px auto;"></div>`;
 
   currentBalance = state.balance || 0;
   $("shopBalance").textContent = currentBalance;
 
   try {
-    const res = await api("/shop");
-    const items = (res.items || []).slice().sort((a, b) => a.cost - b.cost);
+    if (!shopItems) {
+      const res = await api("/shop");
+      shopItems = (res.items || []).slice().sort((a, b) => a.cost - b.cost);
+    }
+    const items = shopItems;
 
     if (!items.length) {
       $("shopList").innerHTML = `<div class="empty">Магазин пока пуст.</div>`;
@@ -20,20 +24,9 @@ async function openShop() {
 
     $("shopList").innerHTML = items.map(item => {
       const afford = currentBalance >= item.cost;
-      
-      // Верстка через flex: left (текст) и right (баллы)
-      return `<div style="padding: 12px; border-radius: 12px; background: var(--bg2); border-left: 4px solid #8b5cf6; display: flex; justify-content: space-between; align-items: center; cursor: pointer; gap: 10px;" data-item-id="${item.id}" data-item-title="${esc(item.title)}" data-item-cost="${item.cost}" data-item-emoji="${esc(item.emoji)}">
-        
-        <!-- Левая часть (Название) -->
-        <div style="flex: 1; font-size: 14px; font-weight: 500; line-height: 1.4; word-break: break-word;">
-          ${esc(item.emoji)} ${esc(item.title)}
-        </div>
-        
-        <!-- Правая часть (Баллы) -->
-        <div style="font-size: 14px; font-weight: bold; white-space: nowrap; color: ${afford ? '#eab308' : 'var(--declined)'};">
-          🏆 ${item.cost}
-        </div>
-        
+      return `<div class="shop-item" data-item-id="${item.id}" data-item-title="${esc(item.title)}" data-item-cost="${item.cost}">
+        <div class="shop-title">${esc(item.emoji)} ${esc(item.title)}</div>
+        <div class="shop-cost${afford ? "" : " poor"}">🏆 ${item.cost}</div>
       </div>`;
     }).join("");
   } catch (e) {
@@ -93,8 +86,6 @@ async function confirmBuy() {
 
 // Привязка событий
 (() => {
-  const shopBtn = $("shopBtn");
-  if (shopBtn) shopBtn.onclick = openShop;
   
   const closeBtn = $("shopClose");
   if (closeBtn) closeBtn.onclick = closeShop;

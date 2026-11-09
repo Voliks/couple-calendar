@@ -84,17 +84,22 @@ function declineCommentHtml(e) {
 }
 
 // Новый блок: комментарии для Секса и Отдыха
+function commentsListHtml(comments) {
+  if (!comments.length) return `<div class="cm-empty">Нет комментариев</div>`;
+  const myId = state?.my_id || 0;
+  return comments.map((c) =>
+    `<div class="cm${c.sender_id === myId ? " mine" : ""}">${esc(c.text)}</div>`).join("");
+}
+
 function eventCommentsHtml(e) {
   if (e.category !== "rest" && e.category !== "sex") return "";
-  
+  // комментарии приходят вместе со state — отдельных запросов на каждую карточку нет
   return `
-    <div class="event-comments-block" data-event-id="${e.id}" style="margin-top: 12px; border-top: 1px solid rgba(0,0,0,0.05); padding-top: 12px;">
-      <div class="event-comments-list" id="comments-list-${e.id}" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px;">
-         <!-- Сюда подгрузятся комментарии -->
-      </div>
-      <div style="display: flex; gap: 6px;">
-        <input type="text" class="comment-input" placeholder="Написать комментарий..." maxlength="500" style="flex: 1; padding: 8px 12px; border-radius: 8px; background: rgba(0,0,0,0.04); border: none; font-size: 14px;">
-        <button class="btn-send-comment" style="background: var(--accent); color: #fff; border-radius: 8px; padding: 0 12px; font-weight: bold;">➤</button>
+    <div class="event-comments-block" data-event-id="${e.id}">
+      <div class="event-comments-list" id="comments-list-${e.id}">${commentsListHtml(e.comments || [])}</div>
+      <div class="comment-row">
+        <input type="text" class="comment-input" placeholder="Написать комментарий..." maxlength="500">
+        <button class="btn-send-comment">➤</button>
       </div>
     </div>
   `;
@@ -186,28 +191,15 @@ function reconcile(container, items) {
   return true;
 }
 
-// Загрузка комментариев для карточки
+// Обновление комментариев одной карточки (после отправки своего комментария)
 async function loadEventComments(eventId) {
-  const list = document.getElementById(`comments-list-${eventId}`);
-  if (!list) return;
-
   try {
     const res = await api(`/events/${eventId}/comments`);
     const comments = res.comments || [];
-    
-    if (!comments.length) {
-      list.innerHTML = `<div style="font-size: 12px; color: var(--hint);">Нет комментариев</div>`;
-      return;
-    }
-
-    const myId = state?.my_id || 0;
-    list.innerHTML = comments.map(c => {
-      const isMine = c.sender_id === myId;
-      const color = isMine ? "background: rgba(36, 129, 204, 0.1);" : "background: rgba(0,0,0,0.04);";
-      return `<div style="padding: 6px 10px; border-radius: 8px; font-size: 13px; ${color} word-break: break-word;">
-        ${esc(c.text)}
-      </div>`;
-    }).join("");
+    const ev = findEvent(eventId);
+    if (ev) ev.comments = comments;
+    const list = document.getElementById(`comments-list-${eventId}`);
+    if (list) list.innerHTML = commentsListHtml(comments);
   } catch (e) {
     console.error("Ошибка загрузки комментариев", e);
   }
@@ -242,11 +234,6 @@ function renderList() {
     .map((e) => ({ id: String(e.id), html: cardHtml(e) }));
   if (!reconcile($("list"), items)) {
     $("list").innerHTML = `<div class="empty">На этот день ничего нет. Нажмите «+», чтобы добавить событие.</div>`;
-  } else {
-    // Подгружаем комментарии для отрисованных карточек
-    state.events
-      .filter(e => dayHasDate(e, selected) && (e.category === "rest" || e.category === "sex"))
-      .forEach(e => loadEventComments(e.id));
   }
 }
 

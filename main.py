@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import secrets
@@ -12,7 +13,6 @@ from collections import deque
 from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
-from supabase import create_client
 from aiogram import Dispatcher, Router  # type: ignore[reportMissingImports]
 from aiogram.filters import Command, CommandObject, CommandStart  # type: ignore[reportMissingImports]
 from aiogram.types import (  # type: ignore[reportMissingImports]
@@ -45,7 +45,7 @@ from common import (
     valid_date,
 )
 import db
-from voice import router as voice_router
+from voice import close_http as close_voice_http, router as voice_router
 
 PORT = int(os.getenv("PORT", "8080"))
 INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
@@ -102,6 +102,10 @@ def title_part(title: str) -> str:
 
 
 _rate_hits: dict[int, deque] = {}
+
+# Кэш признака «есть новое в челленджах»: запрос тяжёлый, а опрос идёт каждые 20 с.
+_new_cache: dict[int, tuple[float, bool]] = {}
+NEW_ACTIVITY_TTL = 30
 
 
 def rate_limit(uid: int) -> None:
@@ -277,15 +281,18 @@ async def gzip_middleware(request: web.Request, handler):
     response = await handler(request)
     
     # Сжимаем только если это не файл из storage и клиент поддерживает gzip
+    # Статику (/js, /css, index) отдаёт static_file/index уже сжатой и закэшированной.
     if (
         isinstance(response, web.Response)
-        and response.body
         and response.status == 200
-        and request.path.startswith(("/api", "/js", "/css"))
+        and response.body
+        and len(response.body) > 1024
+        and "Content-Encoding" not in response.headers
+        and request.path.startswith("/api")
         and "gzip" in request.headers.get("Accept-Encoding", "").lower()
     ):
         try:
-            compressed = gzip.compress(response.body)
+            compressed = gzip.compress(response.body, compresslevel=4)
             response.body = compressed
             response.headers["Content-Encoding"] = "gzip"
             response.headers["Vary"] = "Accept-Encoding"
@@ -317,7 +324,7 @@ async def api_middleware(request: web.Request, handler):
         logging.exception("Необработанная ошибка в API")
         response = web.json_response({"error": "Внутренняя ошибка сервера"}, status=500)
     if request.path.startswith(("/css/", "/js/")):
-        response.headers["Cache-Control"] = "no-cache"
+        response.headers.setdefault("Cache-Control", "no-cache")
     _add_cors(request, response)
     return response
 
@@ -525,6 +532,7 @@ def event_to_dict(e: dict, uid: int) -> dict:
         "is_creator": is_creator,
         "can_edit": can_edit,
         "checklist": e["checklist"],
+        "comments": e.get("comments", []),
         "ideas": ideas_out,
         "can_respond_ideas": can_respond_ideas,
     }
@@ -568,12 +576,9 @@ async def api_state(request: web.Request) -> web.Response:
         await db.set_timezone(tg_user.id, tz)
     start, end = parse_month(request.query.get("month"))
     has_partner = bool(user["partner_id"])
-    if has_partner:
-        events = await db.list_events_range(tg_user.id, start, end)
-        link = ""
-    else:
+    link = ""
+    if not has_partner:
         user = await db.ensure_invite(user)
-        events = await db.list_events_range(tg_user.id, start, end)
         link = invite_link(user["invite_code"])
     # Независимые чтения выполняем одновременно
     async def _safe_ideas():
@@ -617,11 +622,19 @@ async def api_state(request: web.Request) -> web.Response:
         )
         return bool(rs.rows and rs.rows[0][0])
 
+    async def _has_new_cached():
+        hit = _new_cache.get(tg_user.id)
+        if hit and time.monotonic() - hit[0] < NEW_ACTIVITY_TTL:
+            return hit[1]
+        val = await _has_new_activity()
+        _new_cache[tg_user.id] = (time.monotonic(), val)
+        return val
+
     events, sex_ideas, stats, has_new, balance = await asyncio.gather(
         db.list_events_range(tg_user.id, start, end),
         _safe_ideas(),
         _safe_stats(),
-        _has_new_activity(),
+        _has_new_cached(),
         db.get_user_balance(tg_user.id),
     )
 
@@ -1177,7 +1190,6 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     sb = get_supabase()
     try:
         res = await asyncio.to_thread(sb.storage.from_(PHOTO_BUCKET).create_signed_url, path, 3600)
-        logging.info("SUPABASE_SIGNED_URL_RESPONSE: %s", res)
         view_url = _storage_url(res.get("signedURL") or res.get("signedUrl"))
     except Exception:
         logging.exception("Supabase: не удалось создать ссылку на просмотр")
@@ -1209,13 +1221,22 @@ async def api_set_challenge_photo(request: web.Request) -> web.Response:
 async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     
-    # Выполняем все чтения одновременно
-    _, balance, history, catalog = await asyncio.gather(
-        db._exec("UPDATE users SET last_viewed_challenges = ? WHERE telegram_id = ?", (int(time.time()), tg_user.id)),
-        db.get_user_balance(tg_user.id),
-        db.get_all_user_challenges(tg_user.id),
-        db.get_challenges_json()
-    )
+    # refresh=1: клиент уже держит каталог и уже отметил просмотр, нужен только список
+    refresh = request.query.get("refresh") == "1"
+    catalog = None
+    if refresh:
+        balance, history = await asyncio.gather(
+            db.get_user_balance(tg_user.id),
+            db.get_all_user_challenges(tg_user.id),
+        )
+    else:
+        _, balance, history, catalog = await asyncio.gather(
+            db._exec("UPDATE users SET last_viewed_challenges = ? WHERE telegram_id = ?", (int(time.time()), tg_user.id)),
+            db.get_user_balance(tg_user.id),
+            db.get_all_user_challenges(tg_user.id),
+            db.get_challenges_json(),
+        )
+        _new_cache.pop(tg_user.id, None)
     
     now = int(time.time())
     for h in history:
@@ -1227,12 +1248,14 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
             if dl > 0 and now > dl:
                 h["is_archived"] = True
 
-    return web.json_response({
+    payload = {
         "balance": balance,
         "history": history,
-        "catalog": catalog,
         "my_id": tg_user.id,
-    })
+    }
+    if catalog is not None:
+        payload["catalog"] = catalog
+    return web.json_response(payload)
 
 
 async def api_create_challenge(request: web.Request) -> web.Response:
@@ -1313,9 +1336,14 @@ async def api_get_challenge_messages(request: web.Request) -> web.Response:
     if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Челлендж не найден", 404)
         
+    try:
+        after = max(0, int(request.query.get("after") or 0))
+    except ValueError:
+        after = 0
     rs = await db._exec(
-        "SELECT id, sender_id, text, created_at FROM challenge_messages WHERE challenge_id = ? ORDER BY created_at ASC",
-        (challenge_id,)
+        "SELECT id, sender_id, text, created_at FROM challenge_messages "
+        "WHERE challenge_id = ? AND id > ? ORDER BY id ASC",
+        (challenge_id, after)
     )
     messages = [{"id": r[0], "sender_id": r[1], "text": r[2], "created_at": r[3]} for r in rs.rows]
     return web.json_response({"messages": messages})
@@ -1478,8 +1506,73 @@ async def api_archive_challenge_manually(request: web.Request) -> web.Response:
     return web.json_response({"status": "archived"})
 
 
-async def index(_: web.Request) -> web.FileResponse:
-    return web.FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
+WEB_DIR = INDEX_FILE.parent.resolve()
+_static_cache: dict[Path, tuple[int, bytes, bytes]] = {}
+_index_cache: tuple = ()
+ASSET_RE = re.compile(r'(src|href)="(js|css)/([\w.\-]+)(?:\?v=[\w.\-]*)?"')
+
+
+def _text_charset(ctype: str):
+    return "utf-8" if ctype.startswith("text/") or ctype.endswith("javascript") else None
+
+
+def _respond(request: web.Request, etag: str, raw: bytes, gz: bytes, ctype: str, cache: str) -> web.Response:
+    headers = {"ETag": etag, "Cache-Control": cache, "Vary": "Accept-Encoding"}
+    if request.headers.get("If-None-Match") == etag:
+        return web.Response(status=304, headers=headers)
+    body = raw
+    if "gzip" in request.headers.get("Accept-Encoding", "").lower():
+        body = gz
+        headers["Content-Encoding"] = "gzip"
+    return web.Response(body=body, content_type=ctype, charset=_text_charset(ctype), headers=headers)
+
+
+def _asset_versions() -> dict[str, int]:
+    return {
+        p.name: p.stat().st_mtime_ns
+        for d in ("js", "css")
+        for p in (WEB_DIR / d).glob("*")
+        if p.is_file()
+    }
+
+
+def _build_index() -> tuple:
+    """index.html с автоматическими ?v=<mtime> у скриптов/стилей (ручные ?v=NN больше не нужны)."""
+    global _index_cache
+    versions = _asset_versions()
+    sig = (INDEX_FILE.stat().st_mtime_ns, tuple(sorted(versions.items())))
+    if _index_cache and _index_cache[0] == sig:
+        return _index_cache
+    short = {name: format(ns // 1_000_000, "x") for name, ns in versions.items()}
+    html = INDEX_FILE.read_text(encoding="utf-8")
+    html = ASSET_RE.sub(lambda m: f'{m[1]}="{m[2]}/{m[3]}?v={short.get(m[3], "0")}"', html)
+    inject = "<script>window.ASSET_V=" + json.dumps(short) + ";</script>"
+    html = html.replace("</head>", inject + "</head>", 1)
+    raw = html.encode("utf-8")
+    etag = '"' + hashlib.sha1(raw).hexdigest()[:20] + '"'
+    _index_cache = (sig, etag, raw, gzip.compress(raw, 9))
+    return _index_cache
+
+
+async def index(request: web.Request) -> web.Response:
+    _, etag, raw, gz = _build_index()
+    return _respond(request, etag, raw, gz, "text/html", "no-cache")
+
+
+async def static_file(request: web.Request) -> web.Response:
+    kind = request.match_info["kind"]
+    path = (WEB_DIR / kind / request.match_info["name"]).resolve()
+    if path.parent != (WEB_DIR / kind) or not path.is_file():
+        raise web.HTTPNotFound()
+    mtime = path.stat().st_mtime_ns
+    hit = _static_cache.get(path)
+    if hit is None or hit[0] != mtime:
+        raw = path.read_bytes()
+        hit = _static_cache[path] = (mtime, raw, gzip.compress(raw, 9))  # один раз на версию файла
+    ctype = (mimetypes.guess_type(path.name)[0] or "application/octet-stream").split(";")[0]
+    # URL с ?v=<mtime> неизменяем: кэшируем на год; без версии — проверяем по ETag
+    cache = "public, max-age=31536000, immutable" if request.query.get("v") else "no-cache"
+    return _respond(request, f'"{mtime:x}"', hit[1], hit[2], ctype, cache)
 
 
 async def send_due_reminders() -> None:
@@ -1616,8 +1709,7 @@ async def main() -> None:
     
     app.router.add_get("/", index)
     app.router.add_get("/health", health_check)
-    app.router.add_static("/css", INDEX_FILE.parent / "css")
-    app.router.add_static("/js", INDEX_FILE.parent / "js")
+    app.router.add_get(r"/{kind:(?:js|css)}/{name}", static_file)
     app.router.add_get("/api/state", api_state)
     app.router.add_get("/api/archive.json", api_archive)
     app.router.add_get("/api/todos/archive", api_archived_todos)
@@ -1668,6 +1760,7 @@ async def main() -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await reminders
         await runner.cleanup()
+        await close_voice_http()
         await bot.session.close()
         await db.close_db()
 

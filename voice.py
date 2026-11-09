@@ -33,7 +33,23 @@ STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3")
 LLM_MODEL = os.getenv("GROQ_LLM_MODEL", "openai/gpt-oss-20b")
 VOICE_LANGUAGE = os.getenv("VOICE_LANGUAGE", "").strip()  # например "ru"; пусто = автоопределение
 MAX_VOICE_SECONDS = 90
+MAX_VOICE_BYTES = 2 * 1024 * 1024
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=45)
+
+_session: aiohttp.ClientSession | None = None
+
+
+def _http() -> aiohttp.ClientSession:
+    """Одна сессия на всё приложение: не открываем новое соединение на каждое голосовое."""
+    global _session
+    if _session is None or _session.closed:
+        _session = aiohttp.ClientSession(timeout=HTTP_TIMEOUT)
+    return _session
+
+
+async def close_http() -> None:
+    if _session is not None and not _session.closed:
+        await _session.close()
 
 WEEKDAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 RU_WEEKDAYS = {
@@ -185,6 +201,9 @@ async def handle_voice_message(message: Message):
     if message.voice.duration and message.voice.duration > MAX_VOICE_SECONDS:
         await message.answer(f"Слишком длинное сообщение (максимум {MAX_VOICE_SECONDS} сек).")
         return
+    if message.voice.file_size and message.voice.file_size > MAX_VOICE_BYTES:
+        await message.answer("Слишком большой файл.")
+        return
 
     await message.answer("🎤 Слушаю и распознаю…")
     uid = message.from_user.id
@@ -194,12 +213,12 @@ async def handle_voice_message(message: Message):
         today = datetime.now(timezone.utc).astimezone(tz).date()
 
         buf = await message.bot.download(message.voice)
-        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
-            text = await _transcribe(session, key, buf.getvalue())
-            if not text:
-                await message.answer("Я ничего не расслышал.")
-                return
-            ev = _sanitize(await _parse_intent(session, key, text, today), text, today)
+        session = _http()
+        text = await _transcribe(session, key, buf.getvalue())
+        if not text:
+            await message.answer("Я ничего не расслышал.")
+            return
+        ev = _sanitize(await _parse_intent(session, key, text, today), text, today)
 
         cat = ev["category"]
         partner = user["partner_id"]
@@ -218,10 +237,7 @@ async def handle_voice_message(message: Message):
                 return
             existing, target_date = await _add_to_shop_list(uid, ev, today)
             if existing:
-                added = 0
-                for item in ev["items"]:
-                    if await db.add_item(existing["id"], item):
-                        added += 1
+                added = await db.add_items(existing["id"], ev["items"])
                 await message.answer(
                     header + f"✅ Добавил {added} из {len(ev['items'])} в список на {fmt_date(existing['date'])}."
                 )

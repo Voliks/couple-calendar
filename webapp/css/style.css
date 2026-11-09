@@ -369,3 +369,19 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
 .challenge-card.done .challenge-reward {
   color: rgb(var(--accepted));
 }
+
+/* Магазин */
+.shop-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px; border-radius: 12px; background: var(--bg2); border-left: 4px solid #8b5cf6; cursor: pointer; }
+.shop-title { flex: 1; font-size: 14px; font-weight: 500; line-height: 1.4; word-break: break-word; }
+.shop-cost { font-size: 14px; font-weight: 700; white-space: nowrap; color: #eab308; }
+.shop-cost.poor { color: rgb(var(--declined)); }
+
+/* Комментарии к событиям */
+.event-comments-block { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(0,0,0,0.05); }
+.event-comments-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.cm { padding: 6px 10px; border-radius: 8px; font-size: 13px; background: rgba(0,0,0,0.04); word-break: break-word; }
+.cm.mine { background: rgba(36,129,204,0.1); }
+.cm-empty { font-size: 12px; color: var(--hint); }
+.comment-row { display: flex; gap: 6px; }
+.comment-input { flex: 1; padding: 8px 12px; border-radius: 8px; background: rgba(0,0,0,0.04); border: none; font-size: 14px; }
+.btn-send-comment { background: var(--accent); color: #fff; border-radius: 8px; padding: 0 12px; font-weight: 700; }

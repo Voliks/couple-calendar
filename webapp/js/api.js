@@ -27,7 +27,8 @@ const pad = (n) => String(n).padStart(2, "0");
 const fmt = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
 const todayStr = () => { const t = new Date(); return fmt(t.getFullYear(), t.getMonth(), t.getDate()); };
 const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const ESC_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC_MAP[c]);
 const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
 function hexToRgb(hex) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
@@ -132,5 +133,6 @@ function openCommentDialog(initial, onConfirm) {
 let etag = null, etagKey = "";
 
 // Все модальные окна приложения; используется для блокировки жестов, опроса сервера и FAB-кнопок
-const OVERLAY_IDS = ["overlay", "ideasOverlay", "archiveOverlay", "catOverlay", "challengesOverlay", "shopOverlay", "buyDateOverlay"];
+const OVERLAY_IDS = ["overlay", "ideasOverlay", "archiveOverlay", "catOverlay", "challengesOverlay", "shopOverlay", "buyDateOverlay",
+  "challengeChatOverlay", "photoViewerOverlay"];
 const anyOverlayOpen = () => OVERLAY_IDS.some((id) => { const el = $(id); return el && !el.hidden; });

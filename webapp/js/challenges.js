@@ -2,6 +2,8 @@ let allChallenges = [];
 let catalogData = {};
 let currentChallenge = null;
 let chatPollTimer = null;
+let chatPollGen = 0;
+let chatMessages = [];
 let showArchive = false;
 let selectedIdeaData = null;
 let selectedCustomChallengeText = "";
@@ -14,51 +16,55 @@ let uploadingPhotos = false;
 
 /* ---------- Список ---------- */
 
-async function openChallenges() {
-  const requestId = ++challengesRequestSeq;
-  $("challengesOverlay").hidden = false;
-  tg.BackButton?.show();
-  $("challengesList").innerHTML = `<div class="spinner" style="margin:20px auto;"></div>`;
-  
-  // Обновляем кнопку архива
+function syncArchiveUi() {
   const archiveBtn = $("toggleArchiveBtn");
   if (archiveBtn) {
     archiveBtn.textContent = showArchive ? "⬅️ Назад" : "🗄 Архив";
     archiveBtn.style.background = showArchive ? "var(--accent)" : "var(--bg2)";
     archiveBtn.style.color = showArchive ? "#fff" : "var(--text)";
   }
-
   // Скрываем блок создания в архиве
   $("createChallengeArea").style.display = showArchive ? "none" : "block";
+}
+
+function visibleChallenges() {
+  // В архиве — вручную убранные и с истёкшим дедлайном; в основном списке — всё остальное
+  return showArchive
+    ? allChallenges.filter(c => c.status === "archived" || c.is_archived)
+    : allChallenges.filter(c => c.status !== "archived" && !c.is_archived);
+}
+
+// refresh: перезагрузить только список (после действия). Каталог уже у клиента, сервер его не шлёт,
+// и экран не мигает спиннером.
+async function openChallenges({ refresh = false } = {}) {
+  const requestId = ++challengesRequestSeq;
+  const light = refresh && Object.keys(catalogData).length > 0;
+  if (!light) {
+    $("challengesOverlay").hidden = false;
+    tg.BackButton?.show();
+    $("challengesList").innerHTML = `<div class="spinner" style="margin:20px auto;"></div>`;
+  }
+  syncArchiveUi();
 
   try {
-    const res = await api("/challenges");
+    const res = await api(light ? "/challenges?refresh=1" : "/challenges");
     // Более поздний запрос имеет приоритет: старый ответ не перезаписывает новый экран.
     if (requestId !== challengesRequestSeq || $("challengesOverlay").hidden) return;
     // Сортируем копию, не мутируя массив из API.
     allChallenges = [...(res.history || [])].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
-
-    catalogData = res.catalog || {};
+    if (res.catalog) catalogData = res.catalog;
     $("challengeBalance").textContent = res.balance ?? 0;
 
-    let filtered;
-    if (showArchive) {
-      // В архиве показываем те, которые вручную отправлены в архив (статус archived) или у которых истёк дедлайн
-      filtered = allChallenges.filter(c => c.status === "archived" || c.is_archived);
-    } else {
-      // В основном списке показываем всё, кроме прямо архивированных
-      filtered = allChallenges.filter(c => c.status !== "archived" && !c.is_archived);
+    if (!light) {
+      // Инициализируем категории (если еще не выбрана)
+      if (!selectedCategory && Object.keys(catalogData).length > 0) {
+        selectedCategory = Object.keys(catalogData)[0];
+        $("selectedCatText").textContent = selectedCategory;
+      }
+      renderCategories();
+      updateIdeaList();
     }
-
-    // Инициализируем категории (если еще не выбрана)
-    if (!selectedCategory && Object.keys(catalogData).length > 0) {
-      selectedCategory = Object.keys(catalogData)[0];
-      $("selectedCatText").textContent = selectedCategory;
-    }
-
-    renderCategories();
-    updateIdeaList();
-    renderChallenges(filtered);
+    renderChallenges(visibleChallenges());
   } catch (e) {
     if (requestId !== challengesRequestSeq || $("challengesOverlay").hidden) return;
     $("challengesList").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
@@ -179,7 +185,7 @@ async function createChallenge() {
     selectedCustomChallengeText = "";
     toast("Вызов брошен!");
     tg.HapticFeedback?.notificationOccurred("success");
-    await openChallenges();
+    await openChallenges({ refresh: true });
   } catch (e) {
     toast(e.message);
   } finally {
@@ -241,13 +247,28 @@ function openChallengeDetails(id) {
   $("chatDeleteBlock").style.display = canDelete ? "block" : "none";
 
   loadMessages(id);
+  startChatPolling(id);
+}
 
-  if (chatPollTimer) clearInterval(chatPollTimer);
-  chatPollTimer = setInterval(() => {
+// Опрос чата: 8 с, а пока новых сообщений нет — реже, до 30 с
+function startChatPolling(id) {
+  stopChatPolling();
+  const gen = ++chatPollGen;
+  const tick = async (delay) => {
+    if (gen !== chatPollGen) return;
+    let next = delay;
     if (!document.hidden && !$("challengeChatOverlay").hidden && currentChallenge?.id === id) {
-      loadMessages(id, true);
+      const fresh = await loadMessages(id, true);
+      next = fresh ? 8000 : Math.min(Math.round(delay * 1.5), 30000);
     }
-  }, 8000);
+    if (gen === chatPollGen) chatPollTimer = setTimeout(() => tick(next), next);
+  };
+  chatPollTimer = setTimeout(() => tick(8000), 8000);
+}
+
+function stopChatPolling() {
+  chatPollGen++;
+  if (chatPollTimer) { clearTimeout(chatPollTimer); chatPollTimer = null; }
 }
 
 function closeChallengeDetails() {
@@ -255,47 +276,57 @@ function closeChallengeDetails() {
   currentChallenge = null;
   chatRequestSeq++;
   chatLoadPromise = null;
-  if (chatPollTimer) { clearInterval(chatPollTimer); chatPollTimer = null; }
+  stopChatPolling();
   if (!$("challengesOverlay").hidden) tg.BackButton?.show();
   else tg.BackButton?.hide();
 }
 
 /* ---------- Логика чата (сообщения) ---------- */
 
-async function loadMessages(challengeId, silent = false) {
+function renderChatMessages(list) {
+  if (!chatMessages.length) {
+    list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Сообщений пока нет.</div>`;
+    return;
+  }
+  const myId = state?.my_id || 0;
+  list.innerHTML = chatMessages.map(m => {
+    const isMine = m.sender_id === myId;
+    const align = isMine ? "align-self: flex-end; background: var(--accent); color: #fff;" : "align-self: flex-start; background: var(--bg2); color: var(--text);";
+    return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; ${align}">${esc(m.text)}</div>`;
+  }).join("");
+  list.scrollTop = list.scrollHeight;
+}
+
+// Возвращает число новых сообщений. Фоновые запросы забирают только то, что новее последнего id (after=).
+async function loadMessages(challengeId, silent = false, force = false) {
   const list = $("chatMessagesList");
-  if (!list) return;
+  if (!list) return 0;
   // Не запускаем несколько одинаковых фоновых опросов одновременно.
-  if (silent && chatLoadPromise) return chatLoadPromise;
+  if (silent && chatLoadPromise && !force) return chatLoadPromise;
+  if (!silent) {
+    chatMessages = [];
+    list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Загрузка...</div>`;
+  }
   const requestId = ++chatRequestSeq;
-  if (!silent) list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Загрузка...</div>`;
+  const after = chatMessages.length ? chatMessages[chatMessages.length - 1].id : 0;
 
   const request = (async () => {
     try {
-      const res = await api(`/challenges/${challengeId}/messages`);
-      if (requestId !== chatRequestSeq || currentChallenge?.id !== challengeId || $("challengeChatOverlay").hidden) return;
-      const msgs = res.messages || [];
-      const signature = JSON.stringify(msgs);
-      if (list.dataset.messagesSignature === signature) return;
-      list.dataset.messagesSignature = signature;
-
-      if (!msgs.length) {
-        list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Сообщений пока нет.</div>`;
-        return;
-      }
-      const myId = state?.my_id || 0;
-      list.innerHTML = msgs.map(m => {
-        const isMine = m.sender_id === myId;
-        const align = isMine ? "align-self: flex-end; background: var(--accent); color: #fff;" : "align-self: flex-start; background: var(--bg2); color: var(--text);";
-        return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; ${align}">${esc(m.text)}</div>`;
-      }).join("");
-      list.scrollTop = list.scrollHeight;
+      const res = await api(`/challenges/${challengeId}/messages${after ? `?after=${after}` : ""}`);
+      if (requestId !== chatRequestSeq || currentChallenge?.id !== challengeId || $("challengeChatOverlay").hidden) return 0;
+      const lastId = chatMessages.length ? chatMessages[chatMessages.length - 1].id : 0;
+      const fresh = (res.messages || []).filter(m => m.id > lastId);
+      if (!fresh.length && silent) return 0;
+      chatMessages = chatMessages.concat(fresh);
+      renderChatMessages(list);
+      return fresh.length;
     } catch (e) {
       if (requestId === chatRequestSeq && !silent) list.innerHTML = `<div style="text-align:center; color:rgb(var(--declined)); font-size:12px; padding:10px;">Ошибка: ${esc(e.message)}</div>`;
+      return 0;
     }
   })();
   if (silent) chatLoadPromise = request;
-  try { await request; }
+  try { return await request; }
   finally { if (chatLoadPromise === request) chatLoadPromise = null; }
 }
 
@@ -308,7 +339,7 @@ async function sendMessage() {
   try {
     const challengeId = currentChallenge.id;
     await api(`/challenges/${challengeId}/messages`, { method: "POST", body: { text } });
-    if (currentChallenge?.id === challengeId) await loadMessages(challengeId);
+    if (currentChallenge?.id === challengeId) await loadMessages(challengeId, true, true);
   } catch (e) { toast(e.message); } finally { input.disabled = false; input.focus(); }
 }
 
@@ -398,7 +429,7 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
     toast(`Загружено фото: ${uploadedPaths.length}`);
     tg.HapticFeedback?.notificationOccurred("success");
     closeChallengeDetails();
-    await openChallenges();
+    await openChallenges({ refresh: true });
   } catch (e) {
     toast(e.message || "Ошибка загрузки");
   } finally {
@@ -419,7 +450,7 @@ async function challengeAction(action) {
     toast(action === "approve" ? "Засчитано!" : "Отклонено");
     tg.HapticFeedback?.notificationOccurred("success");
     closeChallengeDetails();
-    await openChallenges();
+    await openChallenges({ refresh: true });
   } catch (e) { toast(e.message); }
 }
 
@@ -543,10 +574,10 @@ try {
 
   $("toggleArchiveBtn").onclick = () => {
     showArchive = !showArchive;
-    openChallenges();
+    syncArchiveUi();
+    renderChallenges(visibleChallenges());
   };
 
-  $("challengeBtn").onclick = openChallenges;
   $("challengesClose").onclick = closeChallenges;
   $("createChallengeBtn").onclick = createChallenge;
 
@@ -565,11 +596,9 @@ try {
         await api(`/challenges/${id}/archive`, { method: "POST" });
         tg.HapticFeedback?.notificationOccurred("success");
         toast("Убрано в архив");
-        // Визуально скрываем карточку
-        const card = archiveBtn.closest(".challenge-card");
-        if (card) card.style.display = "none";
-        // Перезагружаем
-        await openChallenges();
+        const c = allChallenges.find((x) => String(x.id) === String(id));
+        if (c) c.status = "archived";
+        renderChallenges(visibleChallenges());
       } catch (err) {
         toast(err.message);
         archiveBtn.textContent = "×";
@@ -614,7 +643,7 @@ try {
         toast("Вызов удален");
         tg.HapticFeedback?.notificationOccurred("success");
         closeChallengeDetails();
-        await openChallenges();
+        await openChallenges({ refresh: true });
       } catch (e) { toast(e.message); }
     });
   };
