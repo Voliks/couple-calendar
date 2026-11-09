@@ -14,6 +14,7 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 from aiogram import Dispatcher, Router  # type: ignore[reportMissingImports]
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiogram.filters import Command, CommandObject, CommandStart  # type: ignore[reportMissingImports]
 from aiogram.types import (  # type: ignore[reportMissingImports]
     BotCommand,
@@ -49,6 +50,15 @@ from voice import close_http as close_voice_http, router as voice_router
 
 PORT = int(os.getenv("PORT", "8080"))
 INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
+PORT = int(os.getenv("PORT", "8080"))
+INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
+
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", secrets.token_urlsafe(16))
+WEBHOOK_URL = f"{WEBAPP_URL}{WEBHOOK_PATH}"
+
+REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
+SHOW_TITLES = os.getenv("NOTIFY_SHOW_TITLES", "0") == "1"
 
 REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
 SHOW_TITLES = os.getenv("NOTIFY_SHOW_TITLES", "0") == "1"
@@ -1802,7 +1812,13 @@ async def main() -> None:
                 BotCommand(command="unlink", description="Отвязать партнёра"),
             ]
         )
-    
+
+    # Функция, которая вызывается при старте приложения
+    async def on_startup(app: web.Application):
+        # Устанавливаем вебхук в Telegram
+        await bot.set_webhook(WEBHOOK_URL, secret_token=WEBHOOK_SECRET, drop_pending_updates=True)
+        logging.info("Webhook установлен: %s", WEBHOOK_URL)
+
     # Подключаем gzip_middleware ПЕРЕД api_middleware
     app = web.Application(middlewares=[gzip_middleware, api_middleware], client_max_size=1024 * 1024)
     
@@ -1819,14 +1835,10 @@ async def main() -> None:
     app.router.add_post("/api/events/{id}/idea", api_set_idea_response)
     app.router.add_post("/api/events/{id}/reaction", api_set_reaction)
     app.router.add_post("/api/events/{id}/comment", api_set_decline_comment)
-    app.router.add_get("/api/events/{id}/comments", api_get_event_comments)
-    app.router.add_post("/api/events/{id}/comments", api_post_event_comment)
     app.router.add_post("/api/events/{id}/items", api_add_item)
     app.router.add_put("/api/events/{id}/items/{item_id}", api_set_item)
     app.router.add_delete("/api/events/{id}/items/{item_id}", api_delete_item)
     app.router.add_post("/api/events/{id}/items/{item_id}/move", api_move_item)
-    app.router.add_get("/api/mood", api_get_mood)
-    app.router.add_post("/api/mood", api_set_mood)
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
@@ -1850,18 +1862,35 @@ async def main() -> None:
     # Комментарии
     app.router.add_get("/api/events/{id}/comments", api_get_event_comments)
     app.router.add_post("/api/events/{id}/comments", api_post_event_comment)
+
+    # Настроение дня
+    app.router.add_get("/api/mood", api_get_mood)
+    app.router.add_post("/api/mood", api_set_mood)
     
+    # --- ВЕБХУК ДЛЯ БОТА ---
+    # Регистрируем обработчик вебхука на нашем aiohttp приложении
+    SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=WEBHOOK_SECRET).register(app, path=WEBHOOK_PATH)
+    # Настраиваем startup/shutdown для правильной работы диспетчера
+    setup_application(app, dp, bot=bot)
+    app.on_startup.append(on_startup)
+
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     logging.info("Web app: http://0.0.0.0:%s  (public: %s)", PORT, WEBAPP_URL)
+    logging.info("Webhook endpoint: %s", WEBHOOK_URL)
+    
     reminders = asyncio.create_task(reminder_loop())
     try:
-        await dp.start_polling(bot)
+        # Вместо dp.start_polling(bot) просто ждём, пока приложение работает
+        await asyncio.Event().wait()
     finally:
         reminders.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reminders
+        # Удаляем вебхук при остановке, чтобы Telegram не слал обновления в пустоту
+        with contextlib.suppress(Exception):
+            await bot.delete_webhook()
         await runner.cleanup()
         await close_voice_http()
         await bot.session.close()
