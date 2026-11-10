@@ -812,17 +812,31 @@ async def unlink_partners(user_id: int) -> int | None:
     if not user or user["partner_id"] is None:
         return None
     p = user["partner_id"]
+    
     pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
     pargs = (user_id, p, p, user_id)
+    
+    pk = pair_key(user_id, p)
+    
     await _batch(
         [
+            # Удаляем события и связанные с ними данные
             (f"DELETE FROM checklist_items WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM reminders WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM reactions WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM idea_responses WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
+            (f"DELETE FROM event_comments WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM events WHERE {pair}", pargs),
-            ("UPDATE users SET partner_id = NULL, invite_expires = 0 WHERE telegram_id IN (?, ?)",
-             (user_id, p)),
+            
+            # Удаляем челленджи и их сообщения
+            ("DELETE FROM challenge_messages WHERE challenge_id IN (SELECT id FROM user_challenges WHERE creator_id IN (?, ?) OR target_id IN (?, ?))", (user_id, p, user_id, p)),
+            ("DELETE FROM user_challenges WHERE creator_id IN (?, ?) OR target_id IN (?, ?)", (user_id, p, user_id, p)),
+            
+            # Удаляем настроения
+            ("DELETE FROM moods WHERE pair_key = ?", (pk,)),
+            
+            # Отвязываем пользователей
+            ("UPDATE users SET partner_id = NULL, invite_expires = 0 WHERE telegram_id IN (?, ?)", (user_id, p)),
         ]
     )
     return p
@@ -1391,6 +1405,14 @@ async def get_user_balance(user_id: int) -> int:
 
 async def add_balance(user_id: int, amount: int) -> None:
     await _exec("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (amount, user_id))
+
+async def spend_balance(user_id: int, cost: int) -> bool:
+    """Атомарно списывает баллы, если их достаточно. Возвращает True при успехе."""
+    rs = await _exec(
+        "UPDATE users SET balance = balance - ? WHERE telegram_id = ? AND balance >= ?",
+        (cost, user_id, cost),
+    )
+    return rs.affected == 1   
 
 
 async def create_user_challenge(creator_id: int, target_id: int, category: str, text: str, reward: int, deadline: int = 0) -> dict:

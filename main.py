@@ -1459,6 +1459,13 @@ async def api_get_challenge_messages(request: web.Request) -> web.Response:
     if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Челлендж не найден", 404)
         
+    user = await db.get_or_create_user(tg_user.id)
+    partner_id = challenge["target_id"] if tg_user.id == challenge["creator_id"] else challenge["creator_id"]
+    
+    # Если они больше не пара, запрещаем читать переписку
+    if user["partner_id"] != partner_id:
+        raise ApiError("Нет доступа к переписке бывшего партнёра", 403)
+        
     try:
         after = max(0, int(request.query.get("after") or 0))
     except ValueError:
@@ -1480,6 +1487,12 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
     if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Челлендж не найден", 404)
         
+    user = await db.get_or_create_user(tg_user.id)
+    partner_id = challenge["target_id"] if tg_user.id == challenge["creator_id"] else challenge["creator_id"]
+    
+    if user["partner_id"] != partner_id:
+        raise ApiError("Нельзя писать бывшему партнёру", 403)
+
     body = await read_json(request)
     text = str(body.get("text") or "").strip()[:500]
     if not text:
@@ -1490,7 +1503,6 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
         (challenge_id, tg_user.id, text, int(time.time()))
     )
     
-    partner_id = challenge["target_id"] if tg_user.id == challenge["creator_id"] else challenge["creator_id"]
     notify(partner_id, f"💬 Новое сообщение по челленджу «{challenge['text']}»:\n\n{text}")
     
     return web.json_response({"status": "ok"})
@@ -1527,21 +1539,26 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
     cost = item.get("cost")
     emoji = item.get("emoji", "🎁")
 
-    balance = await db.get_user_balance(tg_user.id)
-    if balance < cost:
+    # Атомарно списываем баллы (защита от гонок)
+    if not await db.spend_balance(tg_user.id, cost):
         raise ApiError("Недостаточно баллов для покупки", 403)
 
-    await db.add_balance(tg_user.id, -cost)
-
-    event = await db.create_event(
-        created_by=tg_user.id,
-        target_user=user["partner_id"],
-        title=f"{emoji} {title}",
-        description="Куплено в магазине желаний",
-        date=date,
-        event_time="",
-        category="rest",
-    )
+    # Если создание события упадет, вернем баллы обратно
+    try:
+        event = await db.create_event(
+            created_by=tg_user.id,
+            target_user=user["partner_id"],
+            title=f"{emoji} {title}",
+            description="Куплено в магазине желаний",
+            date=date,
+            event_time="",
+            category="rest",
+        )
+    except Exception as e:
+        # Возврат средств
+        await db.add_balance(tg_user.id, cost)
+        logging.exception("Ошибка при создании события покупки, средства возвращены")
+        raise ApiError("Ошибка при создании события. Баллы возвращены.", 500)
     
     notify(
         user["partner_id"], 
@@ -1621,11 +1638,12 @@ async def api_archive_challenge_manually(request: web.Request) -> web.Response:
     if tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Нет доступа", 403)
 
-    # Меняем статус прямо на 'archived'
-    await db._exec(
-        "UPDATE user_challenges SET status = 'archived' WHERE id = ?", 
-        (challenge_id,)
-    )
+    # Архивировать можно ТОЛЬКО завершенные (approved/rejected) или уже архивные
+    if not await db.transition_challenge(challenge_id, ("approved", "rejected"), "archived"):
+        c_check = await db.get_user_challenge(challenge_id)
+        if not c_check or c_check["status"] != "archived":
+            raise ApiError("Архивировать можно только завершённые вызовы", 409)
+
     return web.json_response({"status": "archived"})
 
 
