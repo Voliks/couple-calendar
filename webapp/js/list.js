@@ -138,6 +138,14 @@ function cardHtml(e) {
       : `<div class="tag" style="margin-top:2px;color:rgb(var(--personal));font-weight:600;">🌐 Общее с партнёром</div>`;
   }
 
+  // Блок с предложенным временем
+  let altTimeHtml = "";
+  if (e.status === "declined" && e.alt_date) {
+    altTimeHtml = `<div style="margin-top:8px; padding:8px 10px; border-radius:8px; background:rgba(36,129,204,0.1); font-size:13px; color:var(--accent); font-weight:600;">
+      📅 Предложено другое время: ${fmtRange(e.alt_date, "")} ${e.alt_time ? "в " + esc(e.alt_time) : ""}
+    </div>`;
+  }
+
   return `<article class="card ${cardCls}" data-id="${e.id}"${cardStyle}>
     <div class="card-header">
       <div style="flex:1;min-width:0"><h3>${esc(e.title)}</h3><div class="tag">${tag}</div>${privacy}</div>
@@ -148,7 +156,8 @@ function cardHtml(e) {
     ${ideasHtml(e)}
     ${reactionHtml(e)}
     ${declineCommentHtml(e)}
-    ${eventCommentsHtml(e)} <!-- Вывод блока комментариев -->
+    ${altTimeHtml}
+    ${eventCommentsHtml(e)}
     <div class="meta"><span>${e.is_creator ? "От вас" : "От партнёра"}</span>${statusLabel}</div>
     ${answerHtml(e, sk === "expired")}
   </article>`;
@@ -502,13 +511,22 @@ $("list").addEventListener("click", async (ev) => {
     const newStatus = statusBtn.dataset.status;
        
     if (newStatus === "declined") {
-      openCommentDialog(event.my_decline_comment || "", async (comment) => {
-        try {
-          const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: "declined", comment } });
-          replaceEvent(updated);
-          tg.HapticFeedback?.notificationOccurred("success");
-        } catch (e) { toast(e.message); await load(); }
-      });
+      // Окно отклонения с выбором новой даты и времени
+      openCommentDialog(
+        event.my_decline_comment || "",
+        event.alt_date || event.date,
+        event.alt_time || event.time,
+        async (comment, altDate, altTime) => {
+          try {
+            const updated = await api(`/events/${eventId}/respond`, { 
+              method: "POST", 
+              body: { status: "declined", comment, alt_date: altDate, alt_time: altTime } 
+            });
+            replaceEvent(updated);
+            tg.HapticFeedback?.notificationOccurred("success");
+          } catch (e) { toast(e.message); await load(); }
+        }
+      );
       return;
     }
     statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));

@@ -102,17 +102,24 @@ function confirmDialog(message, onYes) {
   if (confirm(message)) onYes();
 }
 
-function openCommentDialog(initial, onConfirm) {
+function openCommentDialog(initial, initialDate = "", initialTime = "", onConfirm) {
   const overlay = document.createElement("div");
   overlay.className = "overlay";
   overlay.innerHTML = `
     <div class="sheet" role="dialog" aria-modal="true">
-      <h2>Комментарий</h2>
-      <label for="commentText">Текст комментария</label>
+      <h2>Отклонить событие</h2>
+      <label for="commentText">Комментарий (необязательно)</label>
       <textarea id="commentText" maxlength="500" placeholder="Например: не смогу в этот день..."></textarea>
+      
+      <label for="altDate">Предложить другую дату (необязательно)</label>
+      <input type="date" id="altDate" value="${initialDate}">
+      
+      <label for="altTime">Время</label>
+      <input type="time" id="altTime" value="${initialTime}">
+      
       <div class="row">
         <button class="btn ghost" id="commentCancel">Отмена</button>
-        <button class="btn primary" id="commentOk">Сохранить</button>
+        <button class="btn primary" id="commentOk">Предложить</button>
       </div>
     </div>
   `;
@@ -124,8 +131,10 @@ function openCommentDialog(initial, onConfirm) {
   overlay.querySelector("#commentCancel").onclick = close;
   overlay.querySelector("#commentOk").onclick = () => {
     const comment = ta.value.trim().slice(0, 500);
+    const altDate = overlay.querySelector("#altDate").value;
+    const altTime = overlay.querySelector("#altTime").value;
     close();
-    onConfirm(comment);
+    onConfirm(comment, altDate, altTime);
   };
   setTimeout(() => ta.focus(), 50);
 }

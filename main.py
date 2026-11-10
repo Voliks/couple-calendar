@@ -50,15 +50,10 @@ from voice import close_http as close_voice_http, router as voice_router
 
 PORT = int(os.getenv("PORT", "8080"))
 INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
-PORT = int(os.getenv("PORT", "8080"))
-INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
 
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", secrets.token_urlsafe(16))
 WEBHOOK_URL = f"{WEBAPP_URL}{WEBHOOK_PATH}"
-
-REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
-SHOW_TITLES = os.getenv("NOTIFY_SHOW_TITLES", "0") == "1"
 
 REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
 SHOW_TITLES = os.getenv("NOTIFY_SHOW_TITLES", "0") == "1"
@@ -1151,11 +1146,14 @@ async def api_set_mood(request: web.Request) -> web.Response:
 
     pk = db.pair_key(tg_user.id, user["partner_id"])
     before = await db.get_moods(pk, date)
-    partner_had = any(m["user_id"] == user["partner_id"] for m in before)
+    
+    # Проверяем, ставил ли Я уже настроение сегодня (а не партнёр!)
+    mine_had = any(m["user_id"] == tg_user.id for m in before)
+    
     await db.set_mood(pk, tg_user.id, date, emoji, text)
 
-    # Уведомляем партнёра только при первом за день изменении (не спамим на каждое редактирование)
-    if (emoji or text) and not partner_had:
+    # Уведомляем партнёра только при ПЕРВОМ за день изменении
+    if (emoji or text) and not mine_had:
         part = f" {emoji}" if emoji else ""
         msg = f"💭 {tg_user.first_name} поделился(ась) настроением{part}"
         if text:
@@ -1849,7 +1847,7 @@ async def main() -> None:
     # Функция, которая вызывается при старте приложения
     async def on_startup(app: web.Application):
         # Устанавливаем вебхук в Telegram
-        await bot.set_webhook(WEBHOOK_URL, secret_token=WEBHOOK_SECRET, drop_pending_updates=True)
+        await bot.set_webhook(WEBHOOK_URL, secret_token=WEBHOOK_SECRET, drop_pending_updates=False)
         logging.info("Webhook установлен: %s", WEBHOOK_URL)
 
     # Подключаем gzip_middleware ПЕРЕД api_middleware
