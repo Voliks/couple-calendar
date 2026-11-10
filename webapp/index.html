@@ -6,7 +6,7 @@
 <meta name="api-base" content="https://couple-calendar-ycu9.onrender.com">
 <title>Календарь на двоих</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="css/style.css?v=10">
+<link rel="stylesheet" href="css/style.css?v=13">
 <link rel="icon" href="data:,">
 </head>
 <body>
@@ -32,19 +32,35 @@
     <button class="today-btn" id="archiveBtn" aria-label="Архив дел">Архив</button>
   </div>
 
-  <!-- Блок «Настроение дня» (перенесён наверх, компактный) -->
+  <!-- Блок «Настроение дня» (компактный) -->
   <div id="moodBlock" class="mood-block" hidden>
     <div class="mood-head" id="moodToggle">
       <div class="mood-title">💭 Настроение дня <span class="mood-chevron">▼</span></div>
-      <button class="mood-edit" id="moodEditBtn" type="button">Изменить</button>
+      <button class="mood-edit" id="moodEditBtn" type="button" hidden>Изменить</button>
     </div>
+    
     <div class="mood-body" id="moodBody">
-      <div class="mood-row" id="moodRow"></div>
-      
-      <!-- Быстрый ввод настроения -->
-      <div class="mood-quick-input" id="moodQuickInput" hidden>
-        <div class="mood-quick-emojis" id="moodQuickEmojis"></div>
+      <!-- 1. Плашки, если настроение уже есть -->
+      <div class="mood-row" id="moodRow" hidden></div>
+
+      <!-- 2. Поле ввода, если настроения нет -->
+      <div class="mood-quick-input" id="moodQuickInput">
         <div class="mood-quick-row">
+          <select id="moodQuickEmoji" class="mood-quick-select" aria-label="Выберите эмодзи">
+            <option value="">💭</option>
+            <option value="😊">😊</option>
+            <option value="😐">😐</option>
+            <option value="😔">😔</option>
+            <option value="😡">😡</option>
+            <option value="🥰">🥰</option>
+            <option value="😴">😴</option>
+            <option value="🤒">🤒</option>
+            <option value="🤩">🤩</option>
+            <option value="😢">😢</option>
+            <option value="😤">😤</option>
+            <option value="🥳">🥳</option>
+            <option value="🤔">🤔</option>
+          </select>
           <input type="text" id="moodQuickText" placeholder="Что происходит? (необязательно)" maxlength="280">
           <button type="button" id="moodQuickSave" class="btn primary" style="padding: 0 14px; border-radius: 10px;">ОК</button>
         </div>
@@ -405,21 +421,6 @@
   </div>
 </div>
 
-<!-- Модалка выбора настроения дня -->
-<div class="overlay" id="moodOverlay" hidden>
-  <div class="sheet" role="dialog" aria-modal="true">
-    <h2>Настроение на сегодня</h2>
-    <label>Эмодзи</label>
-    <div class="mood-emoji-grid" id="moodEmojiGrid"></div>
-    <label for="moodText">Коротко (необязательно)</label>
-    <textarea id="moodText" maxlength="280" placeholder="Что происходит?"></textarea>
-    <div class="row">
-      <button class="btn ghost" id="moodCancel" type="button">Отмена</button>
-      <button class="btn primary" id="moodSave" type="button">Сохранить</button>
-    </div>
-  </div>
-</div>
-
 <!-- Скрытый инпут для выбора фото (с атрибутом multiple) -->
 <input type="file" id="challengePhotoInput" accept="image/*" multiple style="display: none;">
 
@@ -431,7 +432,7 @@
 <script src="js/list.js?v=22" defer></script>
 <script src="js/ideas.js" defer></script>
 <script src="js/form.js" defer></script>
-<script src="js/mood.js?v=6" defer></script>
+<script src="js/mood.js?v=8" defer></script>
 <script src="js/main.js?v=123" defer></script>
 </body>
 </html>

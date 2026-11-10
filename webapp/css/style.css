@@ -454,59 +454,41 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
 .mood-cell .m-label { font-size: 10px; color: var(--hint); margin-bottom: 1px; }
 .mood-cell.empty { opacity: .65; }
 
-.mood-emoji-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 6px;
-  margin-top: 6px;
-}
-.mood-emoji {
-  aspect-ratio: 1;
-  font-size: 24px;
-  border-radius: 12px;
-  background: var(--bg2);
-  border: 2px solid transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform .1s, border-color .15s, background .15s;
-}
-.mood-emoji.selected { border-color: var(--accent); background: rgba(36,129,204,.12); }
-.mood-emoji:active { transform: scale(.95); }
-
-/* Быстрый ввод настроения (эмодзи + текст) */
+/* Быстрый ввод настроения (селект + текст) */
 .mood-quick-input {
   margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
-.mood-quick-emojis {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.mood-quick-emojis button {
-  font-size: 22px;
-  padding: 4px 8px;
-  border-radius: 10px;
-  background: var(--bg);
-  border: 2px solid transparent;
-  line-height: 1;
-  transition: transform .1s, border-color .15s;
-}
-.mood-quick-emojis button:active { transform: scale(.92); }
-.mood-quick-emojis button.selected { border-color: var(--accent); }
-
 .mood-quick-row {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  align-items: stretch;
+}
+.mood-quick-select {
+  width: auto;
+  min-width: 60px;
+  flex-shrink: 0;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid transparent;
+  font-size: 20px;
+  text-align: center;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.mood-quick-select:focus {
+  outline: 2px solid var(--accent);
 }
 .mood-quick-row input {
   flex: 1;
+  min-width: 0;
   padding: 8px 12px;
   border-radius: 10px;
   border: 1px solid transparent;
   background: var(--bg);
   font-size: 14px;
+}
+.mood-quick-row input:focus {
+  outline: 2px solid var(--accent);
 }

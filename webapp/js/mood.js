@@ -1,18 +1,15 @@
 // Настроение дня. Ленивый модуль, грузится вместе с main.js.
 
-const MOOD_EMOJIS = ["😊","😐","😔","😡","🥰","😴","🤒","🤩","😢","😤","🥳","🤔"];
 const MOOD_COLLAPSED_KEY = "mood_collapsed";
 
 let moodState = { date: "", mine: null, partner: null, partner_id: 0 };
-let moodSelected = "";
 let moodLoadSeq = 0;
 
 function moodDateStr() {
   return todayStr();
 }
 
-/* ---------- Сворачивание/разворачивание ---------- */
-
+/* ---------- Сворачивание ---------- */
 function applyMoodCollapsed(collapsed) {
   const block = $("moodBlock");
   if (!block) return;
@@ -38,7 +35,6 @@ function initMoodCollapsed() {
 }
 
 /* ---------- Отрисовка ---------- */
-
 async function loadMood() {
   if (!state.has_partner) return;
   const seq = ++moodLoadSeq;
@@ -65,7 +61,7 @@ function moodCellHtml(label, m, isMine) {
       <span class="m-emoji">💭</span>
       <div style="flex:1;min-width:0">
         <div class="m-label">${label}</div>
-        <div class="m-text">${isMine ? "Нажмите «Изменить»" : "Пока не поделился(ась)"}</div>
+        <div class="m-text">${isMine ? "Поделитесь настроением" : "Пока не поделился(ась)"}</div>
       </div>
     </div>`;
   }
@@ -82,7 +78,9 @@ function renderMood() {
   const block = $("moodBlock");
   const row = $("moodRow");
   const quickInput = $("moodQuickInput");
-  if (!block || !row || !quickInput) return;
+  const editBtn = $("moodEditBtn");
+  if (!block || !row || !quickInput || !editBtn) return;
+
   if (!state.has_partner) {
     block.hidden = true;
     return;
@@ -91,30 +89,27 @@ function renderMood() {
 
   const mineHas = !!(moodState.mine && (moodState.mine.emoji || moodState.mine.text));
 
-  if (!mineHas) {
-    row.innerHTML = "";
-    quickInput.hidden = false;
-    
-    const emojisContainer = $("moodQuickEmojis");
-    if (emojisContainer && !emojisContainer.innerHTML) {
-      emojisContainer.innerHTML = MOOD_EMOJIS.map((e) =>
-        `<button type="button" data-quick-emoji="${e}">${e}</button>`
-      ).join("");
-    }
-  } else {
+  if (mineHas) {
+    // Настроение есть: показываем плашки, скрываем ввод, показываем «Изменить»
     quickInput.hidden = true;
+    row.hidden = false;
+    editBtn.hidden = false;
     row.innerHTML =
       moodCellHtml("Вы", moodState.mine, true) +
       moodCellHtml("Партнёр", moodState.partner, false);
+  } else {
+    // Настроения нет: показываем ввод, скрываем плашки и «Изменить»
+    quickInput.hidden = false;
+    row.hidden = true;
+    editBtn.hidden = true;
   }
 }
 
-/* ---------- Быстрая установка (без модалки) ---------- */
-
+/* ---------- Сохранение ---------- */
 async function quickSetMood() {
   if (!state.has_partner) return;
   const text = ($("moodQuickText").value || "").trim().slice(0, 280);
-  const emoji = moodSelected || "";
+  const emoji = $("moodQuickEmoji").value || "";
   
   if (!emoji && !text) {
     return toast("Выберите эмодзи или напишите текст");
@@ -128,8 +123,9 @@ async function quickSetMood() {
       body: { date: moodDateStr(), emoji, text },
     });
     moodState.mine = { emoji, text };
+    // Очищаем поля
     $("moodQuickText").value = "";
-    moodSelected = "";
+    $("moodQuickEmoji").value = "";
     renderMood();
     tg.HapticFeedback?.notificationOccurred("success");
   } catch (e) {
@@ -139,67 +135,21 @@ async function quickSetMood() {
   }
 }
 
-/* ---------- Редактор настроения (модалка) ---------- */
-
-function openMoodEditor() {
-  if (!state.has_partner) return;
-  moodSelected = (moodState.mine && moodState.mine.emoji) || "";
-  $("moodText").value = (moodState.mine && moodState.mine.text) || "";
-  const grid = $("moodEmojiGrid");
-  grid.innerHTML = MOOD_EMOJIS.map((e) =>
-    `<button type="button" class="mood-emoji${e === moodSelected ? " selected" : ""}" data-emoji="${e}">${e}</button>`
-  ).join("");
-  $("moodOverlay").hidden = false;
-  tg.BackButton?.show();
+/* ---------- Кнопка Изменить ---------- */
+function resetMoodForEdit() {
+  // Показываем форму с текущими значениями
+  $("moodQuickText").value = (moodState.mine && moodState.mine.text) || "";
+  $("moodQuickEmoji").value = (moodState.mine && moodState.mine.emoji) || "";
+  
+  // Принудительно переключаем вид на ввод
+  $("moodRow").hidden = true;
+  $("moodQuickInput").hidden = false;
+  $("moodEditBtn").hidden = true;
 }
 
-function closeMoodEditor() {
-  $("moodOverlay").hidden = true;
-  if (!$("overlay").hidden) tg.BackButton?.show(); else tg.BackButton?.hide();
-}
-
-async function saveMood() {
-  if (!state.has_partner) return;
-  const text = $("moodText").value.trim().slice(0, 280);
-  const emoji = moodSelected || "";
-  const btn = $("moodSave");
-  btn.disabled = true;
-  const original = btn.textContent;
-  btn.textContent = "Сохраняем…";
-  try {
-    await api("/mood", {
-      method: "POST",
-      body: { date: moodDateStr(), emoji, text },
-    });
-    moodState.mine = { emoji, text };
-    renderMood();
-    closeMoodEditor();
-    tg.HapticFeedback?.notificationOccurred("success");
-  } catch (e) {
-    toast(e.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = original;
-  }
-}
-
-/* ---------- Связка событий ---------- */
-
+/* ---------- Связка ---------- */
 (() => {
   initMoodCollapsed();
-
-  const quickEmojis = $("moodQuickEmojis");
-  if (quickEmojis) {
-    quickEmojis.addEventListener("click", (e) => {
-      const b = e.target.closest("[data-quick-emoji]");
-      if (!b) return;
-      moodSelected = moodSelected === b.dataset.quickEmoji ? "" : b.dataset.quickEmoji;
-      quickEmojis.querySelectorAll("button").forEach((el) => {
-        el.classList.toggle("selected", el.dataset.quickEmoji === moodSelected);
-      });
-      tg.HapticFeedback?.selectionChanged();
-    });
-  }
 
   const quickSaveBtn = $("moodQuickSave");
   if (quickSaveBtn) quickSaveBtn.addEventListener("click", quickSetMood);
@@ -214,38 +164,8 @@ async function saveMood() {
     });
   }
 
-  const grid = $("moodEmojiGrid");
-  if (grid) {
-    grid.addEventListener("click", (e) => {
-      const b = e.target.closest("[data-emoji]");
-      if (!b) return;
-      moodSelected = moodSelected === b.dataset.emoji ? "" : b.dataset.emoji;
-      grid.querySelectorAll(".mood-emoji").forEach((el) => {
-        el.classList.toggle("selected", el.dataset.emoji === moodSelected);
-      });
-      tg.HapticFeedback?.selectionChanged();
-    });
-  }
-
   const editBtn = $("moodEditBtn");
-  if (editBtn) editBtn.addEventListener("click", openMoodEditor);
-  
-  const cancelBtn = $("moodCancel");
-  if (cancelBtn) cancelBtn.addEventListener("click", closeMoodEditor);
-  
-  const saveBtn = $("moodSave");
-  if (saveBtn) saveBtn.addEventListener("click", saveMood);
-
-  const ov = $("moodOverlay");
-  if (ov) {
-    ov.addEventListener("click", (e) => {
-      if (e.target === ov) closeMoodEditor();
-    });
-  }
-
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && ov && !ov.hidden) closeMoodEditor();
-  });
+  if (editBtn) editBtn.addEventListener("click", resetMoodForEdit);
 })();
 
 // Точка входа из main.js#render()
