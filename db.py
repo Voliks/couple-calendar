@@ -491,6 +491,20 @@ async def _m16_indexes_and_idea_keys() -> None:
 
 
 async def _m16_add_done_status() -> None:
+    """Добавляет status='done' в CHECK. Идемпотентно: если таблица уже с done — пропуск."""
+    # Уже применяли? Проверяем через попытку вставить недопустимый статус в temp — проще:
+    # смотрим sql CREATE через sqlite_master (Turso тоже отдаёт).
+    try:
+        rs = await _exec(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='events'"
+        )
+        ddl = (rs.rows[0][0] or "") if rs.rows else ""
+        if "'done'" in ddl or '"done"' in ddl:
+            log.info("events.status уже поддерживает 'done' — пропуск rebuild")
+            return
+    except Exception:
+        log.exception("Не удалось проверить DDL events, продолжаем миграцию done")
+
     # Убираем временную таблицу от предыдущей неудачной попытки
     await _exec("DROP TABLE IF EXISTS events_new")
     
@@ -667,7 +681,8 @@ MIGRATIONS = [
     (14, _m14_checklist_position),
     (15, _m15_personal_section),
     (16, _m16_indexes_and_idea_keys),
-    (16, _m16_add_done_status),
+    # Было дважды (16) — вторая миграция никогда не выполнялась при current>=16.
+    # Перенесена на v27; функция идемпотентна (пропуск, если done уже в CHECK).
     (17, _m17_challenges),
     (18, _m18_challenge_messages),
     (19, _m19_challenge_deadline),
@@ -678,6 +693,7 @@ MIGRATIONS = [
     (24, _m24_moods),
     (25, _m25_alt_time),
     (26, _m26_fix_schema),
+    (27, _m16_add_done_status),
 ]
 
 _REQUIRED_COLUMNS = {

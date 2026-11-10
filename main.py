@@ -52,7 +52,9 @@ PORT = int(os.getenv("PORT", "8080"))
 INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
 
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", secrets.token_urlsafe(16))
+# Секрет вебхука лучше задавать в env. Без env — генерируем, но при рестарте webhook сломается.
+_webhook_from_env = os.getenv("WEBHOOK_SECRET", "").strip()
+WEBHOOK_SECRET = _webhook_from_env or secrets.token_urlsafe(32)
 WEBHOOK_URL = f"{WEBAPP_URL}{WEBHOOK_PATH}"
 
 REMINDER_HOUR = int(os.getenv("REMINDER_HOUR", "9"))
@@ -79,8 +81,10 @@ ALLOWED_ORIGINS = {_origin(WEBAPP_URL)} | {
 }
 
 MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
-INIT_DATA_MAX_AGE = 24 * 3600
-RATE_LIMIT = 40
+# Было 24ч — слишком долго при утечке initData. 6ч достаточно для WebApp-сессии.
+INIT_DATA_MAX_AGE = int(os.getenv("INIT_DATA_MAX_AGE", str(6 * 3600)))
+RATE_LIMIT_READ = int(os.getenv("RATE_LIMIT_READ", "90"))
+RATE_LIMIT_WRITE = int(os.getenv("RATE_LIMIT_WRITE", "40"))
 RATE_WINDOW = 60
 
 dp = Dispatcher()
@@ -110,21 +114,24 @@ _rate_hits: dict[int, deque] = {}
 
 # Кэш признака «есть новое в челленджах»: запрос тяжёлый, а опрос идёт каждые 20 с.
 _new_cache: dict[int, tuple[float, bool]] = {}
-NEW_ACTIVITY_TTL = 30
+NEW_ACTIVITY_TTL = 45
 
 
-def rate_limit(uid: int) -> None:
+def rate_limit(uid: int, *, write: bool = False) -> None:
+    """Скользящее окно на uid. Write жёстче, read — под polling."""
     now = time.monotonic()
     q = _rate_hits.setdefault(uid, deque())
     while q and now - q[0] > RATE_WINDOW:
         q.popleft()
-    if len(q) >= RATE_LIMIT:
+    limit = RATE_LIMIT_WRITE if write else RATE_LIMIT_READ
+    if len(q) >= limit:
         raise ApiError("Слишком много запросов, подождите минуту", 429)
     q.append(now)
-    if len(_rate_hits) > 1000:  # чистим тех, кто давно не писал
-        for k in [
-            k for k, v in _rate_hits.items() if not v or now - v[-1] > RATE_WINDOW
-        ]:
+    if len(_rate_hits) > 2000:
+        stale = [
+            k for k, v in _rate_hits.items() if not v or now - v[-1] > RATE_WINDOW * 2
+        ]
+        for k in stale:
             del _rate_hits[k]
 
 
@@ -345,8 +352,8 @@ def authenticate(request: web.Request, write: bool = False):
         or time.time() - data.auth_date.timestamp() > INIT_DATA_MAX_AGE
     ):
         raise ApiError("session expired", 401)
-    if write:
-        rate_limit(data.user.id)
+    # Лимит на все API-запросы (чтение и запись), write — жёстче
+    rate_limit(data.user.id, write=write)
     return data.user
 
 
@@ -1254,12 +1261,29 @@ def _storage_url(url: str) -> str:
 
 
 def _photo_path_ok(path: str, challenge_id: int) -> bool:
+    """Строго: только пути вида challenge_<id>_<ts>_<hex8>.<ext>, без path traversal."""
+    if not path or len(path) > 500:
+        return False
+    if ".." in path or "/" in path or "\\" in path:
+        return False
     exts = "|".join(PHOTO_EXTS)
-    paths = path.split(",")
+    paths = [p.strip() for p in path.split(",") if p.strip()]
+    if not paths or len(paths) > 10:
+        return False
     for p in paths:
-        if not re.fullmatch(rf"challenge_{challenge_id}_\d+_[0-9a-f]{{8}}\.({exts})", p.strip()):
+        if not re.fullmatch(
+            rf"challenge_{challenge_id}_\d+_[0-9a-f]{{8}}\.({exts})", p, re.IGNORECASE
+        ):
             return False
     return True
+
+
+def _short_text(text: str, limit: int = 80) -> str:
+    """Обрезка текста для уведомлений (не светить длинные/чувствительные строки)."""
+    t = (text or "").strip().replace("\n", " ")
+    if len(t) <= limit:
+        return t
+    return t[: limit - 1] + "…"
 
 
 async def api_upload_photo_url(request: web.Request) -> web.Response:
@@ -1335,7 +1359,7 @@ async def api_set_challenge_photo(request: web.Request) -> web.Response:
     if not await db.transition_challenge(challenge_id, ("pending", "rejected"), "submitted", photo_id=path):
         raise ApiError("Этот вызов уже отправлен на проверку", 409)
 
-    notify(challenge["creator_id"], f"🔥 Партнёр выполнил челлендж: «{challenge['text']}». Зайди в календарь, чтобы проверить!")
+    notify(challenge["creator_id"], f"🔥 Партнёр выполнил челлендж: «{_short_text(challenge['text'])}». Зайди в календарь, чтобы проверить!")
     return web.json_response({"status": "ok"})
 
 
@@ -1420,7 +1444,7 @@ async def api_create_challenge(request: web.Request) -> web.Response:
     challenge = await db.create_user_challenge(
         tg_user.id, user["partner_id"], category, text, points, deadline
     )
-    notify(user["partner_id"], f"⚔️ Тебе бросили вызов: «{text}» ({points} б.). На выполнение {hours} ч.")
+    notify(user["partner_id"], f"⚔️ Тебе бросили вызов: «{_short_text(text)}» ({points} б.). На выполнение {hours} ч.")
     return web.json_response({"status": "created", "challenge": challenge}, status=201)
 
 
@@ -1443,7 +1467,7 @@ async def api_challenge_action(request: web.Request) -> web.Response:
     elif action == "reject" and is_creator:
         if not await db.transition_challenge(challenge_id, ("submitted",), "rejected"):
             raise ApiError("Этот вызов нельзя отклонить в текущем статусе", 409)
-        notify(challenge["target_id"], f"❌ Челлендж отклонён: «{challenge['text']}». Можно прислать другое фото.")
+        notify(challenge["target_id"], f"❌ Челлендж отклонён: «{_short_text(challenge['text'])}». Можно прислать другое фото.")
     else:
         raise ApiError("Недопустимое действие", 400)
         
@@ -1501,7 +1525,7 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
         (challenge_id, tg_user.id, text, int(time.time()))
     )
     
-    notify(partner_id, f"💬 Новое сообщение по челленджу «{challenge['text']}»:\n\n{text}")
+    notify(partner_id, f"💬 Новое сообщение по челленджу «{_short_text(challenge['text'])}»:\n\n{_short_text(text, 200)}")
     
     return web.json_response({"status": "ok"})
 
@@ -1805,13 +1829,12 @@ async def reminder_loop() -> None:
                 # Уведомляем того, кому кинули (он потерял баллы)
                 notify(
                     c["target_id"],
-                    f"⌛ Челлендж «{c['text']}» не выполнен в срок. "
+                    f"⌛ Челлендж «{_short_text(c['text'])}» не выполнен в срок. "
                     f"С твоего баланса списано {c['penalty']} баллов."
                 )
-                # Уведомляем автора (по желанию)
                 notify(
                     c["creator_id"],
-                    f"⌛ Челлендж «{c['text']}» просрочен. Партнёр потерял {c['penalty']} баллов."
+                    f"⌛ Челлендж «{_short_text(c['text'])}» просрочен. Партнёр потерял {c['penalty']} баллов."
                 )
             
             # 3. Ежедневная очистка + резервная копия
@@ -1831,6 +1854,11 @@ async def reminder_loop() -> None:
 async def main() -> None:
     global bot_username
     logging.basicConfig(level=logging.INFO)
+    if not _webhook_from_env:
+        logging.warning(
+            "WEBHOOK_SECRET не задан в env — сгенерирован временный. "
+            "При рестарте webhook перестанет работать. Задайте WEBHOOK_SECRET."
+        )
     await db.init_db()
     bot_username = (await bot.get_me()).username
     with contextlib.suppress(Exception):
