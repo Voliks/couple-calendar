@@ -387,7 +387,7 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
 .btn-send-comment { background: var(--accent); color: #fff; border-radius: 8px; padding: 0 12px; font-weight: 700; }
 
 /* ============================================================
-   Блок «Настроение дня» (компактный, сверху)
+   Блок «Настроение дня»
    ============================================================ */
 
 .mood-block {
@@ -473,3 +473,40 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
 }
 .mood-emoji.selected { border-color: var(--accent); background: rgba(36,129,204,.12); }
 .mood-emoji:active { transform: scale(.95); }
+
+/* Быстрый ввод настроения (эмодзи + текст) */
+.mood-quick-input {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mood-quick-emojis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mood-quick-emojis button {
+  font-size: 22px;
+  padding: 4px 8px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 2px solid transparent;
+  line-height: 1;
+  transition: transform .1s, border-color .15s;
+}
+.mood-quick-emojis button:active { transform: scale(.92); }
+.mood-quick-emojis button.selected { border-color: var(--accent); }
+
+.mood-quick-row {
+  display: flex;
+  gap: 8px;
+}
+.mood-quick-row input {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: var(--bg);
+  font-size: 14px;
+}

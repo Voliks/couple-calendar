@@ -33,15 +33,18 @@
   </div>
 
   <!-- Блок «Настроение дня» (перенесён наверх, компактный) -->
-  <div id="moodBlock" class="mood-block" hidden>
-    <div class="mood-head" id="moodToggle">
-      <div class="mood-title">💭 Настроение дня <span class="mood-chevron">▼</span></div>
-      <button class="mood-edit" id="moodEditBtn" type="button">Изменить</button>
-    </div>
-    <div class="mood-body" id="moodBody">
+  <div class="mood-body" id="moodBody">
       <div class="mood-row" id="moodRow"></div>
+      
+      <!-- Быстрый ввод настроения -->
+      <div class="mood-quick-input" id="moodQuickInput" hidden>
+        <div class="mood-quick-emojis" id="moodQuickEmojis"></div>
+        <div class="mood-quick-row">
+          <input type="text" id="moodQuickText" placeholder="Что происходит? (необязательно)" maxlength="280">
+          <button type="button" id="moodQuickSave" class="btn primary" style="padding: 0 14px; border-radius: 10px;">ОК</button>
+        </div>
+      </div>
     </div>
-  </div>
 
   <div class="weekdays" aria-hidden="true">
     <span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span>
