@@ -661,7 +661,10 @@ async def _m26_fix_schema() -> None:
     for name, ddl in expected.items():
         if name not in cols:
             log.warning("Миграция 26: добавляю колонку events.%s", name)
-            await _exec(f"ALTER TABLE events ADD COLUMN {name} {ddl}")
+            try:
+                await _exec(f"ALTER TABLE events ADD COLUMN {name} {ddl}")
+            except DbError as e:
+                log.error("Не удалось добавить колонку %s: %s", name, e)
 
 
 MIGRATIONS = [
@@ -737,13 +740,24 @@ async def _migrate() -> None:
     await _exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
     current = (await _exec("SELECT MAX(version) FROM schema_version")).rows[0][0] or 0
     log.info("Текущая версия схемы: %s", current)
+    
+    # ПРИНУДИТЕЛЬНАЯ ПРОВЕРКА: если база говорит, что она на 26+, но колонок нет — 
+    # откатываем версию, чтобы миграция 26 выполнилась заново.
+    try:
+        cols = await _columns("events")
+        if "alt_date" not in cols and current >= 26:
+            log.warning("ВНИМАНИЕ: база на версии %s, но колонки alt_date нет! Откатываю до 25.", current)
+            await _exec("DELETE FROM schema_version WHERE version >= 26")
+            current = 25
+    except Exception:
+        pass
+
     for version, fn in MIGRATIONS:
         if version > current:
             log.info("Миграция БД → v%s", version)
             await fn()
             await _exec("INSERT INTO schema_version (version) VALUES (?)", (version,))
     await _ensure_required_columns()
-
 
 def _idea_key(category: str, text: str) -> str:
     return "json_h" + hashlib.sha1(f"{category}\n{text}".encode("utf-8")).hexdigest()[:12]
