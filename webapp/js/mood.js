@@ -92,11 +92,9 @@ function renderMood() {
   const mineHas = !!(moodState.mine && (moodState.mine.emoji || moodState.mine.text));
 
   if (!mineHas) {
-    // Настроения нет — показываем строку быстрого ввода
     row.innerHTML = "";
     quickInput.hidden = false;
     
-    // Рендерим эмодзи в быстром вводе (один раз)
     const emojisContainer = $("moodQuickEmojis");
     if (emojisContainer && !emojisContainer.innerHTML) {
       emojisContainer.innerHTML = MOOD_EMOJIS.map((e) =>
@@ -104,7 +102,6 @@ function renderMood() {
       ).join("");
     }
   } else {
-    // Настроение есть — показываем ячейки, скрываем быстрый ввод
     quickInput.hidden = true;
     row.innerHTML =
       moodCellHtml("Вы", moodState.mine, true) +
@@ -131,7 +128,6 @@ async function quickSetMood() {
       body: { date: moodDateStr(), emoji, text },
     });
     moodState.mine = { emoji, text };
-    // Очищаем поля после сохранения
     $("moodQuickText").value = "";
     moodSelected = "";
     renderMood();
@@ -192,7 +188,6 @@ async function saveMood() {
 (() => {
   initMoodCollapsed();
 
-  // Быстрый ввод: клик по эмодзи
   const quickEmojis = $("moodQuickEmojis");
   if (quickEmojis) {
     quickEmojis.addEventListener("click", (e) => {
@@ -206,7 +201,6 @@ async function saveMood() {
     });
   }
 
-  // Быстрый ввод: кнопка ОК и Enter в инпуте
   const quickSaveBtn = $("moodQuickSave");
   if (quickSaveBtn) quickSaveBtn.addEventListener("click", quickSetMood);
   
@@ -220,7 +214,6 @@ async function saveMood() {
     });
   }
 
-  // Модалка
   const grid = $("moodEmojiGrid");
   if (grid) {
     grid.addEventListener("click", (e) => {

@@ -6,7 +6,7 @@
 <meta name="api-base" content="https://couple-calendar-ycu9.onrender.com">
 <title>Календарь на двоих</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="css/style.css?v=9">
+<link rel="stylesheet" href="css/style.css?v=10">
 <link rel="icon" href="data:,">
 </head>
 <body>
@@ -33,7 +33,12 @@
   </div>
 
   <!-- Блок «Настроение дня» (перенесён наверх, компактный) -->
-  <div class="mood-body" id="moodBody">
+  <div id="moodBlock" class="mood-block" hidden>
+    <div class="mood-head" id="moodToggle">
+      <div class="mood-title">💭 Настроение дня <span class="mood-chevron">▼</span></div>
+      <button class="mood-edit" id="moodEditBtn" type="button">Изменить</button>
+    </div>
+    <div class="mood-body" id="moodBody">
       <div class="mood-row" id="moodRow"></div>
       
       <!-- Быстрый ввод настроения -->
@@ -45,6 +50,7 @@
         </div>
       </div>
     </div>
+  </div>
 
   <div class="weekdays" aria-hidden="true">
     <span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span>
@@ -422,10 +428,10 @@
 <!-- Базовые скрипты. challenges.js и shop.js убраны — они подгрузятся по клику в main.js -->
 <script src="js/api.js" defer></script>
 <script src="js/calendar.js" defer></script>
-<script src="js/list.js?v=21" defer></script>
+<script src="js/list.js?v=22" defer></script>
 <script src="js/ideas.js" defer></script>
 <script src="js/form.js" defer></script>
-<script src="js/mood.js?v=3" defer></script>
+<script src="js/mood.js?v=6" defer></script>
 <script src="js/main.js?v=123" defer></script>
 </body>
 </html>
