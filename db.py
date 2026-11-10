@@ -102,7 +102,6 @@ class _TursoBackend:
         self._session: aiohttp.ClientSession | None = None
 
     async def start(self) -> None:
-        # Один пул соединений на весь срок жизни приложения.
         timeout = aiohttp.ClientTimeout(total=20, connect=10)
         self._session = aiohttp.ClientSession(
             headers=self._headers,
@@ -251,7 +250,7 @@ async def init_db() -> None:
         _backend = _SqliteBackend(DB_PATH)
         log.warning("БД: локальный файл %s", DB_PATH)
     await _backend.start()
-    _json_ideas()  # прогрев кэша встроенных идей
+    _json_ideas()
     await _migrate()
     try:
         cols = await _columns("events")
@@ -492,8 +491,11 @@ async def _m16_indexes_and_idea_keys() -> None:
 
 
 async def _m16_add_done_status() -> None:
+    # Убираем временную таблицу от предыдущей неудачной попытки
+    await _exec("DROP TABLE IF EXISTS events_new")
+    
     await _exec("""
-        CREATE TABLE IF NOT EXISTS events_new (
+        CREATE TABLE events_new (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             created_by  INTEGER NOT NULL,
             target_user INTEGER NOT NULL,
@@ -517,9 +519,16 @@ async def _m16_add_done_status() -> None:
             visibility  TEXT NOT NULL DEFAULT 'shared'
         )
     """)
-    await _exec("INSERT INTO events_new SELECT id, created_by, target_user, title, description, date, date_end, time, category, status, checklist, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility FROM events")
-    await _exec("DROP TABLE events")
-    await _exec("ALTER TABLE events_new RENAME TO events")
+    
+    # Копируем и переименовываем в одной транзакции
+    await _batch([
+        (
+            "INSERT INTO events_new (id, created_by, target_user, title, description, date, date_end, time, category, status, checklist, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility) "
+            "SELECT id, created_by, target_user, title, description, date, date_end, time, category, status, checklist, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility FROM events"
+        , ()),
+        ("DROP TABLE events", ()),
+        ("ALTER TABLE events_new RENAME TO events", ()),
+    ])
 
 
 async def _m17_challenges() -> None:
@@ -533,7 +542,7 @@ async def _m17_challenges() -> None:
             category    TEXT NOT NULL,
             text        TEXT NOT NULL,
             reward      INTEGER NOT NULL DEFAULT 10,
-            status      TEXT NOT NULL DEFAULT 'pending', -- pending, submitted, approved, rejected, archived
+            status      TEXT NOT NULL DEFAULT 'pending',
             photo_id    TEXT NOT NULL DEFAULT '',
             created_at  INTEGER NOT NULL
         )
@@ -589,13 +598,13 @@ async def _m22_last_viewed() -> None:
 
 
 async def _m23_performance_indexes() -> None:
-    # Migration 16 rebuilds events and drops its earlier indexes.
     await _exec("CREATE INDEX IF NOT EXISTS idx_events_created ON events (created_by, date)")
     await _exec("CREATE INDEX IF NOT EXISTS idx_events_target ON events (target_user, date)")
     await _exec("CREATE INDEX IF NOT EXISTS idx_challenges_target_created ON user_challenges (target_id, created_at)")
     await _exec("CREATE INDEX IF NOT EXISTS idx_challenges_creator_created ON user_challenges (creator_id, created_at)")
     await _exec("CREATE INDEX IF NOT EXISTS idx_challenge_messages_challenge_created ON challenge_messages (challenge_id, created_at)")
     await _exec("CREATE INDEX IF NOT EXISTS idx_event_comments_event_created ON event_comments (event_id, created_at)")
+
 
 async def _m24_moods() -> None:
     await _exec("""
@@ -613,9 +622,33 @@ async def _m24_moods() -> None:
         "CREATE INDEX IF NOT EXISTS idx_moods_pair_date ON moods (pair_key, date)"
     )
 
+
 async def _m25_alt_time() -> None:
     await _add_column("events", "alt_date", "TEXT NOT NULL DEFAULT ''")
     await _add_column("events", "alt_time", "TEXT NOT NULL DEFAULT ''")
+
+
+async def _m26_fix_schema() -> None:
+    """Починка схемы для баз, которые прошли миграцию 16 (возможно, дважды)."""
+    await _exec("DROP TABLE IF EXISTS events_new")
+    
+    try:
+        cols = await _columns("events")
+    except DbError:
+        log.error("Не удалось прочитать колонки events в миграции 26")
+        return
+
+    expected = {
+        "date_end": "TEXT NOT NULL DEFAULT ''",
+        "visibility": "TEXT NOT NULL DEFAULT 'shared'",
+        "alt_date": "TEXT NOT NULL DEFAULT ''",
+        "alt_time": "TEXT NOT NULL DEFAULT ''",
+    }
+    for name, ddl in expected.items():
+        if name not in cols:
+            log.warning("Миграция 26: добавляю колонку events.%s", name)
+            await _exec(f"ALTER TABLE events ADD COLUMN {name} {ddl}")
+
 
 MIGRATIONS = [
     (1, _m1_base),
@@ -644,6 +677,7 @@ MIGRATIONS = [
     (23, _m23_performance_indexes),
     (24, _m24_moods),
     (25, _m25_alt_time),
+    (26, _m26_fix_schema),
 ]
 
 _REQUIRED_COLUMNS = {
@@ -820,7 +854,6 @@ async def unlink_partners(user_id: int) -> int | None:
     
     await _batch(
         [
-            # Удаляем события и связанные с ними данные
             (f"DELETE FROM checklist_items WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM reminders WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM reactions WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
@@ -828,14 +861,11 @@ async def unlink_partners(user_id: int) -> int | None:
             (f"DELETE FROM event_comments WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
             (f"DELETE FROM events WHERE {pair}", pargs),
             
-            # Удаляем челленджи и их сообщения
             ("DELETE FROM challenge_messages WHERE challenge_id IN (SELECT id FROM user_challenges WHERE creator_id IN (?, ?) OR target_id IN (?, ?))", (user_id, p, user_id, p)),
             ("DELETE FROM user_challenges WHERE creator_id IN (?, ?) OR target_id IN (?, ?)", (user_id, p, user_id, p)),
             
-            # Удаляем настроения
             ("DELETE FROM moods WHERE pair_key = ?", (pk,)),
             
-            # Отвязываем пользователей
             ("UPDATE users SET partner_id = NULL, invite_expires = 0 WHERE telegram_id IN (?, ?)", (user_id, p)),
         ]
     )
@@ -890,7 +920,6 @@ async def _attach_items(events: list[dict]) -> list[dict]:
     marks = ",".join("?" for _ in ids)
     by_id = {e["id"]: e for e in events}
 
-    # Все связанные данные независимы — читаем их параллельно.
     tasks = []
     task_names = []
 
@@ -917,8 +946,6 @@ async def _attach_items(events: list[dict]) -> list[dict]:
     ))
     task_names.append("ideas")
 
-    # Комментарии к «Отдых»/«Секс» едут вместе со state: раньше фронтенд
-    # делал отдельный запрос на каждую карточку при каждой перерисовке.
     chat_ids = [e["id"] for e in events if e["category"] in ("rest", "sex")]
     if chat_ids:
         chat_marks = ",".join("?" for _ in chat_ids)
@@ -1057,7 +1084,6 @@ async def delete_event(event_id: int) -> None:
 
 
 async def add_items(event_id: int, texts: list[str]) -> int:
-    """Добавляет пункты одним запросом-транзакцией, уважая лимит. Возвращает, сколько добавлено."""
     if not texts:
         return 0
     rs = await _exec(
@@ -1537,36 +1563,41 @@ async def delete_user_challenge(challenge_id: int, user_id: int) -> bool:
 
 async def process_expired_challenges() -> list[dict]:
     """
-    Находит челленджи с истёкшим дедлайном (status='pending'),
-    списывает половину стоимости с исполнителя (но не больше, чем у него есть),
-    чтобы баланс не ушёл в минус. Округление вниз для нечётных.
+    Находит просроченные pending-челленджи и списывает штраф.
+    Использует атомарный UPDATE, чтобы не затереть статус 'submitted', если исполнитель успел отправить фото.
     """
     now = int(time.time())
     rs = await _exec(
-        "SELECT id, creator_id, target_id, text, reward, status FROM user_challenges "
+        "SELECT id, creator_id, target_id, text, reward FROM user_challenges "
         "WHERE status = 'pending' AND deadline > 0 AND deadline < ?",
-        (now,)
+        (now,),
     )
     expired = []
-    for r in rs.rows:
-        cid, creator_id, target_id, text, reward, status = r
-        penalty = reward // 2  # Округление вниз
-
-        # Получаем текущий баланс исполнителя
-        bal_rs = await _exec("SELECT balance FROM users WHERE telegram_id = ?", (target_id,))
-        current_balance = bal_rs.rows[0][0] if bal_rs.rows else 0
-
-        actual_penalty = min(penalty, current_balance)  # Не больше, чем есть
-
-        if actual_penalty > 0:
-            await _exec(
-                "UPDATE users SET balance = balance - ? WHERE telegram_id = ?",
-                (actual_penalty, target_id)
-            )
-
-        # Меняем статус, чтобы не штрафовать повторно
-        await _exec("UPDATE user_challenges SET status = 'rejected' WHERE id = ?", (cid,))
+    for cid, creator_id, target_id, text, reward in rs.rows:
+        penalty = reward // 2
         
+        # 1. Атомарно закрываем челлендж, только если он всё ещё pending
+        rs_status = await _exec(
+            "UPDATE user_challenges SET status = 'rejected' WHERE id = ? AND status = 'pending'",
+            (cid,)
+        )
+        
+        if rs_status.affected == 0:
+            # Кто-то успел отправить фото (submitted) или архивировать. Штраф не берем.
+            continue
+            
+        # 2. Списываем штраф (не уходя в минус)
+        actual_penalty = 0
+        if penalty > 0:
+            bal_rs = await _exec("SELECT balance FROM users WHERE telegram_id = ?", (target_id,))
+            current_balance = bal_rs.rows[0][0] if bal_rs.rows else 0
+            actual_penalty = min(penalty, current_balance)
+            if actual_penalty > 0:
+                await _exec(
+                    "UPDATE users SET balance = balance - ? WHERE telegram_id = ?",
+                    (actual_penalty, target_id)
+                )
+                
         expired.append({
             "id": cid, "creator_id": creator_id, "target_id": target_id,
             "text": text, "reward": reward, "penalty": actual_penalty
