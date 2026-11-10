@@ -58,7 +58,7 @@ function moodCellHtml(label, m, isMine) {
   const cls = "mood-cell" + (has ? "" : " empty");
   if (!has) {
     return `<div class="${cls}">
-      <span class="m-emoji">💭</span>
+      <span class="m-emoji">🙂</span>
       <div style="flex:1;min-width:0">
         <div class="m-label">${label}</div>
         <div class="m-text">${isMine ? "Поделитесь настроением" : "Пока не поделился(ась)"}</div>
