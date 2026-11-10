@@ -613,6 +613,10 @@ async def _m24_moods() -> None:
         "CREATE INDEX IF NOT EXISTS idx_moods_pair_date ON moods (pair_key, date)"
     )
 
+async def _m25_alt_time() -> None:
+    await _add_column("events", "alt_date", "TEXT NOT NULL DEFAULT ''")
+    await _add_column("events", "alt_time", "TEXT NOT NULL DEFAULT ''")
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -639,8 +643,8 @@ MIGRATIONS = [
     (22, _m22_last_viewed),
     (23, _m23_performance_indexes),
     (24, _m24_moods),
+    (25, _m25_alt_time),
 ]
-
 
 _REQUIRED_COLUMNS = {
     15: [
@@ -827,7 +831,8 @@ async def unlink_partners(user_id: int) -> int | None:
 EVENT_COLS = (
     "id, created_by, target_user, title, description, date, date_end, time, category, status, "
     "color, priority, reaction, reaction_by, decline_comment, "
-    "decline_comment_creator, decline_comment_target, remind_before, visibility"
+    "decline_comment_creator, decline_comment_target, remind_before, visibility, "
+    "alt_date, alt_time"
 )
 
 
@@ -854,6 +859,8 @@ def _event(r) -> dict | None:
         "decline_comment_target": r[16] or "",
         "remind_before": r[17] or 0,
         "visibility": r[18] or "shared",
+        "alt_date": r[19] or "",
+        "alt_time": r[20] or "",
         "reactions": {},
         "idea_responses": {},
         "checklist": [],
@@ -991,7 +998,7 @@ async def get_event(event_id: int) -> dict | None:
 async def set_status(event_id: int, status: str) -> None:
     if status not in ("pending", "accepted", "declined", "done"):
         raise ValueError("bad status")
-    await _exec("UPDATE events SET status = ? WHERE id = ?", (status, event_id))
+    await _exec("UPDATE events SET status = ?, alt_date = '', alt_time = '' WHERE id = ?", (status, event_id))
 
 
 async def set_target_user(event_id: int, target_user: int) -> None:
@@ -1132,6 +1139,9 @@ async def set_decline_comment_slot(event_id: int, slot: str, comment: str) -> No
         raise ValueError("bad slot")
     col = "decline_comment_creator" if slot == "creator" else "decline_comment_target"
     await _exec(f"UPDATE events SET {col} = ? WHERE id = ?", (comment, event_id))
+
+async def set_alt_time(event_id: int, date: str, time: str) -> None:
+    await _exec("UPDATE events SET alt_date = ?, alt_time = ? WHERE id = ?", (date, time, event_id))
 
 
 async def _hidden_idea_keys(user_id: int, partner_id: int | None) -> set[str]:

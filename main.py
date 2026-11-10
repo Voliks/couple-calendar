@@ -545,6 +545,8 @@ def event_to_dict(e: dict, uid: int) -> dict:
         "comments": e.get("comments", []),
         "ideas": ideas_out,
         "can_respond_ideas": can_respond_ideas,
+        "alt_date": e.get("alt_date", ""),
+        "alt_time": e.get("alt_time", ""),
     }
 
 
@@ -874,17 +876,30 @@ async def api_respond(request: web.Request) -> web.Response:
         raise ApiError("Отвечать на событие может только приглашённый", 403)
 
     comment = str(body.get("comment") or "").strip()[:500]
+    alt_date = str(body.get("alt_date") or "").strip()
+    alt_time = str(body.get("alt_time") or "").strip()
+    
+    # Валидация предложенной даты
+    if alt_date and not valid_date(alt_date):
+        alt_date = ""
+        alt_time = ""
+
     slot = "creator" if event["created_by"] == tg_user.id else "target"
 
     if event["status"] != status or comment != event.get(f"decline_comment_{slot}", ""):
         await db.set_status(event["id"], status)
         if status == "declined":
             await db.set_decline_comment_slot(event["id"], slot, comment)
+            if alt_date:
+                await db.set_alt_time(event["id"], alt_date, alt_time)
         else:
             await db.set_decline_comment_slot(event["id"], slot, "")
 
         what = "принял(а)" if status == "accepted" else "отклонил(а)"
         
+        alt_text = ""
+        if status == "declined" and alt_date:
+            alt_text = f"\n📅 Предлагает перенести на: {fmt_range(alt_date, '')}{(' в ' + alt_time) if alt_time else ''}"
 
         icon = "✅" if status in ("accepted", "done") else "❌"
         extra = f"\n💬 {comment}" if status == "declined" and comment else ""
@@ -892,7 +907,7 @@ async def api_respond(request: web.Request) -> web.Response:
         notify(
             event["created_by"],
             f"{icon} {tg_user.first_name} {what} событие на "
-            f"{fmt_range(event['date'], event.get('date_end', ''))}{title_part(event['title'])}.{extra}",
+            f"{fmt_range(event['date'], event.get('date_end', ''))}{title_part(event['title'])}.{alt_text}{extra}",
         )
         event = await db.get_event(event["id"])
 
