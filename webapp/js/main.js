@@ -203,25 +203,63 @@ function startPolling() {
   const canPoll = () => !sessionDead && !document.hidden && !anyOverlayOpen()
     && pendingOps === 0 && !reactionPickerEl && !dragState && !gridDrag;
 
-  // 20 с → 40 с → 60 с, пока на сервере ничего не менялось; любое касание возвращает 20 с
   const BASE = 20000, MAX = 60000;
   let delay = BASE;
+  let pollTimer = null;
+
+  // Функция, которая выполняется по таймеру
   const tick = async () => {
-    try {
-      if (canPoll()) {
+    // Если вкладка скрыта или открыто окно — не шлём запрос, 
+    // просто ждём следующего тика (или возобновления)
+    if (canPoll()) {
+      try {
         const changed = await load(true);
         delay = changed ? BASE : Math.min(delay * 2, MAX);
+      } catch (e) {
+        // Ошибки при фоновом опросе игнорируем (load уже обрабатывает 401)
       }
-    } finally {
-      setTimeout(tick, delay);
     }
+    // Планируем следующий вызов
+    scheduleNext();
   };
-  setTimeout(tick, delay);
-  document.addEventListener("pointerdown", () => { delay = BASE; }, { passive: true });
+
+  // Планировщик с сохранением ID таймера
+  const scheduleNext = () => {
+    if (pollTimer) clearTimeout(pollTimer);
+    
+    // Если вкладка скрыта, мы НЕ ставим таймер.
+    // Он запустится только когда сработает событие visibilitychange.
+    if (document.hidden) return; 
+    
+    pollTimer = setTimeout(tick, delay);
+  };
+
+  // Первый запуск
+  scheduleNext();
+
+  // Сбрасываем задержку на минимум при любом действии пользователя
+  document.addEventListener("pointerdown", () => { 
+    delay = BASE; 
+  }, { passive: true });
+
+  // Обработка смены видимости вкладки
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) return;
-    delay = BASE;
-    if (canPoll()) load(true);
+    if (document.hidden) {
+      // Вкладка ушла в фон — убиваем таймер
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+    } else {
+      // Вкладка вернулась — сбрасываем задержку и делаем мгновенный запрос
+      delay = BASE;
+      if (canPoll()) {
+        // Можно сразу сделать load, а потом запустить таймер
+        load(true).finally(() => scheduleNext());
+      } else {
+        scheduleNext();
+      }
+    }
   });
 }
 
