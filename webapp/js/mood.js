@@ -35,30 +35,12 @@ function initMoodCollapsed() {
 }
 
 /* ---------- Отрисовка ---------- */
-async function loadMood() {
-  if (!state.has_partner) return;
-  const seq = ++moodLoadSeq;
-  try {
-    const res = await api(`/mood?date=${encodeURIComponent(moodDateStr())}`);
-    if (seq !== moodLoadSeq) return;
-    moodState = {
-      date: res.date,
-      mine: res.mine || { emoji: "", text: "" },
-      partner: res.partner || { emoji: "", text: "" },
-      partner_id: res.partner_id || 0,
-    };
-    renderMood();
-  } catch (e) {
-    console.warn("mood load:", e.message);
-  }
-}
-
 function moodCellHtml(label, m, isMine) {
   const has = !!(m && (m.emoji || m.text));
   const cls = "mood-cell" + (has ? "" : " empty");
   if (!has) {
     return `<div class="${cls}">
-      <span class="m-emoji">🙂</span>
+      <span class="m-emoji">💭</span>
       <div style="flex:1;min-width:0">
         <div class="m-label">${label}</div>
         <div class="m-text">${isMine ? "Поделитесь настроением" : "Пока не поделился(ась)"}</div>
@@ -170,5 +152,16 @@ function resetMoodForEdit() {
 
 // Точка входа из main.js#render()
 window.refreshMoodAndBanner = () => {
-  if (state.has_partner) loadMood();
+  if (!state.has_partner) return;
+  
+  // Настроение приходит в state.moods из /api/state
+  if (state.moods) {
+    moodState = {
+      date: state.moods.date,
+      mine: state.moods.mine || { emoji: "", text: "" },
+      partner: state.moods.partner || { emoji: "", text: "" },
+      partner_id: state.partner_id || 0,
+    };
+    renderMood();
+  }
 };
