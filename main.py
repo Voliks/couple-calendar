@@ -629,7 +629,11 @@ async def api_state(request: web.Request) -> web.Response:
             return None
         try:
             pk = db.pair_key(tg_user.id, user["partner_id"])
-            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            # Берем дату по часовому поясу пользователя (а не по UTC!)
+            tz = get_zone(user["tz"]) or timezone.utc
+            local_now = datetime.now(timezone.utc).astimezone(tz)
+            date = local_now.strftime("%Y-%m-%d")
+            
             moods = await db.get_moods(pk, date)
             by_user = {m["user_id"]: m for m in moods}
             mine = by_user.get(tg_user.id) or {"emoji": "", "text": "", "updated_at": 0}

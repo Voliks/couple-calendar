@@ -81,7 +81,7 @@ function renderCalendar() {
     const isRange = end !== e.date;
     const fills = cat === "personal" || (isRange && (cat === "todo" || cat === "rest" || cat === "sex"));
     
-    hashParts.push(`${e.id}:${cat}:${isRange ? '1' : '0'}:${e.color || ''}:${e.status}`);
+    hashParts.push(`${e.id}:${cat}:${isRange ? '1' : '0'}:${e.color || ''}:${e.status}:${e.date}:${e.date_end || ''}`);
     
     for (let d = Number(lo.slice(8)); d <= Number(hi.slice(8)); d++) {
       const slot = (byDay[prefix + pad(d)] ||= { n: 0, fill: {}, todos: [], st: new Set() });
