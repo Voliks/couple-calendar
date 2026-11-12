@@ -1558,8 +1558,11 @@ async def api_get_event_comments(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     event_id = _int_param(request, "id")
     event = await member_event(request, tg_user.id)
-    if event["category"] not in ("rest", "sex"):
+    
+    # Разрешаем комментарии для всех категорий, кроме магазина (у него свой чек-лист)
+    if event["category"] == "shop":
         return web.json_response({"comments": []})
+        
     comments = await db.get_event_comments(event_id)
     return web.json_response({"comments": comments})
 
@@ -1568,8 +1571,9 @@ async def api_post_event_comment(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event_id = _int_param(request, "id")
     event = await member_event(request, tg_user.id)
-    if event["category"] not in ("rest", "sex"):
-        raise ApiError("Комментарии доступны только для Отдыха и Секса", 403)
+    
+    if event["category"] == "shop":
+        raise ApiError("Комментарии недоступны для списка покупок", 403)
 
     body = await read_json(request)
     text = str(body.get("text") or "").strip()[:500]

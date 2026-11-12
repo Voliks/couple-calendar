@@ -91,7 +91,10 @@ function commentsListHtml(comments) {
 }
 
 function eventCommentsHtml(e) {
-  if (e.category !== "rest" && e.category !== "sex") return "";
+  // Комментарии доступны везде, кроме Магазина
+  if (e.category === "shop") return "";
+  
+  // Комментарии приходят вместе со state — отдельных запросов на каждую карточку нет
   return `
     <div class="event-comments-block" data-event-id="${e.id}">
       <div class="event-comments-list" id="comments-list-${e.id}">${commentsListHtml(e.comments || [])}</div>

@@ -906,7 +906,8 @@ async def _attach_items(events: list[dict]) -> list[dict]:
     by_id = {e["id"]: e for e in events}
 
     shop_ids = [e["id"] for e in events if e["category"] == "shop"]
-    chat_ids = [e["id"] for e in events if e["category"] in ("rest", "sex")]
+     # Теперь комментарии грузим для всех, кроме магазина
+    chat_ids = [e["id"] for e in events if e["category"] != "shop"]
 
     stmts: list[tuple[str, tuple]] = []
     pos: dict[str, int] = {}

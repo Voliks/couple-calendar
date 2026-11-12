@@ -390,3 +390,25 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
   border-left: 4px solid rgb(var(--declined));
 }
 .restore-text { font-size: 13px; margin-bottom: 10px; color: var(--text); }
+
+/* Комментарии в карточках */
+.event-comments-block { 
+  margin-top: 12px; 
+  padding-top: 12px; 
+  border-top: 1px solid rgba(0,0,0,0.05); 
+}
+.event-comments-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.cm { padding: 6px 10px; border-radius: 8px; font-size: 13px; background: rgba(0,0,0,0.04); word-break: break-word; }
+.cm.mine { background: rgba(36,129,204,0.1); }
+.cm-empty { font-size: 12px; color: var(--hint); }
+.comment-row { display: flex; gap: 6px; }
+.comment-input { 
+  flex: 1; 
+  padding: 8px 12px; 
+  border-radius: 8px; 
+  background: var(--bg); 
+  border: 1px solid rgba(0,0,0,0.1); 
+  font-size: 14px; 
+  color: var(--text);
+}
+.btn-send-comment { background: var(--accent); color: #fff; border-radius: 8px; padding: 0 12px; font-weight: 700; }
