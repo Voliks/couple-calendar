@@ -23,19 +23,15 @@ function syncArchiveUi() {
     archiveBtn.style.background = showArchive ? "var(--accent)" : "var(--bg2)";
     archiveBtn.style.color = showArchive ? "#fff" : "var(--text)";
   }
-  // Скрываем блок создания в архиве
   $("createChallengeArea").style.display = showArchive ? "none" : "block";
 }
 
 function visibleChallenges() {
-  // В архиве — вручную убранные и с истёкшим дедлайном; в основном списке — всё остальное
   return showArchive
     ? allChallenges.filter(c => c.status === "archived" || c.is_archived)
     : allChallenges.filter(c => c.status !== "archived" && !c.is_archived);
 }
 
-// refresh: перезагрузить только список (после действия). Каталог уже у клиента, сервер его не шлёт,
-// и экран не мигает спиннером.
 async function openChallenges({ refresh = false } = {}) {
   const requestId = ++challengesRequestSeq;
   const light = refresh && Object.keys(catalogData).length > 0;
@@ -48,15 +44,13 @@ async function openChallenges({ refresh = false } = {}) {
 
   try {
     const res = await api(light ? "/challenges?refresh=1" : "/challenges");
-    // Более поздний запрос имеет приоритет: старый ответ не перезаписывает новый экран.
     if (requestId !== challengesRequestSeq || $("challengesOverlay").hidden) return;
-    // Сортируем копию, не мутируя массив из API.
+    
     allChallenges = [...(res.history || [])].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
     if (res.catalog) catalogData = res.catalog;
     $("challengeBalance").textContent = res.balance ?? 0;
 
     if (!light) {
-      // Инициализируем категории (если еще не выбрана)
       if (!selectedCategory && Object.keys(catalogData).length > 0) {
         selectedCategory = Object.keys(catalogData)[0];
         $("selectedCatText").textContent = selectedCategory;
@@ -72,51 +66,16 @@ async function openChallenges({ refresh = false } = {}) {
   }
 }
 
-function openChallengeDetails(id) {
-  const c = allChallenges.find(x => x.id === id);
-  if (!c) return;
-  currentChallenge = c;
-  // Инвалидируем ответы предыдущего чата при быстром переключении карточек.
-  chatRequestSeq++;
-  chatLoadPromise = null;
-
-  $("challengeChatOverlay").hidden = false;
-  tg.BackButton?.show();
-
-  $("chatCategory").textContent = c.category;
-  $("chatTaskText").textContent = c.text;
-  $("chatReward").textContent = `🏆 ${c.reward} баллов`;
-  
-  let deadlineStr = "";
-  if (c.deadline > 0) {
-    const d = new Date(c.deadline * 1000);
-    deadlineStr = ` | ⏳ До: ${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
-  }
-  $("chatStatus").textContent = `Статус: ${statusLabel(c)}${deadlineStr}`;
-
-  const hasPhoto = !!c.photo_id;
-  $("chatPhotoBlock").style.display = hasPhoto ? "block" : "none";
-  
-  if (hasPhoto) {
-    const count = c.photo_id.split(",").filter(Boolean).length;
-    $("chatViewPhotoBtn").textContent = count > 1 ? `🖼 Посмотреть фото (${count} шт.)` : `🖼 Посмотреть фото`;
-  }
-
-  const isTarget = !c.is_creator;
-  const canAttach = isTarget && (c.status === "pending" || c.status === "rejected");
-  $("chatActionBlock").style.display = canAttach ? "block" : "none";
-
+function statusLabel(c) {
   const isCreator = c.is_creator;
-  // Показываем кнопки создателю, если челлендж ещё активен (не approved, не rejected и не archived)
-  const canReview = isCreator && (c.status === "pending" || c.status === "submitted");
-  $("chatCreatorActions").style.display = canReview ? "flex" : "none";
-
-  // Кнопка удаления доступна создателю, пока челлендж не завершён
-  const canDelete = isCreator && c.status === "pending";
-  $("chatDeleteBlock").style.display = canDelete ? "block" : "none";
-
-  loadMessages(id);
-  startChatPolling(id);
+  switch (c.status) {
+    case "pending":   return isCreator ? "⏳ Ждёт" : "⏳ Тебе бросили";
+    case "submitted": return "🔍 На проверке";
+    case "approved":  return "✅ Выполнено";
+    case "rejected":  return "❌ Отклонено";
+    case "archived":  return "🗄 В архиве";
+    default:          return c.status;
+  }
 }
 
 function renderChallenges(listToRender = []) {
@@ -140,7 +99,6 @@ function renderChallenges(listToRender = []) {
       dateStr = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
     }
 
-    // Крестик отображается только если карточка не в архиве
     const archiveIcon = c.status !== "archived" && !c.is_archived && !showArchive 
       ? `<button class="archive-btn" data-archive-id="${c.id}" style="background:none; border:none; color:var(--hint); font-size:22px; cursor:pointer; padding: 0 8px; line-height:1;" title="Убрать в архив">×</button>` 
       : "";
@@ -232,7 +190,6 @@ async function createChallenge() {
 
 function closeChallenges() {
   $("challengesOverlay").hidden = true;
-  // Сбрасываем режим архива, чтобы при следующем открытии показать основной список
   showArchive = false;
   if (!$("overlay").hidden || !$("challengeChatOverlay").hidden) tg.BackButton?.show();
   else tg.BackButton?.hide();
@@ -244,7 +201,6 @@ function openChallengeDetails(id) {
   const c = allChallenges.find(x => x.id === id);
   if (!c) return;
   currentChallenge = c;
-  // Инвалидируем ответы предыдущего чата при быстром переключении карточек.
   chatRequestSeq++;
   chatLoadPromise = null;
 
@@ -275,7 +231,8 @@ function openChallengeDetails(id) {
   $("chatActionBlock").style.display = canAttach ? "block" : "none";
 
   const isCreator = c.is_creator;
-  const canReview = isCreator && c.status === "submitted";
+  // Создатель видит кнопки Засчитать/Отклонить всегда, пока челлендж не завершен
+  const canReview = isCreator && (c.status === "pending" || c.status === "submitted");
   $("chatCreatorActions").style.display = canReview ? "flex" : "none";
 
   const canDelete = isCreator && c.status === "pending";
@@ -285,7 +242,7 @@ function openChallengeDetails(id) {
   startChatPolling(id);
 }
 
-// Опрос чата: 8 с, а пока новых сообщений нет — реже, до 30 с
+// Опрос чата
 function startChatPolling(id) {
   stopChatPolling();
   const gen = ++chatPollGen;
@@ -332,11 +289,9 @@ function renderChatMessages(list) {
   list.scrollTop = list.scrollHeight;
 }
 
-// Возвращает число новых сообщений. Фоновые запросы забирают только то, что новее последнего id (after=).
 async function loadMessages(challengeId, silent = false, force = false) {
   const list = $("chatMessagesList");
   if (!list) return 0;
-  // Не запускаем несколько одинаковых фоновых опросов одновременно.
   if (silent && chatLoadPromise && !force) return chatLoadPromise;
   if (!silent) {
     chatMessages = [];
@@ -378,7 +333,7 @@ async function sendMessage() {
   } catch (e) { toast(e.message); } finally { input.disabled = false; input.focus(); }
 }
 
-/* ---------- Загрузка фото (сжатие) ---------- */
+/* ---------- Загрузка фото ---------- */
 
 async function prepareImage(file) {
   try {
@@ -389,10 +344,7 @@ async function prepareImage(file) {
     canvas.height = Math.round(bmp.height * k);
     
     const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      bmp.close?.();
-      return file;
-    }
+    if (!ctx) { bmp.close?.(); return file; }
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
@@ -402,9 +354,7 @@ async function prepareImage(file) {
     if (blob && blob.size < file.size) {
       return new File([blob], "photo.jpg", { type: "image/jpeg" });
     }
-  } catch (e) { 
-    console.warn("Не удалось сжать фото, грузим оригинал", e); 
-  }
+  } catch (e) { console.warn("Не удалось сжать фото", e); }
   return file;
 }
 
@@ -433,10 +383,7 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
       try {
         btn.textContent = `Подготовка ${completed + 1}/${validFiles.length}…`;
         const preparedFile = await prepareImage(file);
-        const up = await api("/challenges/upload-url", {
-          method: "POST",
-          body: { filename: "photo.jpg", challenge_id: c.id }
-        });
+        const up = await api("/challenges/upload-url", { method: "POST", body: { filename: "photo.jpg", challenge_id: c.id } });
         const form = new FormData();
         form.append("cacheControl", "3600");
         form.append("", preparedFile);
@@ -454,7 +401,6 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
 
   try {
     if (!validFiles.length) throw new Error("Выберите файлы изображений");
-    // Ограничиваем параллелизм: быстрее последовательной загрузки без перегрузки сети.
     const workers = await Promise.allSettled(Array.from({ length: Math.min(2, validFiles.length) }, () => uploadWorker()));
     const failedWorker = workers.find(result => result.status === "rejected");
     if (failedWorker) throw failedWorker.reason;
@@ -620,7 +566,7 @@ try {
   $("challengesList").addEventListener("click", async (ev) => {
     const archiveBtn = ev.target.closest(".archive-btn");
     if (archiveBtn) {
-      ev.stopPropagation(); // Чтобы не открылось окно челленджа
+      ev.stopPropagation();
       ev.preventDefault();
       
       const id = archiveBtn.dataset.archiveId;
