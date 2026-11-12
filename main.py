@@ -25,6 +25,8 @@ from aiogram.types import (
     Message,
 )
 from aiogram.utils.web_app import safe_parse_webapp_init_data
+# pyright: reportMissingImports=false
+import aiohttp
 from aiohttp import web, FormData
 
 from common import (

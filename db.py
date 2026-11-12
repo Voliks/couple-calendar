@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -11,11 +12,15 @@ import secrets
 import sqlite3
 import threading
 import time
-import aiohttp
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
+
+try:
+    aiohttp: Any = importlib.import_module("aiohttp")
+except ModuleNotFoundError:
+    aiohttp = None
 
 log = logging.getLogger(__name__)
 
@@ -99,9 +104,11 @@ class _TursoBackend:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        self._session: aiohttp.ClientSession | None = None
+        self._session: Any = None
 
     async def start(self) -> None:
+        if aiohttp is None:
+            raise RuntimeError("The aiohttp package is required when using Turso")
         timeout = aiohttp.ClientTimeout(total=20, connect=10)
         self._session = aiohttp.ClientSession(
             headers=self._headers,
