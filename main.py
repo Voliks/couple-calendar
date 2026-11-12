@@ -347,7 +347,7 @@ async def api_middleware(request: web.Request, handler):
             "script-src 'self' 'unsafe-inline' https://telegram.org; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob: https://*.supabase.co; "
-            "connect-src 'self' https://*.supabase.co https://api.telegram.org; "
+            "connect-src 'self' https://*.supabase.co; "
             "frame-ancestors https://web.telegram.org https://*.telegram.org;"
         )
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -1358,12 +1358,23 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     if not path:
         raise ApiError("Путь не указан", 400)
         
-    rs = await db._exec("SELECT id FROM user_challenges WHERE photo_id LIKE ? LIMIT 1", (f"%{path}%",))
-    if not rs.rows:
-        raise ApiError("Фото не найдено", 404)
-        
-    challenge = await db.get_user_challenge(rs.rows[0][0])
+    # Извлекаем ID челленджа из пути (формат: challenge_<id>_<ts>_<hex>.<ext>)
+    # Это позволяет точно проверить права без запроса LIKE
+    m = re.search(r"^challenge_(\d+)_", path)
+    if not m:
+        raise ApiError("Некорректный формат пути", 400)
+    
+    challenge_id = int(m.group(1))
+    if not _photo_path_ok(path, challenge_id):
+        raise ApiError("Некорректный путь к фото", 400)
+
+    challenge = await db.get_user_challenge(challenge_id)
     if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
+        raise ApiError("Фото не найдено", 404)
+
+    # Проверяем, что этот путь действительно принадлежит челленджу
+    paths = [p.strip() for p in challenge["photo_id"].split(",") if p.strip()]
+    if path not in paths:
         raise ApiError("Фото не найдено", 404)
 
     sb = get_supabase()

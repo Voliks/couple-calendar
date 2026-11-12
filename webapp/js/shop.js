@@ -14,7 +14,6 @@ async function openShop() {
       shopItems = (res.items || []).slice().sort((a, b) => a.cost - b.cost);
     }
     
-    // Обновляем текущий баланс из ответа сервера
     currentBalance = res.balance ?? 0;
     $("shopBalance").textContent = currentBalance;
 
@@ -43,8 +42,8 @@ function closeShop() {
   else tg.BackButton?.hide();
 }
 
-function openBuyDatePicker(title, itemId) {
-  selectedShopItem = itemId;
+function openBuyDatePicker(title, item) {
+  selectedShopItem = item;
   $("buyTitle").textContent = `Купить «${title}»?`;
   $("buyDateInput").value = todayStr();
   $("buyDateOverlay").hidden = false;
@@ -60,6 +59,7 @@ function closeBuyDatePicker() {
 async function confirmBuy() {
   const date = $("buyDateInput").value;
   if (!date) return toast("Выберите дату");
+  if (!selectedShopItem) return;
 
   const btn = $("buyConfirm");
   btn.disabled = true;
@@ -68,7 +68,7 @@ async function confirmBuy() {
   try {
     await api("/shop/buy", { 
       method: "POST", 
-      body: { item_id: selectedShopItem, date } 
+      body: { item_id: selectedShopItem.id, date } 
     });
     toast("Желание куплено!");
     tg.HapticFeedback?.notificationOccurred("success");
@@ -76,10 +76,10 @@ async function confirmBuy() {
     closeBuyDatePicker();
     closeShop();
     
-    // Сбрасываем кэш магазина, чтобы при следующем открытии подтянулся новый баланс
-    shopItems = null;
+    // Обновляем баланс локально, чтобы не тянуть каталог заново
+    state.balance = Math.max(0, (state.balance || 0) - selectedShopItem.cost);
     etag = null;
-    await load(); // Обновляем state, чтобы balance обновился везде
+    await load();
   } catch (e) {
     toast(e.message);
   } finally {
@@ -122,6 +122,7 @@ async function confirmBuy() {
       return toast("Недостаточно баллов для покупки");
     }
 
-    openBuyDatePicker(title, id);
+    // Передаем объект товара целиком
+    openBuyDatePicker(title, { id, title, cost });
   });
 })();

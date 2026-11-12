@@ -47,7 +47,7 @@ function fmtRange(start, end) {
 let state = {
   has_partner: false, invite_link: "", events: [], sex_ideas: [],
   stats: null, todo_colors: [], allowed_reactions: [], allowed_remind_before: [],
-  multi_select: new Set(), my_id: 0, balance: 0,
+  multi_select: new Set(), my_id: 0, balance: 0, moods: null,
 };
 let selected = todayStr();
 let view = (() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; })();
@@ -56,8 +56,7 @@ let loaded = false;
 const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
 const monthCache = {};
 
-// Фронтенд и API раздаются с одного домена, поэтому используем относительные пути (без CORS)
-const API_BASE = "";
+const API_BASE = (document.querySelector('meta[name="api-base"]')?.content || "").replace(/\/$/, "");
 
 class HttpError extends Error {
   constructor(message, status) { super(message); this.status = status; }
@@ -113,10 +112,10 @@ function openCommentDialog(initial, initialDate = "", initialTime = "", onConfir
       <textarea id="commentText" maxlength="500" placeholder="Например: не смогу в этот день..."></textarea>
       
       <label for="altDate">Предложить другую дату (необязательно)</label>
-      <input type="date" id="altDate" value="${initialDate}">
+      <input type="date" id="altDate" value="${esc(initialDate)}">
       
       <label for="altTime">Время</label>
-      <input type="time" id="altTime" value="${initialTime}">
+      <input type="time" id="altTime" value="${esc(initialTime)}">
       
       <div class="row">
         <button class="btn ghost" id="commentCancel">Отмена</button>
@@ -144,5 +143,5 @@ let etag = null, etagKey = "";
 
 // Все модальные окна приложения; используется для блокировки жестов, опроса сервера и FAB-кнопок
 const OVERLAY_IDS = ["overlay", "ideasOverlay", "archiveOverlay", "catOverlay", "challengesOverlay", "shopOverlay", "buyDateOverlay",
-  "challengeChatOverlay", "photoViewerOverlay", "moodOverlay"];
+  "challengeChatOverlay", "photoViewerOverlay"];
 const anyOverlayOpen = () => OVERLAY_IDS.some((id) => { const el = $(id); return el && !el.hidden; });
