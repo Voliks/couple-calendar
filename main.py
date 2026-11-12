@@ -355,7 +355,6 @@ async def api_middleware(request: web.Request, handler):
     _add_cors(request, response)
     return response
 
-
 def authenticate(request: web.Request, write: bool = False):
     raw = request.headers.get("X-Init-Data", "")
     try:
@@ -370,8 +369,6 @@ def authenticate(request: web.Request, write: bool = False):
     # Лимит на все API-запросы (чтение и запись), write — жёстче
     rate_limit(data.user.id, write=write)
     return data.user
-
-
 async def read_json(request: web.Request) -> dict:
     try:
         body = await request.json()
@@ -609,6 +606,7 @@ async def api_state(request: web.Request) -> web.Response:
     if not has_partner:
         user = await db.ensure_invite(user)
         link = invite_link(user["invite_code"])
+        
     # Независимые чтения выполняем одновременно
     async def _safe_ideas():
         try:
@@ -624,6 +622,21 @@ async def api_state(request: web.Request) -> web.Response:
             return await db.pair_stats(tg_user.id, user["partner_id"])
         except Exception:
             logging.exception("Не удалось получить статистику")
+            return None
+
+    async def _safe_moods():
+        if not has_partner:
+            return None
+        try:
+            pk = db.pair_key(tg_user.id, user["partner_id"])
+            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            moods = await db.get_moods(pk, date)
+            by_user = {m["user_id"]: m for m in moods}
+            mine = by_user.get(tg_user.id) or {"emoji": "", "text": "", "updated_at": 0}
+            partner = by_user.get(user["partner_id"]) or {"emoji": "", "text": "", "updated_at": 0}
+            return {"date": date, "mine": mine, "partner": partner}
+        except Exception:
+            logging.exception("Не удалось получить настроение")
             return None
 
     async def _has_new_activity():
@@ -659,12 +672,13 @@ async def api_state(request: web.Request) -> web.Response:
         _new_cache[tg_user.id] = (time.monotonic(), val)
         return val
 
-    events, sex_ideas, stats, has_new, balance = await asyncio.gather(
+    events, sex_ideas, stats, has_new, balance, moods = await asyncio.gather(
         db.list_events_range(tg_user.id, start, end),
         _safe_ideas(),
         _safe_stats(),
         _has_new_cached(),
         db.get_user_balance(tg_user.id),
+        _safe_moods(),
     )
 
     body = json.dumps(
@@ -681,6 +695,7 @@ async def api_state(request: web.Request) -> web.Response:
             "my_id": tg_user.id,
             "balance": balance,
             "has_new_challenges": has_new,
+            "moods": moods,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -1128,6 +1143,7 @@ async def api_unlink(request: web.Request) -> web.Response:
     notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
     return web.json_response({"status": "unlinked"})
 
+
 async def api_get_mood(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     user = await db.get_or_create_user(tg_user.id)
@@ -1223,7 +1239,6 @@ def get_supabase():
 
 BACKUP_BUCKET = os.getenv("SUPABASE_BACKUP_BUCKET", "").strip()
 BACKUP_KEEP_DAYS = int(os.getenv("SUPABASE_BACKUP_KEEP_DAYS", "14"))
-
 
 async def backup_database() -> None:
     """Дамп всех таблиц в JSON.gz → Supabase Storage. Раз в сутки из reminder_loop.
@@ -1484,7 +1499,10 @@ async def api_challenge_action(request: web.Request) -> web.Response:
         # Разрешаем отклонить из любого активного статуса
         if not await db.transition_challenge(challenge_id, ("pending", "submitted"), "rejected"):
             raise ApiError("Этот вызов нельзя отклонить (возможно, он уже завершён)", 409)
-
+        notify(challenge["target_id"], f"❌ Челлендж отклонён: «{_short_text(challenge['text'])}». Можно прислать другое фото.")
+    else:
+        raise ApiError("Недопустимое действие", 400)
+        
     return web.json_response({"status": "ok"})
 
 
