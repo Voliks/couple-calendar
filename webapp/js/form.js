@@ -4,6 +4,10 @@ let formDateEnd = "";
 let formSpan = 0; // длина диапазона в днях (0 = один день)
 const todoColorsFallback = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
 
+// Кэш HTML для color-picker: пересобираем только при изменении formColor или набора цветов
+const _colorBoxCache = new WeakMap(); // box → { colorsKey, formColor, html }
+let _todoColorsKey = "";
+
 function addDays(dateStr, n) {
   const d = parse(dateStr);
   d.setDate(d.getDate() + n);
@@ -69,10 +73,23 @@ const COLOR_BOXES = ["todoColors", "personalColors", "restColors"];
 function renderColors(boxId) {
   const box = $(boxId);
   if (!box) return;
-  box.innerHTML = availableTodoColors().map(c =>
+
+  const colors = availableTodoColors();
+  const colorsKey = colors.join(",");
+  // Обновляем глобальный ключ — используется для кэша
+  if (boxId === "todoColors") _todoColorsKey = colorsKey;
+
+  let cache = _colorBoxCache.get(box);
+  if (cache && cache.colorsKey === colorsKey && cache.formColor === formColor) {
+    return; // Ничего не изменилось — не пересобираем DOM
+  }
+
+  const html = colors.map(c =>
     `<button type="button" class="todo-color${c === formColor ? " selected" : ""}"
              data-color="${c}" style="background:${c}" aria-label="Цвет ${c}"></button>`
   ).join("");
+  box.innerHTML = html;
+  _colorBoxCache.set(box, { colorsKey, formColor, html });
 }
 
 COLOR_BOXES.forEach((boxId) => {

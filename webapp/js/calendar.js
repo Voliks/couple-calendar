@@ -1,9 +1,33 @@
 let gridDrag = null;
 let lastCalendarHash = ""; // Хэш для предотвращения лишних перерисовок
 
-function dayElFromPoint(x, y) {
-  const el = document.elementFromPoint(x, y);
-  return el ? el.closest(".day") : null;
+// Кэш геометрии дней — заполняется один раз при pointerdown.
+// Позволяет не вызывать elementFromPoint на каждом pointermove (главный источник jank при свайпе).
+let gridDayRects = null;
+
+function _rebuildGridDayRects() {
+  const grid = $("grid");
+  if (!grid) { gridDayRects = null; return; }
+  const children = grid.children;
+  const rects = [];
+  for (let i = 0; i < children.length; i++) {
+    const el = children[i];
+    const date = el.dataset.date;
+    if (!date) continue;
+    rects.push({ date, rect: el.getBoundingClientRect() });
+  }
+  gridDayRects = rects;
+}
+
+function dayFromPointCached(x, y) {
+  if (!gridDayRects) return null;
+  for (let i = 0; i < gridDayRects.length; i++) {
+    const { date, rect } = gridDayRects[i];
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+      return date;
+    }
+  }
+  return null;
 }
 
 function applyMultiSelect(dates) {
@@ -145,6 +169,8 @@ function renderCalendar() {
              </button>`;
   }
   $("grid").innerHTML = html;
+  // Сетка пересобрана — геометрия устарела
+  gridDayRects = null;
 }
 
 const LONG_PRESS_MS = 350;
@@ -159,6 +185,9 @@ $("grid").addEventListener("pointerdown", (ev) => {
   const day = ev.target.closest(".day");
   if (!day) return;
   if (anyOverlayOpen()) return;
+
+  // Кэшируем геометрию всех дней ОДИН РАЗ — до любых move-событий
+  _rebuildGridDayRects();
 
   const isTouch = ev.pointerType === "touch";
   gridDrag = {
@@ -198,11 +227,12 @@ $("grid").addEventListener("pointermove", (ev) => {
     gridDrag.active = true;
   }
 
-  const day = dayElFromPoint(ev.clientX, ev.clientY);
-  if (!day) return;
+  // Ищем день через кэш rects — быстро, без elementFromPoint
+  const hitDate = dayFromPointCached(ev.clientX, ev.clientY);
+  if (!hitDate) return;
 
   const a = gridDrag.anchor;
-  const b = day.dataset.date;
+  const b = hitDate;
   if (!a || !b) return;
   const [lo, hi] = a <= b ? [a, b] : [b, a];
 
@@ -226,6 +256,7 @@ function endGridDrag(ev) {
   const wasSwipe = gridDrag.swiping;
   const dates = [...state.multi_select];
   gridDrag = null;
+  gridDayRects = null;
 
   if (!dates.length) return;
 
@@ -246,6 +277,7 @@ $("grid").addEventListener("pointercancel", (ev) => {
   if (!gridDrag || gridDrag.pointerId !== ev.pointerId) return;
   cancelLongPress();
   gridDrag = null;
+  gridDayRects = null;
   clearMultiSelect();
 });
 

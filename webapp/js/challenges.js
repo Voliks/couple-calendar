@@ -80,6 +80,7 @@ function statusLabel(c) {
 
 function renderChallenges(listToRender = []) {
   const list = $("challengesList");
+  const scrollTop = list.scrollTop; // сохраняем скролл — иначе будет «прыгать»
   if (!listToRender.length) {
     list.innerHTML = `<div class="empty">${showArchive ? "Архив пуст" : "Пока нет вызовов. Брось первый!"}</div>`;
     return;
@@ -117,6 +118,8 @@ function renderChallenges(listToRender = []) {
       <div class="challenge-reward" style="font-size: 12px; margin-top: 2px;">🏆 ${c.reward} баллов</div>
     </div>`;
   }).join("");
+  
+  list.scrollTop = scrollTop;
 }
 
 /* ---------- Категории и Задания (аккордеоны) ---------- */

@@ -35,8 +35,8 @@ async function bootstrap() {
   const slow = setTimeout(() => { hint.textContent = "Сервер просыпается, это может занять до минуты…"; }, 5000);
   for (;;) {
     try { 
-      await loadConfig(); // Загружаем статику (идеи, цвета) один раз
-      await load(); 
+      await loadConfig(); // Загружаем статику (цвета, реакции) один раз
+      await load();       // Первый state уже содержит sex_ideas
       break; 
     }
     catch (e) {

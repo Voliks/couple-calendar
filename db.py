@@ -272,7 +272,6 @@ async def close_db() -> None:
         await _backend.close()
         _backend = None
 
-
 async def _columns(table: str) -> set[str]:
     rows = (await _exec(f"PRAGMA table_info({table})")).rows
     return {r[1] for r in rows}
@@ -569,13 +568,28 @@ def _json_ideas() -> list[dict]:
         _ideas_cache = [{"id": _idea_key(c, t), "category_title": c, "text": t} for i, (c, t) in enumerate(raw) if last[t.strip().lower()] == i]
     return _ideas_cache
 
-# --- Кэш пользователя ---
+# --- Кэш пользователя (LRU с TTL) ---
 _user_cache: dict[int, tuple[float, dict]] = {}
 _USER_CACHE_TTL = 30
+_USER_CACHE_MAX = 5000
+
 
 def _invalidate_user_cache(*uids: int) -> None:
     for uid in uids:
         _user_cache.pop(uid, None)
+
+
+def _user_cache_put(uid: int, value: dict) -> None:
+    if len(_user_cache) >= _USER_CACHE_MAX:
+        # удаляем самые старые записи
+        now = time.monotonic()
+        stale = [k for k, v in _user_cache.items() if now - v[0] > _USER_CACHE_TTL]
+        for k in stale:
+            _user_cache.pop(k, None)
+        if len(_user_cache) >= _USER_CACHE_MAX:
+            # жёсткая очистка при переполнении
+            _user_cache.clear()
+    _user_cache[uid] = (time.monotonic(), value)
 
 
 USER_COLS = "telegram_id, partner_id, invite_code, invite_expires, tz, unlinked_at"
@@ -611,7 +625,7 @@ async def get_user(telegram_id: int) -> dict | None:
     rs = await _exec(f"SELECT {USER_COLS} FROM users WHERE telegram_id = ?", (telegram_id,))
     user = _user(rs.rows[0]) if rs.rows else None
     if user:
-        _user_cache[telegram_id] = (now, user)
+        _user_cache_put(telegram_id, user)
     return user
 
 
@@ -782,45 +796,65 @@ def _event(r) -> dict | None:
 
 
 async def _attach_items(events: list[dict]) -> list[dict]:
+    """Прикрепляет checklist/reactions/ideas/comments ОДНИМ batch-запросом (1 HTTP вместо 4)."""
     if not events:
         return events
     ids = [e["id"] for e in events]
     marks = ",".join("?" for _ in ids)
     by_id = {e["id"]: e for e in events}
-    tasks, task_names = [], []
+
     shop_ids = [e["id"] for e in events if e["category"] == "shop"]
+    chat_ids = [e["id"] for e in events if e["category"] in ("rest", "sex")]
+
+    stmts: list[tuple[str, tuple]] = []
+    pos: dict[str, int] = {}
+
     if shop_ids:
-        shop_marks = ",".join("?" for _ in shop_ids)
-        tasks.append(_exec(
+        sm = ",".join("?" for _ in shop_ids)
+        pos["checklist"] = len(stmts)
+        stmts.append((
             f"SELECT id, event_id, text, checked FROM checklist_items "
-            f"WHERE event_id IN ({shop_marks}) ORDER BY position, id",
+            f"WHERE event_id IN ({sm}) ORDER BY position, id",
             tuple(shop_ids),
         ))
-        task_names.append("checklist")
-    tasks.append(_exec(f"SELECT event_id, user_id, emoji FROM reactions WHERE event_id IN ({marks})", tuple(ids)))
-    task_names.append("reactions")
-    tasks.append(_exec(f"SELECT event_id, idea_idx, status, user_id, ts FROM idea_responses WHERE event_id IN ({marks})", tuple(ids)))
-    task_names.append("ideas")
-    chat_ids = [e["id"] for e in events if e["category"] in ("rest", "sex")]
+
+    pos["reactions"] = len(stmts)
+    stmts.append((
+        f"SELECT event_id, user_id, emoji FROM reactions WHERE event_id IN ({marks})",
+        tuple(ids),
+    ))
+
+    pos["ideas"] = len(stmts)
+    stmts.append((
+        f"SELECT event_id, idea_idx, status, user_id, ts FROM idea_responses "
+        f"WHERE event_id IN ({marks})",
+        tuple(ids),
+    ))
+
     if chat_ids:
-        chat_marks = ",".join("?" for _ in chat_ids)
-        tasks.append(_exec(
+        cm = ",".join("?" for _ in chat_ids)
+        pos["comments"] = len(stmts)
+        stmts.append((
             f"SELECT event_id, id, user_id, text, created_at FROM event_comments "
-            f"WHERE event_id IN ({chat_marks}) ORDER BY created_at, id",
+            f"WHERE event_id IN ({cm}) ORDER BY created_at, id",
             tuple(chat_ids),
         ))
-        task_names.append("comments")
-    results = await asyncio.gather(*tasks)
-    result_by_name = dict(zip(task_names, results))
-    if "comments" in result_by_name:
-        for event_id, cid, uid, text, created_at in result_by_name["comments"].rows:
-            by_id[event_id]["comments"].append({"id": cid, "sender_id": uid, "text": text, "created_at": created_at})
-    if "checklist" in result_by_name:
-        for item_id, event_id, text, checked in result_by_name["checklist"].rows:
-            by_id[event_id]["checklist"].append({"id": item_id, "text": text, "checked": bool(checked)})
-    for event_id, user_id, emoji in result_by_name["reactions"].rows:
+
+    results = await _batch(stmts)
+
+    if "comments" in pos:
+        for event_id, cid, uid, text, created_at in results[pos["comments"]].rows:
+            by_id[event_id]["comments"].append(
+                {"id": cid, "sender_id": uid, "text": text, "created_at": created_at}
+            )
+    if "checklist" in pos:
+        for item_id, event_id, text, checked in results[pos["checklist"]].rows:
+            by_id[event_id]["checklist"].append(
+                {"id": item_id, "text": text, "checked": bool(checked)}
+            )
+    for event_id, user_id, emoji in results[pos["reactions"]].rows:
         by_id[event_id]["reactions"][user_id] = emoji
-    for event_id, idx, status, uid, ts in result_by_name["ideas"].rows:
+    for event_id, idx, status, uid, ts in results[pos["ideas"]].rows:
         by_id[event_id]["idea_responses"][idx] = {"status": status, "user_id": uid, "ts": ts}
     return events
 

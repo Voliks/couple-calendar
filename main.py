@@ -111,7 +111,19 @@ def title_part(title: str) -> str:
 
 _rate_hits: dict[int, deque] = {}
 _new_cache: dict[int, tuple[float, bool]] = {}
+_NEW_CACHE_MAX = 5000
 NEW_ACTIVITY_TTL = 45
+
+
+def _new_cache_put(uid: int, val: bool) -> None:
+    if len(_new_cache) >= _NEW_CACHE_MAX:
+        now = time.monotonic()
+        stale = [k for k, v in _new_cache.items() if now - v[0] > NEW_ACTIVITY_TTL * 2]
+        for k in stale:
+            _new_cache.pop(k, None)
+        if len(_new_cache) >= _NEW_CACHE_MAX:
+            _new_cache.clear()
+    _new_cache[uid] = (time.monotonic(), val)
 
 
 def rate_limit(uid: int, *, write: bool = False) -> None:
@@ -565,16 +577,14 @@ def parse_month(raw) -> tuple:
 async def health_check(_: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
-
 # --- СТАТИКА ДЛЯ КЛИЕНТА ---
 async def api_config(request: web.Request) -> web.Response:
-    """Статичные данные, которые не меняются (цвета, идеи, реакции)."""
+    """Статичные данные (цвета, реакции, время напоминаний). Идеи — в /api/state."""
     user = authenticate(request)
     body = json.dumps({
         "todo_colors": db.TODO_COLORS,
         "allowed_reactions": ALLOWED_REACTIONS,
         "allowed_remind_before": sorted(ALLOWED_REMIND_BEFORE),
-        "sex_ideas": await db.get_sex_ideas(user.id, (await db.get_or_create_user(user.id))["partner_id"]),
     }, ensure_ascii=False)
     return web.Response(text=body, content_type="application/json", headers={"Cache-Control": "private, max-age=3600"})
 
@@ -585,21 +595,26 @@ async def api_state(request: web.Request) -> web.Response:
     tz = request.headers.get("X-TZ", "").strip()
     if tz and tz != user["tz"] and get_zone(tz):
         await db.set_timezone(tg_user.id, tz)
-    
+
     has_partner = bool(user["partner_id"])
     pk = db.pair_key(tg_user.id, user["partner_id"]) if has_partner else ""
-    
+
     rev = await db.get_pair_rev(pk) if has_partner else 0
     etag = f'"{rev}"'
-    
+
     if request.headers.get("If-None-Match") == etag:
         return web.Response(status=304, headers={"ETag": etag, "Cache-Control": "no-store"})
-    
+
     start, end = parse_month(request.query.get("month"))
     link = ""
     if not has_partner:
         user = await db.ensure_invite(user)
         link = invite_link(user["invite_code"])
+
+    # Локальная дата пользователя для moods
+    tz_obj = get_zone(user["tz"]) or timezone.utc
+    local_now = datetime.now(timezone.utc).astimezone(tz_obj)
+    today_local = local_now.strftime("%Y-%m-%d")
 
     async def _safe_stats():
         if not has_partner:
@@ -610,38 +625,47 @@ async def api_state(request: web.Request) -> web.Response:
             logging.exception("Не удалось получить статистику")
             return None
 
-    async def _safe_moods():
+    async def _safe_moods_raw():
         if not has_partner:
-            return None
+            return []
         try:
-            tz_obj = get_zone(user["tz"]) or timezone.utc
-            local_now = datetime.now(timezone.utc).astimezone(tz_obj)
-            date = local_now.strftime("%Y-%m-%d")
-            
-            moods = await db.get_moods(pk, date)
-            by_user = {m["user_id"]: m for m in moods}
-            mine = by_user.get(tg_user.id) or {"emoji": "", "text": "", "updated_at": 0}
-            partner = by_user.get(user["partner_id"]) or {"emoji": "", "text": "", "updated_at": 0}
-            return {"date": date, "mine": mine, "partner": partner}
+            return await db.get_moods(pk, today_local)
         except Exception:
             logging.exception("Не удалось получить настроение")
-            return None
+            return []
+
+    async def _safe_sex_ideas():
+        try:
+            return await db.get_sex_ideas(tg_user.id, user["partner_id"] if has_partner else None)
+        except Exception:
+            logging.exception("Не удалось получить идеи")
+            return []
 
     async def _has_new_cached():
         hit = _new_cache.get(tg_user.id)
         if hit and time.monotonic() - hit[0] < NEW_ACTIVITY_TTL:
             return hit[1]
         val = await db.has_new_activity(tg_user.id)
-        _new_cache[tg_user.id] = (time.monotonic(), val)
+        _new_cache_put(tg_user.id, val)
         return val
 
-    events, stats, has_new, balance, moods = await asyncio.gather(
+    # Всё параллельно: события, статистика, баланс, настроения, идеи, новые челленджи
+    events, stats, balance, moods_raw, sex_ideas, has_new = await asyncio.gather(
         db.list_events_range(tg_user.id, start, end),
         _safe_stats(),
-        _has_new_cached(),
         db.get_user_balance(tg_user.id),
-        _safe_moods(),
+        _safe_moods_raw(),
+        _safe_sex_ideas(),
+        _has_new_cached(),
     )
+
+    # Собираем moods в нужный формат
+    moods = None
+    if has_partner:
+        by_user = {m["user_id"]: m for m in moods_raw}
+        mine = by_user.get(tg_user.id) or {"emoji": "", "text": "", "updated_at": 0}
+        partner = by_user.get(user["partner_id"]) or {"emoji": "", "text": "", "updated_at": 0}
+        moods = {"date": today_local, "mine": mine, "partner": partner}
 
     body = json.dumps(
         {
@@ -655,11 +679,12 @@ async def api_state(request: web.Request) -> web.Response:
             "balance": balance,
             "has_new_challenges": has_new,
             "moods": moods,
+            "sex_ideas": sex_ideas,
         },
         ensure_ascii=False,
         sort_keys=True,
     )
-    
+
     headers = {"ETag": etag, "Cache-Control": "no-store"}
     return web.Response(text=body, content_type="application/json", headers=headers)
 
@@ -1067,7 +1092,6 @@ async def api_set_mood(request: web.Request) -> web.Response:
         notify(user["partner_id"], msg)
 
     return web.json_response({"status": "ok"})
-
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
@@ -1545,7 +1569,7 @@ def _build_index() -> tuple:
     
     raw = html.encode("utf-8")
     etag = '"' + hashlib.sha1(raw).hexdigest()[:20] + '"'
-    _index_cache = (sig, etag, raw, gzip.compress(raw, 9))
+    _index_cache = (sig, etag, raw, gzip.compress(raw, 6))
     return _index_cache
 
 
@@ -1563,7 +1587,7 @@ async def static_file(request: web.Request) -> web.Response:
     hit = _static_cache.get(path)
     if hit is None or hit[0] != mtime:
         raw = path.read_bytes()
-        hit = _static_cache[path] = (mtime, raw, gzip.compress(raw, 9))
+        hit = _static_cache[path] = (mtime, raw, gzip.compress(raw, 6))
     ctype = (mimetypes.guess_type(path.name)[0] or "application/octet-stream").split(";")[0]
     cache = "public, max-age=31536000, immutable" if request.query.get("v") else "no-cache"
     return _respond(request, f'"{mtime:x}"', hit[1], hit[2], ctype, cache)

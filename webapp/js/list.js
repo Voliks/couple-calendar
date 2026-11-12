@@ -236,13 +236,26 @@ async function sendEventComment(eventId, inputEl) {
   }
 }
 
+// Сохраняем позицию скролла страницы между перерисовками списка —
+// иначе длинный список «прыгает», когда reconcile заменяет карточки.
+let _savedScrollY = 0;
 function renderList() {
   $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
   const items = state.events
     .filter((e) => dayHasDate(e, selected))
     .map((e) => ({ id: String(e.id), html: cardHtml(e) }));
-  if (!reconcile($("list"), items)) {
+
+  _savedScrollY = window.scrollY;
+  const ok = reconcile($("list"), items);
+  if (!ok) {
     $("list").innerHTML = `<div class="empty">На этот день ничего нет. Нажмите «+», чтобы добавить событие.</div>`;
+  }
+  // Восстанавливаем позицию скролла (если ещё актуальна — reconcile мог укоротить список)
+  if (_savedScrollY > 0) {
+    requestAnimationFrame(() => {
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      window.scrollTo(0, Math.min(_savedScrollY, Math.max(0, max)));
+    });
   }
 }
 

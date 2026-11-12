@@ -88,9 +88,10 @@ async function request(path, { method = "GET", body, etag } = {}) {
 }
 const api = async (path, opts) => (await request(path, opts)).data;
 
-// Загрузка и кэширование статики (цвета, идеи, реакции)
+// Загрузка и кэширование статики (цвета, реакции, время напоминаний)
+// Идеи для секса приходят в /api/state и всегда актуальны.
 async function loadConfig() {
-  const CONFIG_KEY = "config_v1";
+  const CONFIG_KEY = "config_v2";
   const CACHE_TTL = 60 * 60 * 1000; // 1 час
 
   try {
@@ -101,7 +102,6 @@ async function loadConfig() {
         state.todo_colors = parsed.data.todo_colors;
         state.allowed_reactions = parsed.data.allowed_reactions;
         state.allowed_remind_before = parsed.data.allowed_remind_before;
-        state.sex_ideas = parsed.data.sex_ideas;
         return;
       }
     }
@@ -112,7 +112,6 @@ async function loadConfig() {
     state.todo_colors = data.todo_colors || [];
     state.allowed_reactions = data.allowed_reactions || [];
     state.allowed_remind_before = data.allowed_remind_before || [];
-    state.sex_ideas = data.sex_ideas || [];
     
     localStorage.setItem(CONFIG_KEY, JSON.stringify({ ts: Date.now(), data }));
   } catch (e) {
