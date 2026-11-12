@@ -83,7 +83,7 @@ function declineCommentHtml(e) {
   return `${lines.join("")}${button}`;
 }
 
-// Новый блок: комментарии для Секса и Отдыха
+// Блок комментариев для Секса и Отдыха
 function commentsListHtml(comments) {
   if (!comments.length) return `<div class="cm-empty">Нет комментариев</div>`;
   const myId = state?.my_id || 0;
@@ -450,7 +450,6 @@ $("list").addEventListener("click", async (ev) => {
   const event = findEvent(eventId);
   if (!event) return;
 
-  // Обработка отправки комментария
   const sendCommentBtn = ev.target.closest(".btn-send-comment");
   if (sendCommentBtn) {
     const block = sendCommentBtn.closest(".event-comments-block");
@@ -511,7 +510,6 @@ $("list").addEventListener("click", async (ev) => {
     const newStatus = statusBtn.dataset.status;
        
     if (newStatus === "declined") {
-      // Окно отклонения с выбором новой даты и времени
       openCommentDialog(
         event.my_decline_comment || "",
         event.alt_date || event.date,
@@ -553,7 +551,6 @@ $("list").addEventListener("click", async (ev) => {
   }
 });
 
-// Обработка Enter для инпутов
 $("list").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && ev.target.classList?.contains("cl-input")) {
     ev.preventDefault();

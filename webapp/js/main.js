@@ -34,7 +34,11 @@ async function bootstrap() {
   const hint = $("loadingHint");
   const slow = setTimeout(() => { hint.textContent = "Сервер просыпается, это может занять до минуты…"; }, 5000);
   for (;;) {
-    try { await load(); break; }
+    try { 
+      await loadConfig(); // Загружаем статику (идеи, цвета) один раз
+      await load(); 
+      break; 
+    }
     catch (e) {
       if (e.status === 401) {
         clearTimeout(slow);
@@ -200,7 +204,6 @@ $("challengeBtn").onclick = async () => {
     }
     icon.textContent = oldText;
   }
-  // Принудительно сбрасываем архив перед открытием
   if (typeof showArchive !== "undefined") {
     showArchive = false;
   }

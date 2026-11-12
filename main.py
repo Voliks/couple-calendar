@@ -25,7 +25,7 @@ from aiogram.types import (
     Message,
 )
 from aiogram.utils.web_app import safe_parse_webapp_init_data
-from aiohttp import web
+from aiohttp import web, FormData
 
 from common import (
     BOT_TOKEN,
@@ -163,9 +163,7 @@ async def cmd_start(message: Message, command: CommandObject):
 async def cmd_invite(message: Message):
     user = await db.get_or_create_user(message.from_user.id)
     if user["partner_id"]:
-        await message.answer(
-            "У вас уже есть партнёр 💞", reply_markup=open_app_keyboard()
-        )
+        await message.answer("У вас уже есть партнёр 💞", reply_markup=open_app_keyboard())
         return
     user = await db.ensure_invite(user)
     days = db.INVITE_TTL // 86400
@@ -186,9 +184,7 @@ async def cmd_unlink(message: Message):
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(
-                        text="Да, отвязать", callback_data="unlink:yes"
-                    ),
+                    InlineKeyboardButton(text="Да, отвязать", callback_data="unlink:yes"),
                     InlineKeyboardButton(text="Отмена", callback_data="unlink:no"),
                 ]
             ]
@@ -259,9 +255,7 @@ async def event_inline_action(call: CallbackQuery):
 async def on_error(event: ErrorEvent):
     logging.error("Ошибка в обработчике бота", exc_info=event.exception)
     update = event.update
-    msg = update.message or (
-        update.callback_query.message if update.callback_query else None
-    )
+    msg = update.message or (update.callback_query.message if update.callback_query else None)
     if msg:
         with contextlib.suppress(Exception):
             await msg.answer("⚠️ Что-то пошло не так, попробуйте ещё раз чуть позже.")
@@ -274,9 +268,7 @@ def _add_cors(request: web.Request, response: web.StreamResponse) -> None:
         h["Access-Control-Allow-Origin"] = origin
         h["Vary"] = "Origin"
         h["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-        h["Access-Control-Allow-Headers"] = (
-            "Content-Type, X-Init-Data, X-TZ, If-None-Match"
-        )
+        h["Access-Control-Allow-Headers"] = "Content-Type, X-Init-Data, X-TZ, If-None-Match"
         h["Access-Control-Expose-Headers"] = "ETag"
         h["Access-Control-Max-Age"] = "86400"
 
@@ -284,7 +276,6 @@ def _add_cors(request: web.Request, response: web.StreamResponse) -> None:
 @web.middleware
 async def gzip_middleware(request: web.Request, handler):
     response = await handler(request)
-    
     if (
         isinstance(response, web.Response)
         and response.status == 200
@@ -302,7 +293,6 @@ async def gzip_middleware(request: web.Request, handler):
             response.headers.pop("Content-Length", None)
         except Exception as e:
             logging.error("Gzip compression failed: %s", e)
-            
     return response
 
 
@@ -319,9 +309,7 @@ async def api_middleware(request: web.Request, handler):
         response = e
     except db.DbError:
         logging.exception("Ошибка базы данных")
-        response = web.json_response(
-            {"error": "Сервис временно недоступен, попробуйте позже"}, status=503
-        )
+        response = web.json_response({"error": "Сервис временно недоступен, попробуйте позже"}, status=503)
     except Exception:
         logging.exception("Необработанная ошибка в API")
         response = web.json_response({"error": "Внутренняя ошибка сервера"}, status=500)
@@ -354,10 +342,7 @@ def authenticate(request: web.Request, write: bool = False):
         data = safe_parse_webapp_init_data(BOT_TOKEN, raw)
     except ValueError:
         raise ApiError("unauthorized", 401)
-    if (
-        data.user is None
-        or time.time() - data.auth_date.timestamp() > INIT_DATA_MAX_AGE
-    ):
+    if data.user is None or time.time() - data.auth_date.timestamp() > INIT_DATA_MAX_AGE:
         raise ApiError("session expired", 401)
     rate_limit(data.user.id, write=write)
     return data.user
@@ -431,9 +416,7 @@ def parse_event_payload(body: dict) -> dict:
         if date_end < date:
             raise ApiError("Дата окончания раньше даты начала")
         try:
-            span = (
-                date_cls.fromisoformat(date_end) - date_cls.fromisoformat(date)
-            ).days
+            span = (date_cls.fromisoformat(date_end) - date_cls.fromisoformat(date)).days
         except ValueError:
             raise ApiError("Некорректная дата окончания")
         if span > 366:
@@ -512,15 +495,13 @@ def event_to_dict(e: dict, uid: int) -> dict:
             effective = "declined"
         else:
             effective = ""
-        ideas_out.append(
-            {
-                "idx": i,
-                "text": text,
-                "status": own,
-                "effective": effective,
-                "by": r.get("user_id"),
-            }
-        )
+        ideas_out.append({
+            "idx": i,
+            "text": text,
+            "status": own,
+            "effective": effective,
+            "by": r.get("user_id"),
+        })
     can_respond_ideas = not is_creator and overall == "pending" and len(ideas_out) > 0
     can_edit = is_creator or e["category"] in ("todo",)
     return {
@@ -572,11 +553,7 @@ def parse_month(raw) -> tuple:
         year, month = now.year, now.month
     else:
         m = MONTH_RE.match(raw)
-        if (
-            not m
-            or not 1 <= int(m.group(2)) <= 12
-            or not 2000 <= int(m.group(1)) <= 2100
-        ):
+        if not m or not 1 <= int(m.group(2)) <= 12 or not 2000 <= int(m.group(1)) <= 2100:
             raise ApiError("Некорректный месяц")
         year, month = int(m.group(1)), int(m.group(2))
     ny, nm = (year + 1, 1) if month == 12 else (year, month + 1)
@@ -585,6 +562,19 @@ def parse_month(raw) -> tuple:
 
 async def health_check(_: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
+
+
+# --- СТАТИКА ДЛЯ КЛИЕНТА ---
+async def api_config(request: web.Request) -> web.Response:
+    """Статичные данные, которые не меняются (цвета, идеи, реакции)."""
+    user = authenticate(request)
+    body = json.dumps({
+        "todo_colors": db.TODO_COLORS,
+        "allowed_reactions": ALLOWED_REACTIONS,
+        "allowed_remind_before": sorted(ALLOWED_REMIND_BEFORE),
+        "sex_ideas": await db.get_sex_ideas(user.id, (await db.get_or_create_user(user.id))["partner_id"]),
+    }, ensure_ascii=False)
+    return web.Response(text=body, content_type="application/json", headers={"Cache-Control": "private, max-age=3600"})
 
 
 async def api_state(request: web.Request) -> web.Response:
@@ -597,26 +587,17 @@ async def api_state(request: web.Request) -> web.Response:
     has_partner = bool(user["partner_id"])
     pk = db.pair_key(tg_user.id, user["partner_id"]) if has_partner else ""
     
-    # 1. Запрашиваем ревизию пары
     rev = await db.get_pair_rev(pk) if has_partner else 0
     etag = f'"{rev}"'
     
     if request.headers.get("If-None-Match") == etag:
         return web.Response(status=304, headers={"ETag": etag, "Cache-Control": "no-store"})
     
-    # 2. Если ревизия изменилась (или её нет) — собираем полный ответ
     start, end = parse_month(request.query.get("month"))
     link = ""
     if not has_partner:
         user = await db.ensure_invite(user)
         link = invite_link(user["invite_code"])
-
-    async def _safe_ideas():
-        try:
-            return await db.get_sex_ideas(tg_user.id, user["partner_id"])
-        except Exception:
-            logging.exception("Не удалось получить идеи")
-            return []
 
     async def _safe_stats():
         if not has_partner:
@@ -644,42 +625,16 @@ async def api_state(request: web.Request) -> web.Response:
             logging.exception("Не удалось получить настроение")
             return None
 
-    async def _has_new_activity():
-        rs = await db._exec(
-            "WITH v AS ("
-            " SELECT COALESCE(last_viewed_challenges, 0) AS ts "
-            " FROM users WHERE telegram_id = ?"
-            ") "
-            "SELECT EXISTS ("
-            " SELECT 1 FROM user_challenges c, v "
-            " WHERE v.ts > 0 AND c.target_id = ? AND c.created_at > v.ts "
-            " UNION ALL "
-            " SELECT 1 FROM challenge_messages m "
-            " JOIN user_challenges c ON c.id = m.challenge_id, v "
-            " WHERE v.ts > 0 AND (c.creator_id = ? OR c.target_id = ?) "
-            " AND m.sender_id != ? AND m.created_at > v.ts "
-            " UNION ALL "
-            " SELECT 1 FROM event_comments e "
-            " JOIN events ev ON ev.id = e.event_id, v "
-            " WHERE v.ts > 0 AND (ev.created_by = ? OR ev.target_user = ?) "
-            " AND e.user_id != ? AND e.created_at > v.ts"
-            ")",
-            (tg_user.id, tg_user.id, tg_user.id, tg_user.id, tg_user.id,
-             tg_user.id, tg_user.id, tg_user.id),
-        )
-        return bool(rs.rows and rs.rows[0][0])
-
     async def _has_new_cached():
         hit = _new_cache.get(tg_user.id)
         if hit and time.monotonic() - hit[0] < NEW_ACTIVITY_TTL:
             return hit[1]
-        val = await _has_new_activity()
+        val = await db.has_new_activity(tg_user.id)
         _new_cache[tg_user.id] = (time.monotonic(), val)
         return val
 
-    events, sex_ideas, stats, has_new, balance, moods = await asyncio.gather(
+    events, stats, has_new, balance, moods = await asyncio.gather(
         db.list_events_range(tg_user.id, start, end),
-        _safe_ideas(),
         _safe_stats(),
         _has_new_cached(),
         db.get_user_balance(tg_user.id),
@@ -693,11 +648,7 @@ async def api_state(request: web.Request) -> web.Response:
             "invite_link": link,
             "month": start[:7],
             "events": [event_to_dict(e, tg_user.id) for e in events],
-            "sex_ideas": sex_ideas,
             "stats": stats,
-            "todo_colors": db.TODO_COLORS,
-            "allowed_reactions": ALLOWED_REACTIONS,
-            "allowed_remind_before": sorted(ALLOWED_REMIND_BEFORE),
             "my_id": tg_user.id,
             "balance": balance,
             "has_new_challenges": has_new,
@@ -719,9 +670,7 @@ async def api_create_event(request: web.Request) -> web.Response:
         raise ApiError("Сначала свяжитесь с партнёром", 409)
     if await db.count_events_created(tg_user.id) >= db.MAX_EVENTS_PER_USER:
         raise ApiError("Достигнут лимит событий", 409)
-    is_private_personal = (
-        data["category"] == "personal" and data["visibility"] == "private"
-    )
+    is_private_personal = data["category"] == "personal" and data["visibility"] == "private"
     if is_private_personal:
         target_user = tg_user.id
     elif data["category"] == "personal":
@@ -729,48 +678,21 @@ async def api_create_event(request: web.Request) -> web.Response:
     else:
         target_user = user["partner_id"]
     event = await db.create_event(
-        tg_user.id,
-        target_user,
-        data["title"],
-        data["description"],
-        data["date"],
-        data["time"],
-        data["category"],
-        data["items"],
-        color=data["color"],
-        remind_before=data["remind_before"],
-        date_end=data["date_end"],
-        visibility=data["visibility"],
+        tg_user.id, target_user, data["title"], data["description"], data["date"], data["time"], data["category"], data["items"],
+        color=data["color"], remind_before=data["remind_before"], date_end=data["date_end"], visibility=data["visibility"],
     )
     if data["category"] == "shop":
-        notify(
-            user["partner_id"],
-            f"🛒 Партнёр добавил список покупок на {fmt_range(data['date'], data['date_end'])}. Откройте календарь, чтобы посмотреть.",
-        )
+        notify(user["partner_id"], f"🛒 Партнёр добавил список покупок на {fmt_range(data['date'], data['date_end'])}. Откройте календарь, чтобы посмотреть.")
     elif data["category"] == "personal":
         if data["visibility"] == "shared" and user["partner_id"]:
-            notify(
-                user["partner_id"],
-                f"📝 Партнёр добавил общее личное дело на {fmt_range(data['date'], data['date_end'])}{(' в ' + data['time']) if data['time'] else ''}. Откройте календарь, чтобы посмотреть.",
-            )
+            notify(user["partner_id"], f"📝 Партнёр добавил общее личное дело на {fmt_range(data['date'], data['date_end'])}{(' в ' + data['time']) if data['time'] else ''}. Откройте календарь, чтобы посмотреть.")
     elif data["category"] == "todo":
         at = f" в {data['time']}" if data["time"] else ""
-        extra = (
-            f" (напомню за {_humanize_minutes(data['remind_before'])})"
-            if data["time"] and data["remind_before"]
-            else ""
-        )
-        notify(
-            user["partner_id"],
-            f"📌 Новое дело на {fmt_range(data['date'], data['date_end'])}{at}.{extra} Откройте календарь, чтобы посмотреть.",
-        )
+        extra = f" (напомню за {_humanize_minutes(data['remind_before'])})" if data["time"] and data["remind_before"] else ""
+        notify(user["partner_id"], f"📌 Новое дело на {fmt_range(data['date'], data['date_end'])}{at}.{extra} Откройте календарь, чтобы посмотреть.")
     else:
         icon = CATEGORY_ICONS.get(data["category"], "➕")
-        notify(
-            user["partner_id"],
-            f"{icon} Новое событие на {fmt_range(data['date'], data['date_end'])}{(' в ' + data['time']) if data['time'] else ''}. Ответьте прямо здесь или откройте календарь.",
-            reply_markup=event_reply_keyboard(event["id"]),
-        )
+        notify(user["partner_id"], f"{icon} Новое событие на {fmt_range(data['date'], data['date_end'])}{(' в ' + data['time']) if data['time'] else ''}. Ответьте прямо здесь или откройте календарь.", reply_markup=event_reply_keyboard(event["id"]))
     return web.json_response(event_to_dict(event, tg_user.id), status=201)
 
 
@@ -780,68 +702,26 @@ async def api_update_event(request: web.Request) -> web.Response:
     event = await member_event(request, tg_user.id)
     if event["category"] == "personal" and event["created_by"] != tg_user.id:
         raise ApiError("Редактировать личное событие может только автор", 403)
-    if (
-        event["category"] != "todo"
-        and event["category"] != "personal"
-        and event["created_by"] != tg_user.id
-    ):
+    if event["category"] != "todo" and event["category"] != "personal" and event["created_by"] != tg_user.id:
         raise ApiError("Редактировать событие может только его автор", 403)
     data = parse_event_payload(await read_json(request))
     if data["category"] != event["category"]:
-        raise ApiError(
-            "Категорию существующего события менять нельзя — создайте новое", 409
-        )
-    other_id = (
-        event["target_user"]
-        if event["created_by"] == tg_user.id
-        else event["created_by"]
-    )
+        raise ApiError("Категорию существующего события менять нельзя — создайте новое", 409)
+    other_id = event["target_user"] if event["created_by"] == tg_user.id else event["created_by"]
     old_end = event.get("date_end") or ""
     if old_end == event["date"]:
         old_end = ""
-    schedule_changed = (
-        data["date"],
-        data["date_end"],
-        data["time"],
-        data["remind_before"],
-    ) != (event["date"], old_end, event["time"], event.get("remind_before") or 0)
-    identity_changed = (data["date"], data["date_end"], data["time"]) != (
-        event["date"],
-        old_end,
-        event["time"],
-    )
-    ideas_changed = data["category"] == "sex" and _extract_idea_lines(
-        data["description"]
-    ) != _extract_idea_lines(event["description"])
+    schedule_changed = (data["date"], data["date_end"], data["time"], data["remind_before"]) != (event["date"], old_end, event["time"], event.get("remind_before") or 0)
+    identity_changed = (data["date"], data["date_end"], data["time"]) != (event["date"], old_end, event["time"])
+    ideas_changed = data["category"] == "sex" and _extract_idea_lines(data["description"]) != _extract_idea_lines(event["description"])
     visibility_changed = data["visibility"] != event.get("visibility", "shared")
-    changed = (
-        identity_changed
-        or visibility_changed
-        or data["description"] != event["description"]
-        or data["color"] != event.get("color", "")
-        or data["remind_before"] != (event.get("remind_before") or 0)
-        or data["title"] != event["title"]
-    )
+    changed = (identity_changed or visibility_changed or data["description"] != event["description"] or data["color"] != event.get("color", "") or data["remind_before"] != (event.get("remind_before") or 0) or data["title"] != event["title"])
     if not changed:
         return web.json_response(event_to_dict(event, tg_user.id))
-    reset = (identity_changed or ideas_changed) and data["category"] not in (
-        "shop",
-        "todo",
-        "personal",
-    )
+    reset = (identity_changed or ideas_changed) and data["category"] not in ("shop", "todo", "personal")
     updated = await db.update_event(
-        event["id"],
-        data["title"],
-        data["description"],
-        data["date"],
-        data["time"],
-        data["category"],
-        reset_status=reset,
-        color=data["color"],
-        remind_before=data["remind_before"],
-        date_end=data["date_end"],
-        visibility=data["visibility"],
-        reset_reminders=schedule_changed,
+        event["id"], data["title"], data["description"], data["date"], data["time"], data["category"], reset_status=reset,
+        color=data["color"], remind_before=data["remind_before"], date_end=data["date_end"], visibility=data["visibility"], reset_reminders=schedule_changed,
     )
     if data["category"] == "personal" and visibility_changed:
         partner_id = user["partner_id"]
@@ -851,31 +731,16 @@ async def api_update_event(request: web.Request) -> web.Response:
             await db.set_target_user(event["id"], partner_id or tg_user.id)
         if partner_id:
             if data["visibility"] == "shared":
-                notify(
-                    partner_id,
-                    f"📝 Партнёр сделал личное дело общим: {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])}.",
-                )
+                notify(partner_id, f"📝 Партнёр сделал личное дело общим: {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])}.")
             else:
-                notify(
-                    partner_id,
-                    f"📝 Партнёр скрыл личное дело: {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])}.",
-                )
+                notify(partner_id, f"📝 Партнёр скрыл личное дело: {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])}.")
     if data["category"] == "shop":
-        notify(
-            other_id,
-            f"✏️ Список покупок на {fmt_range(data['date'], data['date_end'])} изменён.",
-        )
+        notify(other_id, f"✏️ Список покупок на {fmt_range(data['date'], data['date_end'])} изменён.")
     elif data["category"] == "todo":
-        notify(
-            other_id,
-            f"📌 Дело на {fmt_range(data['date'], data['date_end'])} изменено.",
-        )
+        notify(other_id, f"📌 Дело на {fmt_range(data['date'], data['date_end'])} изменено.")
     elif data["category"] != "personal":
         suffix = " Оно снова ждёт вашего ответа." if reset else ""
-        notify(
-            other_id,
-            f"✏️ Событие на {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])} изменено.{suffix}",
-        )
+        notify(other_id, f"✏️ Событие на {fmt_range(data['date'], data['date_end'])}{title_part(data['title'])} изменено.{suffix}")
     updated = await db.get_event(event["id"])
     return web.json_response(event_to_dict(updated, tg_user.id))
 
@@ -885,13 +750,8 @@ async def api_delete_event(request: web.Request) -> web.Response:
     event = await member_event(request, tg_user.id)
     if event["category"] == "personal" and event["created_by"] != tg_user.id:
         raise ApiError("Удалять личное событие может только автор", 403)
-    if (
-        event["category"] not in ("todo", "personal")
-        and event["created_by"] != tg_user.id
-    ):
-        raise ApiError(
-            "Удалить событие может только автор. Вы можете отказаться от него.", 403
-        )
+    if event["category"] not in ("todo", "personal") and event["created_by"] != tg_user.id:
+        raise ApiError("Удалить событие может только автор. Вы можете отказаться от него.", 403)
     await db.delete_event(event["id"])
     return web.json_response({"status": "deleted"})
 
@@ -930,7 +790,6 @@ async def api_respond(request: web.Request) -> web.Response:
             await db.set_decline_comment_slot(event["id"], slot, "")
 
         what = "принял(а)" if status == "accepted" else "отклонил(а)"
-        
         alt_text = ""
         if status == "declined" and alt_date:
             alt_text = f"\n📅 Предлагает перенести на: {fmt_range(alt_date, '')}{(' в ' + alt_time) if alt_time else ''}"
@@ -940,8 +799,7 @@ async def api_respond(request: web.Request) -> web.Response:
 
         notify(
             event["created_by"],
-            f"{icon} {tg_user.first_name} {what} событие на "
-            f"{fmt_range(event['date'], event.get('date_end', ''))}{title_part(event['title'])}.{alt_text}{extra}",
+            f"{icon} {tg_user.first_name} {what} событие на {fmt_range(event['date'], event.get('date_end', ''))}{title_part(event['title'])}.{alt_text}{extra}",
         )
         await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
         event = await db.get_event(event["id"])
@@ -1030,9 +888,7 @@ async def api_add_item(request: web.Request) -> web.Response:
     if not await db.add_item(event["id"], text):
         raise ApiError(f"Не больше {db.MAX_ITEMS_PER_EVENT} пунктов в списке", 409)
     await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
-    return web.json_response(
-        event_to_dict(await db.get_event(event["id"]), tg_user.id), status=201
-    )
+    return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id), status=201)
 
 
 async def api_set_item(request: web.Request) -> web.Response:
@@ -1041,9 +897,7 @@ async def api_set_item(request: web.Request) -> web.Response:
     checked = (await read_json(request)).get("checked")
     if not isinstance(checked, bool):
         raise ApiError("Некорректный запрос")
-    if not await db.set_item_checked(
-        event["id"], _int_param(request, "item_id"), checked
-    ):
+    if not await db.set_item_checked(event["id"], _int_param(request, "item_id"), checked):
         raise ApiError("Пункт не найден", 404)
     await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
     return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id))
@@ -1178,13 +1032,7 @@ async def api_get_mood(request: web.Request) -> web.Response:
     by_user = {m["user_id"]: m for m in moods}
     mine = by_user.get(tg_user.id) or {"emoji": "", "text": "", "updated_at": 0}
     partner = by_user.get(user["partner_id"]) or {"emoji": "", "text": "", "updated_at": 0}
-    return web.json_response({
-        "date": date,
-        "my_id": tg_user.id,
-        "partner_id": user["partner_id"],
-        "mine": mine,
-        "partner": partner,
-    })
+    return web.json_response({"date": date, "my_id": tg_user.id, "partner_id": user["partner_id"], "mine": mine, "partner": partner})
 
 
 async def api_set_mood(request: web.Request) -> web.Response:
@@ -1224,78 +1072,35 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
 PHOTO_BUCKET = os.getenv("SUPABASE_BUCKET", "challenges").strip() or "challenges"
 PHOTO_EXTS = ("jpg", "jpeg", "png", "webp", "gif", "heic", "heif")
 CHALLENGE_MAX_POINTS = 20
-_supabase = None
-
-
-def get_supabase():
-    global _supabase
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise ApiError(
-            "Хранилище фото не настроено (нужны SUPABASE_URL и SUPABASE_SERVICE_KEY)", 503
-        )
-    if _supabase is None:
-        import importlib
-        from supabase import create_client, ClientOptions
-        try:
-            httpx = importlib.import_module("httpx")
-            options = ClientOptions(
-                httpx_client=httpx.Client(
-                    http2=False,
-                    timeout=httpx.Timeout(30.0, connect=10.0),
-                )
-            )
-            _supabase = create_client(SUPABASE_URL, SUPABASE_KEY, options=options)
-            logging.info("Supabase: HTTP/1.1 client ACTIVE")
-        except ImportError:
-            logging.warning("httpx недоступен, используется клиент Supabase по умолчанию")
-            _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        except TypeError:
-            logging.warning("supabase-py слишком старый, httpx_client не поддерживается")
-            _supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    return _supabase
 
 BACKUP_BUCKET = os.getenv("SUPABASE_BACKUP_BUCKET", "").strip()
 BACKUP_KEEP_DAYS = int(os.getenv("SUPABASE_BACKUP_KEEP_DAYS", "14"))
 
 
-async def backup_database() -> None:
-    if not SUPABASE_URL or not SUPABASE_KEY or not BACKUP_BUCKET:
-        return
-    try:
-        data = await db.dump_all_tables()
-        body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
-        gz = gzip.compress(body, 6)
-        name = f"backup_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.json.gz"
-        sb = get_supabase()
-        await asyncio.to_thread(
-            sb.storage.from_(BACKUP_BUCKET).upload,
-            name,
-            gz,
-            {"content-type": "application/gzip", "upsert": "true"},
-        )
-        logging.info("Бэкап БД загружен: %s (%s байт)", name, len(gz))
+# --- Прямая работа с Supabase Storage через aiohttp ---
 
-        try:
-            listing = await asyncio.to_thread(sb.storage.from_(BACKUP_BUCKET).list)
-            cutoff = datetime.now(timezone.utc) - timedelta(days=BACKUP_KEEP_DAYS)
-            old = []
-            for item in listing or []:
-                nm = item.get("name", "")
-                if not nm.startswith("backup_") or not nm.endswith(".json.gz"):
-                    continue
-                try:
-                    d = datetime.strptime(nm[7:17], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                except ValueError:
-                    continue
-                if d < cutoff:
-                    old.append(nm)
-            if old:
-                await asyncio.to_thread(sb.storage.from_(BACKUP_BUCKET).remove, old)
-                logging.info("Удалено старых бэкапов: %s", len(old))
-        except Exception:
-            logging.exception("Не удалось почистить старые бэкапы")
-    except Exception:
-        logging.exception("Не удалось сделать резервную копию БД")
+async def _supabase_request(method: str, endpoint: str, body: dict = None) -> dict:
+    """Запрос к REST API Supabase Storage."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise ApiError("Хранилище не настроено", 503)
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": SUPABASE_KEY,
+        "Content-Type": "application/json",
+    }
+    url = f"{SUPABASE_URL}/storage/v1{endpoint}"
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.request(method, url, json=body, headers=headers) as resp:
+            text = await resp.text()
+            if not resp.ok:
+                logging.error("Supabase error %s: %s", resp.status, text)
+                raise ApiError(f"Ошибка хранилища", 502)
+            try:
+                return json.loads(text)
+            except Exception:
+                return {}
+
 
 def _storage_url(url: str) -> str:
     if not url:
@@ -1315,9 +1120,7 @@ def _photo_path_ok(path: str, challenge_id: int) -> bool:
     if not paths or len(paths) > 10:
         return False
     for p in paths:
-        if not re.fullmatch(
-            rf"challenge_{challenge_id}_\d+_[0-9a-f]{{8}}\.({exts})", p, re.IGNORECASE
-        ):
+        if not re.fullmatch(rf"challenge_{challenge_id}_\d+_[0-9a-f]{{8}}\.({exts})", p, re.IGNORECASE):
             return False
     return True
 
@@ -1349,15 +1152,11 @@ async def api_upload_photo_url(request: web.Request) -> web.Response:
         ext = "jpg"
     path = f"challenge_{challenge_id}_{int(time.time())}_{secrets.token_hex(4)}.{ext}"
 
-    sb = get_supabase()
-    try:
-        res = await asyncio.to_thread(sb.storage.from_(PHOTO_BUCKET).create_signed_upload_url, path)
-        upload_url = _storage_url(res.get("signed_url") or res.get("signedUrl") or res.get("signedURL"))
-    except Exception:
-        logging.exception("Supabase: не удалось создать ссылку для загрузки")
-        raise ApiError(f"Не удалось подготовить загрузку. Проверьте, что в Supabase есть бакет «{PHOTO_BUCKET}».", 502)
+    res = await _supabase_request("POST", f"/object/upload/sign/{PHOTO_BUCKET}/{path}", {})
+    upload_url = _storage_url(res.get("signed_url") or res.get("signedUrl") or res.get("signedURL"))
+    
     if not upload_url:
-        raise ApiError("Supabase не вернул ссылку для загрузки", 502)
+        raise ApiError("Не удалось подготовить загрузку", 502)
     return web.json_response({"upload_url": upload_url, "path": path})
 
 
@@ -1384,13 +1183,9 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     if path not in paths:
         raise ApiError("Фото не найдено", 404)
 
-    sb = get_supabase()
-    try:
-        res = await asyncio.to_thread(sb.storage.from_(PHOTO_BUCKET).create_signed_url, path, 3600)
-        view_url = _storage_url(res.get("signedURL") or res.get("signedUrl"))
-    except Exception:
-        logging.exception("Supabase: не удалось создать ссылку на просмотр")
-        raise ApiError("Ошибка получения ссылки на фото", 502)
+    res = await _supabase_request("POST", f"/object/sign/{PHOTO_BUCKET}/{path}", {"expiresIn": 3600})
+    view_url = _storage_url(res.get("signedURL") or res.get("signedUrl"))
+    
     if not view_url:
         raise ApiError("Ошибка получения ссылки на фото", 502)
     return web.json_response({"view_url": view_url})
@@ -1417,17 +1212,13 @@ async def api_set_challenge_photo(request: web.Request) -> web.Response:
 
 async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
-    
     refresh = request.query.get("refresh") == "1"
     catalog = None
     if refresh:
-        balance, history = await asyncio.gather(
-            db.get_user_balance(tg_user.id),
-            db.get_all_user_challenges(tg_user.id),
-        )
+        balance, history = await asyncio.gather(db.get_user_balance(tg_user.id), db.get_all_user_challenges(tg_user.id))
     else:
-        _, balance, history, catalog = await asyncio.gather(
-            db._exec("UPDATE users SET last_viewed_challenges = ? WHERE telegram_id = ?", (int(time.time()), tg_user.id)),
+        await db.set_last_viewed_challenges(tg_user.id)
+        balance, history, catalog = await asyncio.gather(
             db.get_user_balance(tg_user.id),
             db.get_all_user_challenges(tg_user.id),
             db.get_challenges_json(),
@@ -1438,17 +1229,12 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
     for h in history:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
         h["is_archived"] = False
-        
         if h["status"] in ("approved", "rejected"):
             dl = h.get("deadline") or 0
             if dl > 0 and now > dl:
                 h["is_archived"] = True
 
-    payload = {
-        "balance": balance,
-        "history": history,
-        "my_id": tg_user.id,
-    }
+    payload = {"balance": balance, "history": history, "my_id": tg_user.id}
     if catalog is not None:
         payload["catalog"] = catalog
     return web.json_response(payload)
@@ -1460,18 +1246,7 @@ async def api_create_challenge(request: web.Request) -> web.Response:
     if not user["partner_id"]:
         raise ApiError("Сначала свяжитесь с партнёром", 409)
 
-    now = int(time.time())
-    start_of_day = now - (now % 86400)
-    
-    rs = await db._exec(
-        "SELECT COUNT(*) FROM user_challenges "
-        "WHERE creator_id = ? AND created_at >= ? "
-        "AND status IN ('pending', 'submitted')", 
-        (tg_user.id, start_of_day)
-    )
-    active_today = rs.rows[0][0]
-    
-    if active_today >= 3:
+    if await db.count_active_challenges_today(tg_user.id) >= 3:
         raise ApiError("Лимит на сегодня: можно иметь не более 3 активных челленджей.", 429)
 
     body = await read_json(request)
@@ -1492,9 +1267,7 @@ async def api_create_challenge(request: web.Request) -> web.Response:
 
     deadline = int(time.time()) + hours * 3600
 
-    challenge = await db.create_user_challenge(
-        tg_user.id, user["partner_id"], category, text, points, deadline
-    )
+    challenge = await db.create_user_challenge(tg_user.id, user["partner_id"], category, text, points, deadline)
     notify(user["partner_id"], f"⚔️ Тебе бросили вызов: «{_short_text(text)}» ({points} б.). На выполнение {hours} ч.")
     return web.json_response({"status": "created", "challenge": challenge}, status=201)
 
@@ -1503,7 +1276,6 @@ async def api_challenge_action(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
     challenge = await db.get_user_challenge(challenge_id)
-    
     if not challenge:
         raise ApiError("Челлендж не найден", 404)
         
@@ -1534,7 +1306,6 @@ async def api_get_challenge_messages(request: web.Request) -> web.Response:
         
     user = await db.get_or_create_user(tg_user.id)
     partner_id = challenge["target_id"] if tg_user.id == challenge["creator_id"] else challenge["creator_id"]
-    
     if user["partner_id"] != partner_id:
         raise ApiError("Нет доступа к переписке бывшего партнёра", 403)
         
@@ -1542,12 +1313,8 @@ async def api_get_challenge_messages(request: web.Request) -> web.Response:
         after = max(0, int(request.query.get("after") or 0))
     except ValueError:
         after = 0
-    rs = await db._exec(
-        "SELECT id, sender_id, text, created_at FROM challenge_messages "
-        "WHERE challenge_id = ? AND id > ? ORDER BY id ASC",
-        (challenge_id, after)
-    )
-    messages = [{"id": r[0], "sender_id": r[1], "text": r[2], "created_at": r[3]} for r in rs.rows]
+        
+    messages = await db.get_challenge_messages(challenge_id, after)
     return web.json_response({"messages": messages})
 
 
@@ -1555,13 +1322,11 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
     challenge = await db.get_user_challenge(challenge_id)
-    
     if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Челлендж не найден", 404)
         
     user = await db.get_or_create_user(tg_user.id)
     partner_id = challenge["target_id"] if tg_user.id == challenge["creator_id"] else challenge["creator_id"]
-    
     if user["partner_id"] != partner_id:
         raise ApiError("Нельзя писать бывшему партнёру", 403)
 
@@ -1570,11 +1335,7 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
     if not text:
         raise ApiError("Введите текст", 400)
         
-    await db._exec(
-        "INSERT INTO challenge_messages (challenge_id, sender_id, text, created_at) VALUES (?, ?, ?, ?)",
-        (challenge_id, tg_user.id, text, int(time.time()))
-    )
-    
+    await db.add_challenge_message(challenge_id, tg_user.id, text)
     await db.bump_pair_rev(db.pair_key(challenge["creator_id"], challenge["target_id"]))
     notify(partner_id, f"💬 Новое сообщение по челленджу «{_short_text(challenge['text'])}»:\n\n{_short_text(text, 200)}")
     
@@ -1626,17 +1387,12 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
             event_time="",
             category="rest",
         )
-    except Exception as e:
+    except Exception:
         await db.add_balance(tg_user.id, cost)
         logging.exception("Ошибка при создании события покупки, средства возвращены")
         raise ApiError("Ошибка при создании события. Баллы возвращены.", 500)
     
-    notify(
-        user["partner_id"], 
-        f"🎁 Партнёр купил желание «{title}» на {fmt_range(date, '')}. Загляните в календарь!",
-        reply_markup=event_reply_keyboard(event["id"])
-    )
-
+    notify(user["partner_id"], f"🎁 Партнёр купил желание «{title}» на {fmt_range(date, '')}. Загляните в календарь!", reply_markup=event_reply_keyboard(event["id"]))
     return web.json_response({"status": "ok", "event": event_to_dict(event, tg_user.id)})
 
 
@@ -1644,15 +1400,9 @@ async def api_get_event_comments(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     event_id = _int_param(request, "id")
     event = await member_event(request, tg_user.id)
-    
     if event["category"] not in ("rest", "sex"):
         return web.json_response({"comments": []})
-
-    rs = await db._exec(
-        "SELECT id, user_id, text, created_at FROM event_comments WHERE event_id = ? ORDER BY created_at ASC",
-        (event_id,)
-    )
-    comments = [{"id": r[0], "sender_id": r[1], "text": r[2], "created_at": r[3]} for r in rs.rows]
+    comments = await db.get_event_comments(event_id)
     return web.json_response({"comments": comments})
 
 
@@ -1660,7 +1410,6 @@ async def api_post_event_comment(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event_id = _int_param(request, "id")
     event = await member_event(request, tg_user.id)
-    
     if event["category"] not in ("rest", "sex"):
         raise ApiError("Комментарии доступны только для Отдыха и Секса", 403)
 
@@ -1669,15 +1418,11 @@ async def api_post_event_comment(request: web.Request) -> web.Response:
     if not text:
         raise ApiError("Введите текст", 400)
 
-    await db._exec(
-        "INSERT INTO event_comments (event_id, user_id, text, created_at) VALUES (?, ?, ?, ?)",
-        (event_id, tg_user.id, text, int(time.time()))
-    )
-    
+    await db.add_event_comment(event_id, tg_user.id, text)
     await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
+    
     partner_id = event["target_user"] if tg_user.id == event["created_by"] else event["created_by"]
     notify(partner_id, f"💬 Новый комментарий к событию «{event['title']}»:\n\n{text}")
-    
     return web.json_response({"status": "ok"})
 
 
@@ -1685,7 +1430,6 @@ async def api_delete_challenge(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
     challenge = await db.get_user_challenge(challenge_id)
-    
     if not challenge:
         raise ApiError("Челлендж не найден", 404)
     if challenge["creator_id"] != tg_user.id:
@@ -1693,10 +1437,8 @@ async def api_delete_challenge(request: web.Request) -> web.Response:
     if challenge["status"] != "pending":
         raise ApiError("Нельзя удалить челлендж, который уже выполняется или завершен", 403)
 
-    await db._exec("DELETE FROM challenge_messages WHERE challenge_id = ?", (challenge_id,))
+    await db.delete_challenge_messages(challenge_id)
     await db.delete_user_challenge(challenge_id, tg_user.id)
-    await db.bump_pair_rev(db.pair_key(challenge["creator_id"], challenge["target_id"]))
-    
     return web.json_response({"status": "deleted"})
 
 
@@ -1704,10 +1446,8 @@ async def api_archive_challenge_manually(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
     challenge = await db.get_user_challenge(challenge_id)
-    
     if not challenge:
         raise ApiError("Челлендж не найден", 404)
-        
     if tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Нет доступа", 403)
 
@@ -1740,22 +1480,41 @@ def _respond(request: web.Request, etag: str, raw: bytes, gz: bytes, ctype: str,
     return web.Response(body=body, content_type=ctype, charset=_text_charset(ctype), headers=headers)
 
 
+_asset_versions_cache: tuple[tuple, dict[str, str]] | None = None
+
+
 def _asset_versions() -> dict[str, str]:
-    res = {}
+    """Кэшируем хэши файлов по их mtime_ns, чтобы не читать диск при каждом запросе."""
+    global _asset_versions_cache
+    
+    files = []
     for d in ("js", "css"):
         for p in (WEB_DIR / d).glob("*"):
             if p.is_file():
-                content = p.read_bytes()
-                res[p.name] = hashlib.sha1(content).hexdigest()[:8]
+                files.append((str(p), p.stat().st_mtime_ns))
+    
+    sig = tuple(sorted(files))
+    if _asset_versions_cache and _asset_versions_cache[0] == sig:
+        return _asset_versions_cache[1]
+    
+    res = {}
+    for path_str, _ in files:
+        p = Path(path_str)
+        content = p.read_bytes()
+        res[p.name] = hashlib.sha1(content).hexdigest()[:8]
+    
+    _asset_versions_cache = (sig, res)
     return res
 
 
 def _build_index() -> tuple:
+    """Кэширует итоговый HTML по mtime index.html и версиям ассетов."""
     global _index_cache
     versions = _asset_versions()
     sig = (INDEX_FILE.stat().st_mtime_ns, tuple(sorted(versions.items())))
     if _index_cache and _index_cache[0] == sig:
         return _index_cache
+        
     short = {name: ver for name, ver in versions.items()}
     html = INDEX_FILE.read_text(encoding="utf-8")
     html = ASSET_RE.sub(lambda m: f'{m[1]}="{m[2]}/{m[3]}?v={short.get(m[3], "0")}"', html)
@@ -1796,16 +1555,10 @@ async def send_due_reminders() -> None:
     for c in await db.reminder_candidates(lo, hi):
         tz = get_zone(c["tz"]) or timezone.utc
         local_now = now_utc.astimezone(tz)
-        if (
-            c["category"] in ("todo", "personal")
-            and c["time"]
-            and c.get("remind_before")
-        ):
+        if c["category"] in ("todo", "personal") and c["time"] and c.get("remind_before"):
             try:
                 hh, mm = c["time"].split(":")
-                event_dt_local = datetime.fromisoformat(
-                    f"{c['date']}T{hh}:{mm}:00"
-                ).replace(tzinfo=tz)
+                event_dt_local = datetime.fromisoformat(f"{c['date']}T{hh}:{mm}:00").replace(tzinfo=tz)
             except Exception:
                 continue
             remind_at = event_dt_local - timedelta(minutes=c["remind_before"])
@@ -1815,35 +1568,20 @@ async def send_due_reminders() -> None:
                 continue
             left = max(1, int((event_dt_local - local_now).total_seconds() // 60))
             prefix = "📝" if c["category"] == "personal" else "📌"
-            await safe_send(
-                c["user_id"],
-                f"{prefix} Напоминание: {c['title']} в {c['time']} (через {_humanize_minutes(left)}).",
-            )
+            await safe_send(c["user_id"], f"{prefix} Напоминание: {c['title']} в {c['time']} (через {_humanize_minutes(left)}).")
             continue
-        if (
-            local_now.strftime("%Y-%m-%d") != c["date"]
-            or local_now.hour < REMINDER_HOUR
-        ):
+        if local_now.strftime("%Y-%m-%d") != c["date"] or local_now.hour < REMINDER_HOUR:
             continue
         if not await db.mark_reminded(c["event_id"], c["user_id"]):
             continue
         at = f" в {c['time']}" if c["time"] else ""
         rng = fmt_range(c["date"], c.get("date_end", ""))
         if c["category"] == "todo":
-            await safe_send(
-                c["user_id"],
-                f"📌 Сегодня дело{at}{title_part(c['title'])}. Откройте календарь, чтобы посмотреть.",
-            )
+            await safe_send(c["user_id"], f"📌 Сегодня дело{at}{title_part(c['title'])}. Откройте календарь, чтобы посмотреть.")
         elif c["category"] == "personal":
-            await safe_send(
-                c["user_id"],
-                f"📝 Сегодня личное дело{at}{title_part(c['title'])}. Откройте календарь, чтобы посмотреть.",
-            )
+            await safe_send(c["user_id"], f"📝 Сегодня личное дело{at}{title_part(c['title'])}. Откройте календарь, чтобы посмотреть.")
         else:
-            await safe_send(
-                c["user_id"],
-                f"⏰ Сегодня у вас запланировано событие{at}{title_part(c['title'])} (на {rng}). Откройте календарь, чтобы посмотреть детали.",
-            )
+            await safe_send(c["user_id"], f"⏰ Сегодня у вас запланировано событие{at}{title_part(c['title'])} (на {rng}). Откройте календарь, чтобы посмотреть детали.")
 
 
 async def cleanup_old_reminders() -> None:
@@ -1852,16 +1590,12 @@ async def cleanup_old_reminders() -> None:
     cutoff_todos = (now - timedelta(days=182)).strftime("%Y-%m-%d")
     try:
         n = await db.purge_old_reminders(cutoff_reminders)
-        if n:
-            logging.info("Очищено старых напоминаний: %s", n)
-    except Exception:
-        logging.exception("Не удалось очистить старые напоминания")
+        if n: logging.info("Очищено старых напоминаний: %s", n)
+    except Exception: logging.exception("Не удалось очистить старые напоминания")
     try:
         n2 = await db.purge_old_todos(cutoff_todos)
-        if n2:
-            logging.info("Удалено старых дел (6+ мес): %s", n2)
-    except Exception:
-        logging.exception("Не удалось очистить старые дела")
+        if n2: logging.info("Удалено старых дел (6+ мес): %s", n2)
+    except Exception: logging.exception("Не удалось очистить старые дела")
 
 
 _last_cleanup_day: str = ""
@@ -1872,10 +1606,7 @@ async def reminder_loop() -> None:
     while True:
         try:
             now = int(time.time())
-            rs = await db._exec(
-                "SELECT telegram_id FROM users WHERE unlinked_at > 0 AND unlinked_at < ?",
-                (now - 24 * 3600,)
-            )
+            rs = await db._exec("SELECT telegram_id FROM users WHERE unlinked_at > 0 AND unlinked_at < ?", (now - 24 * 3600,))
             for row in rs.rows:
                 await db.finalize_unlink(row[0])
                 logging.info("Удалены данные пары по истечении 24 часов (user %s)", row[0])
@@ -1884,22 +1615,13 @@ async def reminder_loop() -> None:
             
             expired = await db.process_expired_challenges()
             for c in expired:
-                notify(
-                    c["target_id"],
-                    f"⌛ Челлендж «{_short_text(c['text'])}» не выполнен в срок. "
-                    f"С твоего баланса списано {c['penalty']} баллов."
-                )
-                notify(
-                    c["creator_id"],
-                    f"⌛ Челлендж «{_short_text(c['text'])}» просрочен. Партнёр потерял {c['penalty']} баллов."
-                )
+                notify(c["target_id"], f"⌛ Челлендж «{_short_text(c['text'])}» не выполнен в срок. С твоего баланса списано {c['penalty']} баллов.")
+                notify(c["creator_id"], f"⌛ Челлендж «{_short_text(c['text'])}» просрочен. Партнёр потерял {c['penalty']} баллов.")
             
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             if today != _last_cleanup_day:
                 _last_cleanup_day = today
                 await cleanup_old_reminders()
-                await backup_database()
-                
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1911,22 +1633,15 @@ async def main() -> None:
     global bot_username
     logging.basicConfig(level=logging.INFO)
     if not _webhook_from_env:
-        logging.warning(
-            "WEBHOOK_SECRET не задан в env — сгенерирован временный. "
-            "При рестарте webhook перестанет работать. Задайте WEBHOOK_SECRET."
-        )
+        logging.warning("WEBHOOK_SECRET не задан в env — сгенерирован временный. Задайте WEBHOOK_SECRET.")
     await db.init_db()
     bot_username = (await bot.get_me()).username
     with contextlib.suppress(Exception):
-        await bot.set_my_commands(
-            [
-                BotCommand(command="start", description="Открыть календарь"),
-                BotCommand(
-                    command="invite", description="Ссылка-приглашение для партнёра"
-                ),
-                BotCommand(command="unlink", description="Отвязать партнёра"),
-            ]
-        )
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Открыть календарь"),
+            BotCommand(command="invite", description="Ссылка-приглашение для партнёра"),
+            BotCommand(command="unlink", description="Отвязать партнёра"),
+        ])
 
     async def on_startup(app: web.Application):
         await bot.set_webhook(WEBHOOK_URL, secret_token=WEBHOOK_SECRET, drop_pending_updates=False)
@@ -1937,9 +1652,13 @@ async def main() -> None:
     app.router.add_get("/", index)
     app.router.add_get("/health", health_check)
     app.router.add_get(r"/{kind:(?:js|css)}/{name}", static_file)
+    
+    app.router.add_get("/api/config", api_config)
     app.router.add_get("/api/state", api_state)
+    
     app.router.add_get("/api/archive.json", api_archive)
     app.router.add_get("/api/todos/archive", api_archived_todos)
+    
     app.router.add_post("/api/events", api_create_event)
     app.router.add_put("/api/events/{id}", api_update_event)
     app.router.add_delete("/api/events/{id}", api_delete_event)
@@ -1947,15 +1666,17 @@ async def main() -> None:
     app.router.add_post("/api/events/{id}/idea", api_set_idea_response)
     app.router.add_post("/api/events/{id}/reaction", api_set_reaction)
     app.router.add_post("/api/events/{id}/comment", api_set_decline_comment)
+    
     app.router.add_post("/api/events/{id}/items", api_add_item)
     app.router.add_put("/api/events/{id}/items/{item_id}", api_set_item)
     app.router.add_delete("/api/events/{id}/items/{item_id}", api_delete_item)
     app.router.add_post("/api/events/{id}/items/{item_id}/move", api_move_item)
+    
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
+    
     app.router.add_post("/api/unlink", api_unlink)
     app.router.add_post("/api/unlink/restore", api_restore_unlink)
-    app.router.add_post("/api/challenges/{id}/archive", api_archive_challenge_manually)
     
     app.router.add_get("/api/challenges", api_get_challenges_data)
     app.router.add_post("/api/challenges", api_create_challenge)
@@ -1966,6 +1687,7 @@ async def main() -> None:
     app.router.add_delete("/api/challenges/{id}", api_delete_challenge)
     app.router.add_get("/api/challenges/{id}/messages", api_get_challenge_messages)
     app.router.add_post("/api/challenges/{id}/messages", api_post_challenge_message)
+    app.router.add_post("/api/challenges/{id}/archive", api_archive_challenge_manually)
     
     app.router.add_get("/api/shop", api_get_shop_items)
     app.router.add_post("/api/shop/buy", api_buy_shop_item)
@@ -1984,7 +1706,6 @@ async def main() -> None:
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     logging.info("Web app: http://0.0.0.0:%s  (public: %s)", PORT, WEBAPP_URL)
-    logging.info("Webhook endpoint: %s", WEBHOOK_URL)
     
     reminders = asyncio.create_task(reminder_loop())
     try:

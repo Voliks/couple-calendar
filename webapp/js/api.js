@@ -88,6 +88,38 @@ async function request(path, { method = "GET", body, etag } = {}) {
 }
 const api = async (path, opts) => (await request(path, opts)).data;
 
+// Загрузка и кэширование статики (цвета, идеи, реакции)
+async function loadConfig() {
+  const CONFIG_KEY = "config_v1";
+  const CACHE_TTL = 60 * 60 * 1000; // 1 час
+
+  try {
+    const saved = localStorage.getItem(CONFIG_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Date.now() - parsed.ts < CACHE_TTL) {
+        state.todo_colors = parsed.data.todo_colors;
+        state.allowed_reactions = parsed.data.allowed_reactions;
+        state.allowed_remind_before = parsed.data.allowed_remind_before;
+        state.sex_ideas = parsed.data.sex_ideas;
+        return;
+      }
+    }
+  } catch (e) {}
+
+  try {
+    const data = await api("/config");
+    state.todo_colors = data.todo_colors || [];
+    state.allowed_reactions = data.allowed_reactions || [];
+    state.allowed_remind_before = data.allowed_remind_before || [];
+    state.sex_ideas = data.sex_ideas || [];
+    
+    localStorage.setItem(CONFIG_KEY, JSON.stringify({ ts: Date.now(), data }));
+  } catch (e) {
+    console.warn("Не удалось загрузить конфиг", e);
+  }
+}
+
 function toast(text) {
   const el = document.createElement("div");
   el.className = "toast";
