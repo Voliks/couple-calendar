@@ -229,9 +229,28 @@ async function sendEventComment(eventId, inputEl) {
 function renderList() {
   const prevScrollY = window.scrollY;
   $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
-  const items = state.events
-    .filter((e) => dayHasDate(e, selected))
-    .map((e) => ({ id: String(e.id), html: cardHtml(e) }));
+  
+  // Сначала фильтруем события на выбранный день
+  const dayEvents = state.events.filter((e) => dayHasDate(e, selected));
+
+  // 🔥 МАГИЯ СОРТИРОВКИ:
+  const weight = (status) => {
+    if (status === "declined" || status === "expired") return 2; // В самый низ
+    if (status === "pending") return 0; // Вверх
+    return 1; // Accepted и остальные (например, done) в середину
+  };
+
+  dayEvents.sort((a, b) => {
+    // 1. Сначала по статусу (отклонённые вниз)
+    const wA = weight(statusKey(a));
+    const wB = weight(statusKey(b));
+    if (wA !== wB) return wA - wB;
+
+    // 2. Если статус одинаковый — по ID (новые сверху)
+    return b.id - a.id;
+  });
+
+  const items = dayEvents.map((e) => ({ id: String(e.id), html: cardHtml(e) }));
 
   const ok = reconcile($("list"), items);
   if (!ok) {
