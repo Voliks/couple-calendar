@@ -344,13 +344,17 @@ async def api_middleware(request: web.Request, handler):
     if not response.headers.get("Content-Security-Policy"):
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://telegram.org; "
-            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' https://telegram.org; " # <-- убран 'unsafe-inline'
+            "style-src 'self' 'unsafe-inline'; "        # стили оставляем, их много в HTML
             "img-src 'self' data: blob: https://*.supabase.co; "
             "connect-src 'self' https://*.supabase.co; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'; "
             "frame-ancestors https://web.telegram.org https://*.telegram.org;"
         )
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
 
     _add_cors(request, response)
     return response
@@ -1759,8 +1763,9 @@ def _build_index() -> tuple:
     short = {name: ver for name, ver in versions.items()}
     html = INDEX_FILE.read_text(encoding="utf-8")
     html = ASSET_RE.sub(lambda m: f'{m[1]}="{m[2]}/{m[3]}?v={short.get(m[3], "0")}"', html)
-    inject = "<script>window.ASSET_V=" + json.dumps(short) + ";</script>"
-    html = html.replace("</head>", inject + "</head>", 1)
+     # Передаем версии через <meta>, чтобы не использовать unsafe-inline в CSP
+    meta_assets = '<meta name="asset-versions" content="' + json.dumps(short).replace('"', '&quot;') + '">'
+    html = html.replace("</head>", meta_assets + "</head>", 1)
     raw = html.encode("utf-8")
     etag = '"' + hashlib.sha1(raw).hexdigest()[:20] + '"'
     _index_cache = (sig, etag, raw, gzip.compress(raw, 9))

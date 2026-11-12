@@ -145,7 +145,18 @@ $("unlink").onclick = () => {
 /* ---------- ТУРБО-ЗАГРУЗКА МОДУЛЕЙ ---------- */
 
 // ?v=<mtime> подставляет сервер (window.ASSET_V), поэтому ручные номера версий не нужны
-const assetUrl = (name) => `js/${name}` + (window.ASSET_V?.[name] ? `?v=${window.ASSET_V[name]}` : "");
+// Читаем версии из <meta name="asset-versions">
+let ASSET_V = {};
+try {
+  const meta = document.querySelector('meta[name="asset-versions"]');
+  if (meta && meta.content) {
+    // Браузер сам раскодирует &quot; в кавычки при чтении атрибута
+    ASSET_V = JSON.parse(meta.content);
+  }
+} catch (e) {
+  console.warn("Не удалось прочитать версии ассетов", e);
+}
+const assetUrl = (name) => `js/${name}` + (ASSET_V[name] ? `?v=${ASSET_V[name]}` : "");
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
