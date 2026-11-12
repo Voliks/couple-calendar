@@ -72,16 +72,51 @@ async function openChallenges({ refresh = false } = {}) {
   }
 }
 
-function statusLabel(c) {
-  const isCreator = c.is_creator;
-  switch (c.status) {
-    case "pending":   return isCreator ? "⏳ Ждёт" : "⏳ Тебе бросили";
-    case "submitted": return "🔍 На проверке";
-    case "approved":  return "✅ Выполнено";
-    case "rejected":  return "❌ Отклонено";
-    case "archived":  return "🗄 В архиве";
-    default:          return c.status;
+function openChallengeDetails(id) {
+  const c = allChallenges.find(x => x.id === id);
+  if (!c) return;
+  currentChallenge = c;
+  // Инвалидируем ответы предыдущего чата при быстром переключении карточек.
+  chatRequestSeq++;
+  chatLoadPromise = null;
+
+  $("challengeChatOverlay").hidden = false;
+  tg.BackButton?.show();
+
+  $("chatCategory").textContent = c.category;
+  $("chatTaskText").textContent = c.text;
+  $("chatReward").textContent = `🏆 ${c.reward} баллов`;
+  
+  let deadlineStr = "";
+  if (c.deadline > 0) {
+    const d = new Date(c.deadline * 1000);
+    deadlineStr = ` | ⏳ До: ${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
   }
+  $("chatStatus").textContent = `Статус: ${statusLabel(c)}${deadlineStr}`;
+
+  const hasPhoto = !!c.photo_id;
+  $("chatPhotoBlock").style.display = hasPhoto ? "block" : "none";
+  
+  if (hasPhoto) {
+    const count = c.photo_id.split(",").filter(Boolean).length;
+    $("chatViewPhotoBtn").textContent = count > 1 ? `🖼 Посмотреть фото (${count} шт.)` : `🖼 Посмотреть фото`;
+  }
+
+  const isTarget = !c.is_creator;
+  const canAttach = isTarget && (c.status === "pending" || c.status === "rejected");
+  $("chatActionBlock").style.display = canAttach ? "block" : "none";
+
+  const isCreator = c.is_creator;
+  // Показываем кнопки создателю, если челлендж ещё активен (не approved, не rejected и не archived)
+  const canReview = isCreator && (c.status === "pending" || c.status === "submitted");
+  $("chatCreatorActions").style.display = canReview ? "flex" : "none";
+
+  // Кнопка удаления доступна создателю, пока челлендж не завершён
+  const canDelete = isCreator && c.status === "pending";
+  $("chatDeleteBlock").style.display = canDelete ? "block" : "none";
+
+  loadMessages(id);
+  startChatPolling(id);
 }
 
 function renderChallenges(listToRender = []) {

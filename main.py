@@ -1460,17 +1460,16 @@ async def api_challenge_action(request: web.Request) -> web.Response:
     is_creator = tg_user.id == challenge["creator_id"]
 
     if action == "approve" and is_creator:
-        if not await db.transition_challenge(challenge_id, ("submitted",), "approved"):
-            raise ApiError("Этот вызов нельзя засчитать в текущем статусе", 409)
+        # Разрешаем засчитать, если челлендж ещё не завершён (pending или submitted)
+        if not await db.transition_challenge(challenge_id, ("pending", "submitted"), "approved"):
+            raise ApiError("Этот вызов нельзя засчитать (возможно, он уже завершён)", 409)
         await db.add_balance(challenge["target_id"], challenge["reward"])
         notify(challenge["target_id"], f"✅ Твой челлендж засчитан! Тебе начислено {challenge['reward']} баллов.")
     elif action == "reject" and is_creator:
-        if not await db.transition_challenge(challenge_id, ("submitted",), "rejected"):
-            raise ApiError("Этот вызов нельзя отклонить в текущем статусе", 409)
-        notify(challenge["target_id"], f"❌ Челлендж отклонён: «{_short_text(challenge['text'])}». Можно прислать другое фото.")
-    else:
-        raise ApiError("Недопустимое действие", 400)
-        
+        # Разрешаем отклонить из любого активного статуса
+        if not await db.transition_challenge(challenge_id, ("pending", "submitted"), "rejected"):
+            raise ApiError("Этот вызов нельзя отклонить (возможно, он уже завершён)", 409)
+
     return web.json_response({"status": "ok"})
 
 
