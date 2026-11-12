@@ -704,6 +704,7 @@ async def api_state(request: web.Request) -> web.Response:
             "balance": balance,
             "has_new_challenges": has_new,
             "moods": moods,
+            "is_unlinking": bool(user.get("unlinked_at")),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -1148,8 +1149,16 @@ async def api_unlink(request: web.Request) -> web.Response:
     partner = await db.unlink_partners(tg_user.id)
     if partner is None:
         raise ApiError("У вас нет партнёра", 409)
-    notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
-    return web.json_response({"status": "unlinked"})
+    notify(partner, "💔 Партнёр отвязал вас. У вас есть 24 часа, чтобы восстановить связь и вернуть данные.")
+    return web.json_response({"status": "soft_unlinked"})
+
+async def api_restore_unlink(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    partner = await db.restore_partners(tg_user.id)
+    if partner is None:
+        raise ApiError("Не удалось восстановить (время истекло или партнёр не найден)", 409)
+    notify(partner, "💞 Связь восстановлена! Все ваши общие данные вернулись на место.")
+    return web.json_response({"status": "restored"})
 
 
 async def api_get_mood(request: web.Request) -> web.Response:
@@ -1875,6 +1884,16 @@ async def reminder_loop() -> None:
     global _last_cleanup_day
     while True:
         try:
+            # 0. Проверяем, не истекли ли 24 часа с момента мягкой отвязки
+            now = int(time.time())
+            rs = await db._exec(
+                "SELECT telegram_id FROM users WHERE unlinked_at > 0 AND unlinked_at < ?",
+                (now - 24 * 3600,)
+            )
+            for row in rs.rows:
+                await db.finalize_unlink(row[0])
+                logging.info("Удалены данные пары по истечении 24 часов (user %s)", row[0])
+
             # 1. Отправляем обычные напоминания
             await send_due_reminders()
             
@@ -1924,6 +1943,7 @@ async def main() -> None:
                     command="invite", description="Ссылка-приглашение для партнёра"
                 ),
                 BotCommand(command="unlink", description="Отвязать партнёра"),
+                BotCommand(command="unlink/restore", description="Восстановить отвязанного партнёра"),
             ]
         )
 
@@ -1956,6 +1976,7 @@ async def main() -> None:
     app.router.add_post("/api/sex-ideas", api_add_sex_idea)
     app.router.add_delete("/api/sex-ideas/{id}", api_delete_sex_idea)
     app.router.add_post("/api/unlink", api_unlink)
+    app.router.add_post("/api/unlink/restore", api_restore_unlink)
     app.router.add_post("/api/challenges/{id}/archive", api_archive_challenge_manually)
     
     # Челленджи и магазин

@@ -18,7 +18,6 @@
 html, body { margin: 0; background: var(--bg); color: var(--text);
   font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   
-/* Увеличили нижний отступ, чтобы контент не залезал под таб-бар */
 body { padding: 12px 14px calc(90px + env(safe-area-inset-bottom, 0px)); max-width: 560px; margin: 0 auto; }
 button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -78,7 +77,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .list-title { margin: 20px 0 10px; font-size: 15px; font-weight: 600; color: var(--hint); }
 .empty { padding: 28px 12px; text-align: center; color: var(--hint); }
 
-/* Оптимизация рендеринга карточек (браузер не будет рисовать то, что не видно) */
 .card { 
   border-radius: 14px; 
   padding: 12px 14px; 
@@ -122,7 +120,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .stat-cell.declined .num { color: rgb(var(--declined)); }
 .stat-cell.pending  .num { color: rgb(var(--pending)); }
 
-/* --- НИЖНЯЯ ПАНЕЛЬ (зафиксирована в index.html, но стили для кнопок) --- */
 .nav-btn {
   display: flex;
   flex-direction: column;
@@ -138,22 +135,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   position: relative;
   cursor: pointer;
 }
+.nav-btn:active { opacity: 0.6; }
+.nav-icon { font-size: 22px; line-height: 1; }
+.nav-label { font-size: 10px; font-weight: 500; }
 
-.nav-btn:active {
-  opacity: 0.6;
-}
-
-.nav-icon {
-  font-size: 22px;
-  line-height: 1;
-}
-
-.nav-label {
-  font-size: 10px;
-  font-weight: 500;
-}
-
-/* --- МОДАЛЬНЫЕ ОКНА И ФОРМЫ --- */
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; z-index: 20; }
 .sheet { width: 100%; max-width: 560px; margin: 0 auto; background: var(--bg); border-radius: 20px 20px 0 0;
   max-height: 92vh; overflow-y: auto;
@@ -349,34 +334,17 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
 .challenge-actions .primary { background: var(--accent); color: #fff; }
 .challenge-actions .success { background: rgb(var(--accepted)); color: #fff; }
 .challenge-actions .danger { background: rgb(var(--declined)); color: #fff; }
-.challenge-card {
-  cursor: pointer;
-  transition: transform 0.1s, background 0.1s;
-}
-.challenge-card:active {
-  transform: scale(0.98);
-  background: rgba(0, 0, 0, 0.1);
-}
-/* Выполненные челленджи */
-.challenge-card.done {
-  background: rgba(0, 0, 0, 0.04);
-  border-left-color: rgb(var(--accepted));
-}
-.challenge-card.done .challenge-text {
-  text-decoration: line-through;
-  opacity: 0.6;
-}
-.challenge-card.done .challenge-reward {
-  color: rgb(var(--accepted));
-}
+.challenge-card { cursor: pointer; transition: transform 0.1s, background 0.1s; }
+.challenge-card:active { transform: scale(0.98); background: rgba(0, 0, 0, 0.1); }
+.challenge-card.done { background: rgba(0, 0, 0, 0.04); border-left-color: rgb(var(--accepted)); }
+.challenge-card.done .challenge-text { text-decoration: line-through; opacity: 0.6; }
+.challenge-card.done .challenge-reward { color: rgb(var(--accepted)); }
 
-/* Магазин */
 .shop-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px; border-radius: 12px; background: var(--bg2); border-left: 4px solid #8b5cf6; cursor: pointer; }
 .shop-title { flex: 1; font-size: 14px; font-weight: 500; line-height: 1.4; word-break: break-word; }
 .shop-cost { font-size: 14px; font-weight: 700; white-space: nowrap; color: #eab308; }
 .shop-cost.poor { color: rgb(var(--declined)); }
 
-/* Комментарии к событиям */
 .event-comments-block { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(0,0,0,0.05); }
 .event-comments-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .cm { padding: 6px 10px; border-radius: 8px; font-size: 13px; background: rgba(0,0,0,0.04); word-break: break-word; }
@@ -390,105 +358,35 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
    Блок «Настроение дня»
    ============================================================ */
 
-.mood-block {
-  margin: 0 0 10px;
-  padding: 8px 12px;
-  border-radius: 12px;
-  background: var(--bg2);
-  transition: background .15s;
-}
-.mood-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: pointer;
-  user-select: none;
-}
-.mood-title {
-  font-size: 13px;
-  color: var(--hint);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.mood-chevron {
-  font-size: 9px;
-  opacity: .6;
-  transition: transform .2s;
-}
-.mood-block.collapsed .mood-chevron {
-  transform: rotate(-90deg);
-}
-.mood-edit {
-  font-size: 13px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--accent);
-  font-weight: 600;
-}
+.mood-block { margin: 0 0 10px; padding: 8px 12px; border-radius: 12px; background: var(--bg2); transition: background .15s; }
+.mood-head { display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; }
+.mood-title { font-size: 13px; color: var(--hint); display: flex; align-items: center; gap: 6px; }
+.mood-chevron { font-size: 9px; opacity: .6; transition: transform .2s; }
+.mood-block.collapsed .mood-chevron { transform: rotate(-90deg); }
+.mood-edit { font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--bg); color: var(--accent); font-weight: 600; }
 .mood-edit:active { background: rgba(36,129,204,.2); }
-
-.mood-body {
-  margin-top: 8px;
-  overflow: hidden;
-}
-.mood-block.collapsed .mood-body {
-  display: none;
-}
-
+.mood-body { margin-top: 8px; overflow: hidden; }
+.mood-block.collapsed .mood-body { display: none; }
 .mood-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.mood-cell {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: 10px;
-  background: var(--bg);
-  font-size: 13px;
-  min-width: 0;
-  flex: 1 1 45%;
-}
+.mood-cell { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 10px; background: var(--bg); font-size: 13px; min-width: 0; flex: 1 1 45%; }
 .mood-cell .m-emoji { font-size: 20px; line-height: 1; flex-shrink: 0; }
 .mood-cell .m-text { flex: 1; word-break: break-word; }
 .mood-cell .m-label { font-size: 10px; color: var(--hint); margin-bottom: 1px; }
 .mood-cell.empty { opacity: .65; }
 
-/* Быстрый ввод настроения (селект + текст) */
-.mood-quick-input {
-  margin-top: 8px;
+.mood-quick-input { margin-top: 8px; }
+.mood-quick-row { display: flex; gap: 6px; align-items: stretch; }
+.mood-quick-select { width: auto; min-width: 60px; flex-shrink: 0; padding: 0 10px; border-radius: 10px; background: var(--bg); border: 1px solid transparent; font-size: 20px; text-align: center; cursor: pointer; appearance: none; -webkit-appearance: none; }
+.mood-quick-select:focus { outline: 2px solid var(--accent); }
+.mood-quick-row input { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 10px; border: 1px solid transparent; background: var(--bg); font-size: 14px; }
+.mood-quick-row input:focus { outline: 2px solid var(--accent); }
+
+/* --- БАННЕР ВОССТАНОВЛЕНИЯ --- */
+.restore-block {
+  margin-bottom: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(var(--declined), .12);
+  border-left: 4px solid rgb(var(--declined));
 }
-.mood-quick-row {
-  display: flex;
-  gap: 6px;
-  align-items: stretch;
-}
-.mood-quick-select {
-  width: auto;
-  min-width: 60px;
-  flex-shrink: 0;
-  padding: 0 10px;
-  border-radius: 10px;
-  background: var(--bg);
-  border: 1px solid transparent;
-  font-size: 20px;
-  text-align: center;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-}
-.mood-quick-select:focus {
-  outline: 2px solid var(--accent);
-}
-.mood-quick-row input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid transparent;
-  background: var(--bg);
-  font-size: 14px;
-}
-.mood-quick-row input:focus {
-  outline: 2px solid var(--accent);
-}
+.restore-text { font-size: 13px; margin-bottom: 10px; color: var(--text); }

@@ -68,6 +68,12 @@ function render() {
       badge.hidden = !state.has_new_challenges;
     }
 
+    // Показываем баннер мягкой отвязки, если он есть
+    const restoreBlock = $("restoreBlock");
+    if (restoreBlock) {
+      restoreBlock.hidden = !state.is_unlinking;
+    }
+
     // Плашка «сегодня» + настроение дня (mood.js)
     if (typeof window.refreshMoodAndBanner === "function") {
       window.refreshMoodAndBanner();
@@ -130,11 +136,12 @@ $("copy").onclick = async () => {
   try { await navigator.clipboard.writeText(state.invite_link); toast("Ссылка скопирована"); }
   catch { toast(state.invite_link); }
 };
+
 $("unlink").onclick = () => {
-  confirmDialog("Отвязать партнёра? Все общие события будут удалены безвозвратно. Личные (приватные) события останутся у вас.", async () => {
+  confirmDialog("Отвязать партнёра? Общие данные будут удалены навсегда через 24 часа. За это время вы сможете передумать и восстановить связь.", async () => {
     try {
       await api("/unlink", { method: "POST" });
-      toast("Партнёр отвязан");
+      toast("Связь разорвана. У вас 24 часа на откат.");
       for (const k of Object.keys(monthCache)) delete monthCache[k];
       etag = null;
       await load();
@@ -142,15 +149,24 @@ $("unlink").onclick = () => {
   });
 };
 
+$("restoreBtn")?.addEventListener("click", async () => {
+  try {
+    await api("/unlink/restore", { method: "POST" });
+    toast("Связь восстановлена!");
+    etag = null;
+    await load();
+  } catch (e) {
+    toast(e.message);
+  }
+});
+
 /* ---------- ТУРБО-ЗАГРУЗКА МОДУЛЕЙ ---------- */
 
-// ?v=<mtime> подставляет сервер (window.ASSET_V), поэтому ручные номера версий не нужны
 // Читаем версии из <meta name="asset-versions">
 let ASSET_V = {};
 try {
   const meta = document.querySelector('meta[name="asset-versions"]');
   if (meta && meta.content) {
-    // Браузер сам раскодирует &quot; в кавычки при чтении атрибута
     ASSET_V = JSON.parse(meta.content);
   }
 } catch (e) {
@@ -218,54 +234,35 @@ function startPolling() {
   let delay = BASE;
   let pollTimer = null;
 
-  // Функция, которая выполняется по таймеру
   const tick = async () => {
-    // Если вкладка скрыта или открыто окно — не шлём запрос, 
-    // просто ждём следующего тика (или возобновления)
     if (canPoll()) {
       try {
         const changed = await load(true);
         delay = changed ? BASE : Math.min(delay * 2, MAX);
-      } catch (e) {
-        // Ошибки при фоновом опросе игнорируем (load уже обрабатывает 401)
-      }
+      } catch (e) {}
     }
-    // Планируем следующий вызов
     scheduleNext();
   };
 
-  // Планировщик с сохранением ID таймера
   const scheduleNext = () => {
     if (pollTimer) clearTimeout(pollTimer);
-    
-    // Если вкладка скрыта, мы НЕ ставим таймер.
-    // Он запустится только когда сработает событие visibilitychange.
     if (document.hidden) return; 
-    
     pollTimer = setTimeout(tick, delay);
   };
 
-  // Первый запуск
   scheduleNext();
 
-  // Сбрасываем задержку на минимум при любом действии пользователя
-  document.addEventListener("pointerdown", () => { 
-    delay = BASE; 
-  }, { passive: true });
+  document.addEventListener("pointerdown", () => { delay = BASE; }, { passive: true });
 
-  // Обработка смены видимости вкладки
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
-      // Вкладка ушла в фон — убиваем таймер
       if (pollTimer) {
         clearTimeout(pollTimer);
         pollTimer = null;
       }
     } else {
-      // Вкладка вернулась — сбрасываем задержку и делаем мгновенный запрос
       delay = BASE;
       if (canPoll()) {
-        // Можно сразу сделать load, а потом запустить таймер
         load(true).finally(() => scheduleNext());
       } else {
         scheduleNext();
