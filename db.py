@@ -492,8 +492,6 @@ async def _m16_indexes_and_idea_keys() -> None:
 
 async def _m16_add_done_status() -> None:
     """Добавляет status='done' в CHECK. Идемпотентно: если таблица уже с done — пропуск."""
-    # Уже применяли? Проверяем через попытку вставить недопустимый статус в temp — проще:
-    # смотрим sql CREATE через sqlite_master (Turso тоже отдаёт).
     try:
         rs = await _exec(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='events'"
@@ -505,7 +503,6 @@ async def _m16_add_done_status() -> None:
     except Exception:
         log.exception("Не удалось проверить DDL events, продолжаем миграцию done")
 
-    # Убираем временную таблицу от предыдущей неудачной попытки
     await _exec("DROP TABLE IF EXISTS events_new")
     
     await _exec("""
@@ -534,7 +531,6 @@ async def _m16_add_done_status() -> None:
         )
     """)
     
-    # Копируем и переименовываем в одной транзакции
     await _batch([
         (
             "INSERT INTO events_new (id, created_by, target_user, title, description, date, date_end, time, category, status, checklist, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility) "
@@ -667,6 +663,10 @@ async def _m26_fix_schema() -> None:
                 log.error("Не удалось добавить колонку %s: %s", name, e)
 
 
+async def _m28_soft_unlink() -> None:
+    await _add_column("users", "unlinked_at", "INTEGER NOT NULL DEFAULT 0")
+
+
 MIGRATIONS = [
     (1, _m1_base),
     (2, _m2_features),
@@ -684,8 +684,6 @@ MIGRATIONS = [
     (14, _m14_checklist_position),
     (15, _m15_personal_section),
     (16, _m16_indexes_and_idea_keys),
-    # Было дважды (16) — вторая миграция никогда не выполнялась при current>=16.
-    # Перенесена на v27; функция идемпотентна (пропуск, если done уже в CHECK).
     (17, _m17_challenges),
     (18, _m18_challenge_messages),
     (19, _m19_challenge_deadline),
@@ -697,6 +695,7 @@ MIGRATIONS = [
     (25, _m25_alt_time),
     (26, _m26_fix_schema),
     (27, _m16_add_done_status),
+    (28, _m28_soft_unlink),
 ]
 
 _REQUIRED_COLUMNS = {
@@ -798,7 +797,7 @@ def _json_ideas() -> list[dict]:
     return _ideas_cache
 
 
-USER_COLS = "telegram_id, partner_id, invite_code, invite_expires, tz"
+USER_COLS = "telegram_id, partner_id, invite_code, invite_expires, tz, unlinked_at"
 
 
 def _user(r) -> dict | None:
@@ -810,6 +809,7 @@ def _user(r) -> dict | None:
         "invite_code": r[2],
         "invite_expires": r[3] or 0,
         "tz": r[4] or "",
+        "unlinked_at": r[5] or 0,
     }
 
 
@@ -872,36 +872,84 @@ async def link_partners(a: int, b: int) -> bool:
 
 
 async def unlink_partners(user_id: int) -> int | None:
+    """Мягкая отвязка: ставит partner_id = NULL, но не удаляет события (дает 24 часа на откат)."""
     user = await get_user(user_id)
     if not user or user["partner_id"] is None:
         return None
     p = user["partner_id"]
     
-    pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
-    pargs = (user_id, p, p, user_id)
-    
-    pk = pair_key(user_id, p)
-    
-    await _batch(
-        [
-            (f"DELETE FROM checklist_items WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
-            (f"DELETE FROM reminders WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
-            (f"DELETE FROM reactions WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
-            (f"DELETE FROM idea_responses WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
-            (f"DELETE FROM event_comments WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
-            (f"DELETE FROM events WHERE {pair}", pargs),
-            
-            ("DELETE FROM challenge_messages WHERE challenge_id IN (SELECT id FROM user_challenges WHERE creator_id IN (?, ?) OR target_id IN (?, ?))", (user_id, p, user_id, p)),
-            ("DELETE FROM user_challenges WHERE creator_id IN (?, ?) OR target_id IN (?, ?)", (user_id, p, user_id, p)),
-            
-            ("DELETE FROM moods WHERE pair_key = ?", (pk,)),
-            
-            ("UPDATE users SET partner_id = NULL, invite_expires = 0 WHERE telegram_id IN (?, ?)", (user_id, p)),
-        ]
+    # Записываем время отвязки для обоих, чтобы знать, когда удалять
+    now = int(time.time())
+    await _exec(
+        "UPDATE users SET partner_id = NULL, invite_expires = 0, unlinked_at = ? WHERE telegram_id IN (?, ?)",
+        (now, user_id, p)
     )
     return p
 
 
+async def restore_partners(user_id: int) -> int | None:
+    """Восстановление связи, если прошло меньше 24 часов."""
+    user = await get_user(user_id)
+    if not user or not user.get("unlinked_at"):
+        return None
+    
+    # Ищем бывшего партнёра (у кого такое же время отвязки)
+    rs = await _exec(
+        "SELECT telegram_id FROM users WHERE unlinked_at = ? AND telegram_id != ?",
+        (user["unlinked_at"], user_id)
+    )
+    if not rs.rows:
+        return None
+    partner_id = rs.rows[0][0]
+    
+    # Восстанавливаем связь и стираем метку
+    await _exec(
+        "UPDATE users SET partner_id = CASE telegram_id WHEN ? THEN ? ELSE ? END, unlinked_at = 0 WHERE telegram_id IN (?, ?)",
+        (user_id, partner_id, user_id, user_id, partner_id)
+    )
+    return partner_id
+
+
+async def finalize_unlink(user_id: int) -> None:
+    """Полное удаление данных пары (вызывается, когда истекли 24 часа)."""
+    user = await get_user(user_id)
+    if not user or not user.get("unlinked_at"):
+        return
+    p = None
+    # Ищем бывшего партнёра по времени
+    rs = await _exec(
+        "SELECT telegram_id FROM users WHERE unlinked_at = ? AND telegram_id != ?",
+        (user["unlinked_at"], user_id)
+    )
+    if rs.rows:
+        p = rs.rows[0][0]
+    
+    # Выполняем полную очистку
+    pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
+    pargs = (user_id, p, p, user_id) if p else (user_id, user_id, user_id, user_id)
+    pk = pair_key(user_id, p) if p else ""
+    
+    stmts = [
+        (f"DELETE FROM checklist_items WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
+        (f"DELETE FROM reminders WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
+        (f"DELETE FROM reactions WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
+        (f"DELETE FROM idea_responses WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
+        (f"DELETE FROM event_comments WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
+        (f"DELETE FROM events WHERE {pair}", pargs),
+    ]
+    if p:
+        stmts.extend([
+            ("DELETE FROM challenge_messages WHERE challenge_id IN (SELECT id FROM user_challenges WHERE creator_id IN (?, ?) OR target_id IN (?, ?))", (user_id, p, user_id, p)),
+            ("DELETE FROM user_challenges WHERE creator_id IN (?, ?) OR target_id IN (?, ?)", (user_id, p, user_id, p)),
+            ("DELETE FROM moods WHERE pair_key = ?", (pk,)),
+        ])
+    await _batch(stmts)
+    
+    # Стираем метки у обоих
+    if p:
+        await _exec("UPDATE users SET unlinked_at = 0 WHERE telegram_id IN (?, ?)", (user_id, p))
+    else:
+        await _exec("UPDATE users SET unlinked_at = 0 WHERE telegram_id = ?", (user_id,))
 EVENT_COLS = (
     "id, created_by, target_user, title, description, date, date_end, time, category, status, "
     "color, priority, reaction, reaction_by, decline_comment, "
@@ -1209,6 +1257,7 @@ async def set_decline_comment_slot(event_id: int, slot: str, comment: str) -> No
         raise ValueError("bad slot")
     col = "decline_comment_creator" if slot == "creator" else "decline_comment_target"
     await _exec(f"UPDATE events SET {col} = ? WHERE id = ?", (comment, event_id))
+
 
 async def set_alt_time(event_id: int, date: str, time: str) -> None:
     await _exec("UPDATE events SET alt_date = ?, alt_time = ? WHERE id = ?", (date, time, event_id))
@@ -1616,18 +1665,24 @@ async def process_expired_challenges() -> list[dict]:
             # Кто-то успел отправить фото (submitted) или архивировать. Штраф не берем.
             continue
             
-        # 2. Списываем штраф (не уходя в минус)
+        # 2. Списываем штраф (атомарно, не уходя в минус)
         actual_penalty = 0
         if penalty > 0:
+            # Читаем баланс для уведомления (не для логики)
             bal_rs = await _exec("SELECT balance FROM users WHERE telegram_id = ?", (target_id,))
             current_balance = bal_rs.rows[0][0] if bal_rs.rows else 0
-            actual_penalty = min(penalty, current_balance)
-            if actual_penalty > 0:
-                await _exec(
-                    "UPDATE users SET balance = balance - ? WHERE telegram_id = ?",
-                    (actual_penalty, target_id)
-                )
-                
+            
+            # Атомарный апдейт: вычитаем штраф, но не уходим в минус
+            rs_bal = await _exec(
+                "UPDATE users SET balance = CASE WHEN balance >= ? THEN balance - ? ELSE 0 END "
+                "WHERE telegram_id = ?",
+                (penalty, penalty, target_id)
+            )
+            
+            # Считаем, сколько реально списалось (для текста уведомления)
+            if rs_bal.affected > 0 and current_balance > 0:
+                actual_penalty = min(penalty, current_balance)
+
         expired.append({
             "id": cid, "creator_id": creator_id, "target_id": target_id,
             "text": text, "reward": reward, "penalty": actual_penalty
