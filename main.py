@@ -1189,14 +1189,15 @@ async def _supabase_request(method: str, endpoint: str, body: dict = None) -> di
             text = await resp.text()
             if not resp.ok:
                 logging.error("Supabase error %s: %s", resp.status, text)
-                raise ApiError("Ошибка хранилища", 502)
+                # Возвращаем текст ошибки клиенту для отладки
+                raise ApiError(f"Ошибка хранилища ({resp.status}): {text[:120]}", 502)
             try:
                 return json.loads(text)
             except Exception:
                 return {}
     except aiohttp.ClientError as e:
         logging.error("Supabase network error: %s", e)
-        raise ApiError("Ошибка хранилища", 502)
+        raise ApiError("Ошибка сети при обращении к хранилищу", 502)
 
 
 def _storage_url(url: str) -> str:
@@ -1250,10 +1251,21 @@ async def api_upload_photo_url(request: web.Request) -> web.Response:
     path = f"challenge_{challenge_id}_{int(time.time())}_{secrets.token_hex(4)}.{ext}"
 
     res = await _supabase_request("POST", f"/object/upload/sign/{PHOTO_BUCKET}/{path}", {})
-    upload_url = _storage_url(res.get("signed_url") or res.get("signedUrl") or res.get("signedURL"))
+    
+    # Пытаемся найти ссылку в разных форматах ответа Supabase
+    upload_url = _storage_url(
+        res.get("signed_url") 
+        or res.get("signedUrl") 
+        or res.get("signedURL") 
+        or res.get("url")
+        or (res.get("data") or {}).get("signedUrl")
+        or (res.get("data") or {}).get("signed_url")
+    )
     
     if not upload_url:
-        raise ApiError("Не удалось подготовить загрузку", 502)
+        logging.error("Supabase upload-url response (не найдена ссылка): %s", res)
+        raise ApiError("Не удалось подготовить загрузку (в ответе нет ссылки)", 502)
+    
     return web.json_response({"upload_url": upload_url, "path": path})
 
 
@@ -1281,10 +1293,20 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
         raise ApiError("Фото не найдено", 404)
 
     res = await _supabase_request("POST", f"/object/sign/{PHOTO_BUCKET}/{path}", {"expiresIn": 3600})
-    view_url = _storage_url(res.get("signedURL") or res.get("signedUrl"))
+    
+    # Пытаемся найти ссылку в разных форматах
+    view_url = _storage_url(
+        res.get("signedURL") 
+        or res.get("signedUrl") 
+        or res.get("signed_url")
+        or res.get("url")
+        or (res.get("data") or {}).get("signedUrl")
+    )
     
     if not view_url:
+        logging.error("Supabase photo-url response (не найдена ссылка): %s", res)
         raise ApiError("Ошибка получения ссылки на фото", 502)
+        
     return web.json_response({"view_url": view_url})
 
 
