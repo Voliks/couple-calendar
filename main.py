@@ -27,7 +27,7 @@ from aiogram.types import (
 from aiogram.utils.web_app import safe_parse_webapp_init_data
 # pyright: reportMissingImports=false
 import aiohttp
-from aiohttp import web, FormData
+from aiohttp import web
 
 from common import (
     BOT_TOKEN,
@@ -580,7 +580,7 @@ async def health_check(_: web.Request) -> web.Response:
 # --- СТАТИКА ДЛЯ КЛИЕНТА ---
 async def api_config(request: web.Request) -> web.Response:
     """Статичные данные (цвета, реакции, время напоминаний). Идеи — в /api/state."""
-    user = authenticate(request)
+    authenticate(request)  # проверка авторизации и rate limit
     body = json.dumps({
         "todo_colors": db.TODO_COLORS,
         "allowed_reactions": ALLOWED_REACTIONS,
@@ -1117,10 +1117,34 @@ BACKUP_BUCKET = os.getenv("SUPABASE_BACKUP_BUCKET", "").strip()
 BACKUP_KEEP_DAYS = int(os.getenv("SUPABASE_BACKUP_KEEP_DAYS", "14"))
 
 
+# --- Глобальная сессия для Supabase (переиспользуем TCP/TLS соединения) ---
+_supabase_session: aiohttp.ClientSession | None = None
+
+
+def _supabase_session_get() -> aiohttp.ClientSession:
+    """Возвращает singleton-сессию для Supabase. Один TLS handshake на весь процесс."""
+    global _supabase_session
+    if _supabase_session is None or _supabase_session.closed:
+        timeout = aiohttp.ClientTimeout(total=20, connect=10)
+        _supabase_session = aiohttp.ClientSession(
+            timeout=timeout,
+            connector=aiohttp.TCPConnector(limit=10, ttl_dns_cache=300),
+        )
+    return _supabase_session
+
+
+async def _supabase_session_close() -> None:
+    """Закрывает сессию при завершении. Безопасно вызывать повторно."""
+    global _supabase_session
+    if _supabase_session is not None and not _supabase_session.closed:
+        await _supabase_session.close()
+    _supabase_session = None
+
+
 # --- Прямая работа с Supabase Storage через aiohttp ---
 
 async def _supabase_request(method: str, endpoint: str, body: dict = None) -> dict:
-    """Запрос к REST API Supabase Storage."""
+    """Запрос к REST API Supabase Storage через общую сессию (keep-alive)."""
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise ApiError("Хранилище не настроено", 503)
     headers = {
@@ -1129,17 +1153,21 @@ async def _supabase_request(method: str, endpoint: str, body: dict = None) -> di
         "Content-Type": "application/json",
     }
     url = f"{SUPABASE_URL}/storage/v1{endpoint}"
-    
-    async with aiohttp.ClientSession() as session:
+
+    session = _supabase_session_get()
+    try:
         async with session.request(method, url, json=body, headers=headers) as resp:
             text = await resp.text()
             if not resp.ok:
                 logging.error("Supabase error %s: %s", resp.status, text)
-                raise ApiError(f"Ошибка хранилища", 502)
+                raise ApiError("Ошибка хранилища", 502)
             try:
                 return json.loads(text)
             except Exception:
                 return {}
+    except aiohttp.ClientError as e:
+        logging.error("Supabase network error: %s", e)
+        raise ApiError("Ошибка хранилища", 502)
 
 
 def _storage_url(url: str) -> str:
@@ -1776,6 +1804,8 @@ async def main() -> None:
         with contextlib.suppress(Exception):
             await bot.delete_webhook()
         await runner.cleanup()
+        with contextlib.suppress(Exception):
+            await _supabase_session_close()
         await close_voice_http()
         await bot.session.close()
         await db.close_db()
