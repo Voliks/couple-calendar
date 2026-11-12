@@ -279,30 +279,8 @@ async def _add_column(table: str, name: str, ddl: str) -> bool:
 
 
 async def _m1_base() -> None:
-    await _exec(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            telegram_id INTEGER PRIMARY KEY,
-            partner_id  INTEGER,
-            invite_code TEXT NOT NULL UNIQUE
-        )
-        """
-    )
-    await _exec(
-        """
-        CREATE TABLE IF NOT EXISTS events (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_by  INTEGER NOT NULL,
-            target_user INTEGER NOT NULL,
-            title       TEXT NOT NULL,
-            description TEXT NOT NULL DEFAULT '',
-            date        TEXT NOT NULL,
-            status      TEXT NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending', 'accepted', 'declined')),
-            checklist   TEXT NOT NULL DEFAULT '[]'
-        )
-        """
-    )
+    await _exec("CREATE TABLE IF NOT EXISTS users (telegram_id INTEGER PRIMARY KEY, partner_id INTEGER, invite_code TEXT NOT NULL UNIQUE)")
+    await _exec("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, created_by INTEGER NOT NULL, target_user INTEGER NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined')), checklist TEXT NOT NULL DEFAULT '[]')")
     await _add_column("events", "checklist", "TEXT NOT NULL DEFAULT '[]'")
 
 
@@ -311,102 +289,34 @@ async def _m2_features() -> None:
     await _add_column("users", "tz", "TEXT NOT NULL DEFAULT ''")
     await _add_column("events", "time", "TEXT NOT NULL DEFAULT ''")
     await _add_column("events", "category", "TEXT NOT NULL DEFAULT 'rest'")
-    await _exec(
-        """
-        CREATE TABLE IF NOT EXISTS checklist_items (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id INTEGER NOT NULL,
-            text     TEXT NOT NULL,
-            checked  INTEGER NOT NULL DEFAULT 0
-        )
-        """
-    )
-    await _exec(
-        """
-        CREATE TABLE IF NOT EXISTS reminders (
-            event_id INTEGER NOT NULL,
-            user_id  INTEGER NOT NULL,
-            PRIMARY KEY (event_id, user_id)
-        )
-        """
-    )
+    await _exec("CREATE TABLE IF NOT EXISTS checklist_items (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL, text TEXT NOT NULL, checked INTEGER NOT NULL DEFAULT 0)")
+    await _exec("CREATE TABLE IF NOT EXISTS reminders (event_id INTEGER NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY (event_id, user_id))")
 
 
 async def _m3_sex_ideas() -> None:
-    await _exec(
-        """
-        CREATE TABLE IF NOT EXISTS sex_ideas (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id        INTEGER NOT NULL,
-            category_title TEXT NOT NULL,
-            text           TEXT NOT NULL
-        )
-        """
-    )
+    await _exec("CREATE TABLE IF NOT EXISTS sex_ideas (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, category_title TEXT NOT NULL, text TEXT NOT NULL)")
 
 
 async def _m4_ideas_source() -> None:
     await _add_column("sex_ideas", "source", "TEXT NOT NULL DEFAULT 'sex'")
-    await _exec(
-        "DELETE FROM sex_ideas WHERE category_title NOT IN "
-        "('🔥 Страстная ночь', '🌹 Романтический вечер', '✨ Эксперименты и фантазии')"
-    )
+    await _exec("DELETE FROM sex_ideas WHERE category_title NOT IN ('🔥 Страстная ночь', '🌹 Романтический вечер', '✨ Эксперименты и фантазии')")
 
 
 async def _m5_fix_checklist() -> None:
     await _add_column("checklist_items", "checked", "INTEGER NOT NULL DEFAULT 0")
-    await _exec(
-        """
-        CREATE TABLE IF NOT EXISTS checklist_items (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id INTEGER NOT NULL,
-            text     TEXT NOT NULL,
-            checked  INTEGER NOT NULL DEFAULT 0
-        )
-        """
-    )
+    await _exec("CREATE TABLE IF NOT EXISTS checklist_items (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL, text TEXT NOT NULL, checked INTEGER NOT NULL DEFAULT 0)")
     await _add_column("events", "time", "TEXT NOT NULL DEFAULT ''")
     await _add_column("events", "category", "TEXT NOT NULL DEFAULT 'rest'")
-    await _exec(
-        """
-        CREATE TABLE IF NOT EXISTS reminders (
-            event_id INTEGER NOT NULL,
-            user_id  INTEGER NOT NULL,
-            PRIMARY KEY (event_id, user_id)
-        )
-        """
-    )
+    await _exec("CREATE TABLE IF NOT EXISTS reminders (event_id INTEGER NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY (event_id, user_id))")
 
 
 async def _m6_hidden_ideas() -> None:
-    await _exec(
-        """
-        CREATE TABLE IF NOT EXISTS hidden_ideas (
-            user_id   INTEGER NOT NULL,
-            idea_key  TEXT NOT NULL,
-            PRIMARY KEY (user_id, idea_key)
-        )
-        """
-    )
+    await _exec("CREATE TABLE IF NOT EXISTS hidden_ideas (user_id INTEGER NOT NULL, idea_key TEXT NOT NULL, PRIMARY KEY (user_id, idea_key))")
 
 
 async def _m7_archived_ideas() -> None:
-    await _exec(
-        """
-        CREATE TABLE IF NOT EXISTS archived_ideas (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            category_title TEXT NOT NULL,
-            text           TEXT NOT NULL,
-            source         TEXT NOT NULL,
-            archived_by    INTEGER,
-            archived_at    INTEGER NOT NULL
-        )
-        """
-    )
-    await _exec(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_archived_ideas "
-        "ON archived_ideas (category_title, text, source)"
-    )
+    await _exec("CREATE TABLE IF NOT EXISTS archived_ideas (id INTEGER PRIMARY KEY AUTOINCREMENT, category_title TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, archived_by INTEGER, archived_at INTEGER NOT NULL)")
+    await _exec("CREATE UNIQUE INDEX IF NOT EXISTS uq_archived_ideas ON archived_ideas (category_title, text, source)")
 
 
 async def _m8_todo() -> None:
@@ -426,16 +336,7 @@ async def _m10_two_comments() -> None:
 
 
 async def _m11_reactions_table() -> None:
-    await _exec(
-        """
-        CREATE TABLE IF NOT EXISTS reactions (
-            event_id INTEGER NOT NULL,
-            user_id  INTEGER NOT NULL,
-            emoji    TEXT NOT NULL,
-            PRIMARY KEY (event_id, user_id)
-        )
-        """
-    )
+    await _exec("CREATE TABLE IF NOT EXISTS reactions (event_id INTEGER NOT NULL, user_id INTEGER NOT NULL, emoji TEXT NOT NULL, PRIMARY KEY (event_id, user_id))")
 
 
 async def _m12_todo_remind_before() -> None:
@@ -443,18 +344,7 @@ async def _m12_todo_remind_before() -> None:
 
 
 async def _m13_idea_responses() -> None:
-    await _exec(
-        """
-        CREATE TABLE IF NOT EXISTS idea_responses (
-            event_id  INTEGER NOT NULL,
-            idea_idx  INTEGER NOT NULL,
-            status    TEXT NOT NULL,
-            user_id   INTEGER NOT NULL,
-            ts        INTEGER NOT NULL,
-            PRIMARY KEY (event_id, idea_idx)
-        )
-        """
-    )
+    await _exec("CREATE TABLE IF NOT EXISTS idea_responses (event_id INTEGER NOT NULL, idea_idx INTEGER NOT NULL, status TEXT NOT NULL, user_id INTEGER NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY (event_id, idea_idx))")
 
 
 async def _m14_checklist_position() -> None:
@@ -465,10 +355,7 @@ async def _m14_checklist_position() -> None:
 async def _m15_personal_section() -> None:
     await _add_column("events", "date_end", "TEXT NOT NULL DEFAULT ''")
     await _add_column("events", "visibility", "TEXT NOT NULL DEFAULT 'shared'")
-    await _exec(
-        "CREATE INDEX IF NOT EXISTS idx_events_personal "
-        "ON events (created_by, category, date)"
-    )
+    await _exec("CREATE INDEX IF NOT EXISTS idx_events_personal ON events (created_by, category, date)")
 
 
 async def _m16_indexes_and_idea_keys() -> None:
@@ -484,58 +371,36 @@ async def _m16_indexes_and_idea_keys() -> None:
             continue
         n = int(m.group(1))
         if 1 <= n <= len(raw):
-            stmts.append(("INSERT OR IGNORE INTO hidden_ideas (user_id, idea_key) VALUES (?, ?)",
-                          (user_id, _idea_key(*raw[n - 1]))))
+            stmts.append(("INSERT OR IGNORE INTO hidden_ideas (user_id, idea_key) VALUES (?, ?)", (user_id, _idea_key(*raw[n - 1]))))
         stmts.append(("DELETE FROM hidden_ideas WHERE user_id = ? AND idea_key = ?", (user_id, key)))
     await _batch(stmts)
 
 
 async def _m16_add_done_status() -> None:
-    """Добавляет status='done' в CHECK. Идемпотентно: если таблица уже с done — пропуск."""
     try:
-        rs = await _exec(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='events'"
-        )
+        rs = await _exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='events'")
         ddl = (rs.rows[0][0] or "") if rs.rows else ""
         if "'done'" in ddl or '"done"' in ddl:
             log.info("events.status уже поддерживает 'done' — пропуск rebuild")
             return
     except Exception:
-        log.exception("Не удалось проверить DDL events, продолжаем миграцию done")
+        pass
 
     await _exec("DROP TABLE IF EXISTS events_new")
-    
     await _exec("""
         CREATE TABLE events_new (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_by  INTEGER NOT NULL,
-            target_user INTEGER NOT NULL,
-            title       TEXT NOT NULL,
-            description TEXT NOT NULL DEFAULT '',
-            date        TEXT NOT NULL,
-            date_end    TEXT NOT NULL DEFAULT '',
-            time        TEXT NOT NULL DEFAULT '',
-            category    TEXT NOT NULL DEFAULT 'rest',
-            status      TEXT NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending', 'accepted', 'declined', 'done')),
-            checklist   TEXT NOT NULL DEFAULT '[]',
-            color       TEXT NOT NULL DEFAULT '',
-            priority    TEXT NOT NULL DEFAULT '',
-            reaction    TEXT NOT NULL DEFAULT '',
-            reaction_by INTEGER,
-            decline_comment TEXT NOT NULL DEFAULT '',
-            decline_comment_creator TEXT NOT NULL DEFAULT '',
-            decline_comment_target TEXT NOT NULL DEFAULT '',
-            remind_before INTEGER NOT NULL DEFAULT 0,
-            visibility  TEXT NOT NULL DEFAULT 'shared'
+            id INTEGER PRIMARY KEY AUTOINCREMENT, created_by INTEGER NOT NULL, target_user INTEGER NOT NULL,
+            title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', date TEXT NOT NULL,
+            date_end TEXT NOT NULL DEFAULT '', time TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT 'rest',
+            status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined', 'done')),
+            checklist TEXT NOT NULL DEFAULT '[]', color TEXT NOT NULL DEFAULT '', priority TEXT NOT NULL DEFAULT '',
+            reaction TEXT NOT NULL DEFAULT '', reaction_by INTEGER, decline_comment TEXT NOT NULL DEFAULT '',
+            decline_comment_creator TEXT NOT NULL DEFAULT '', decline_comment_target TEXT NOT NULL DEFAULT '',
+            remind_before INTEGER NOT NULL DEFAULT 0, visibility TEXT NOT NULL DEFAULT 'shared'
         )
     """)
-    
     await _batch([
-        (
-            "INSERT INTO events_new (id, created_by, target_user, title, description, date, date_end, time, category, status, checklist, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility) "
-            "SELECT id, created_by, target_user, title, description, date, date_end, time, category, status, checklist, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility FROM events"
-        , ()),
+        ("INSERT INTO events_new (id, created_by, target_user, title, description, date, date_end, time, category, status, checklist, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility) SELECT id, created_by, target_user, title, description, date, date_end, time, category, status, checklist, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility FROM events", ()),
         ("DROP TABLE events", ()),
         ("ALTER TABLE events_new RENAME TO events", ()),
     ])
@@ -543,32 +408,11 @@ async def _m16_add_done_status() -> None:
 
 async def _m17_challenges() -> None:
     await _add_column("users", "balance", "INTEGER NOT NULL DEFAULT 0")
-
-    await _exec("""
-        CREATE TABLE IF NOT EXISTS user_challenges (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            creator_id  INTEGER NOT NULL,
-            target_id   INTEGER NOT NULL,
-            category    TEXT NOT NULL,
-            text        TEXT NOT NULL,
-            reward      INTEGER NOT NULL DEFAULT 10,
-            status      TEXT NOT NULL DEFAULT 'pending',
-            photo_id    TEXT NOT NULL DEFAULT '',
-            created_at  INTEGER NOT NULL
-        )
-    """)
+    await _exec("CREATE TABLE IF NOT EXISTS user_challenges (id INTEGER PRIMARY KEY AUTOINCREMENT, creator_id INTEGER NOT NULL, target_id INTEGER NOT NULL, category TEXT NOT NULL, text TEXT NOT NULL, reward INTEGER NOT NULL DEFAULT 10, status TEXT NOT NULL DEFAULT 'pending', photo_id TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)")
 
 
 async def _m18_challenge_messages() -> None:
-    await _exec("""
-        CREATE TABLE IF NOT EXISTS challenge_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            challenge_id INTEGER NOT NULL,
-            sender_id INTEGER NOT NULL,
-            text TEXT NOT NULL,
-            created_at INTEGER NOT NULL
-        )
-    """)
+    await _exec("CREATE TABLE IF NOT EXISTS challenge_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, challenge_id INTEGER NOT NULL, sender_id INTEGER NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL)")
 
 
 async def _m19_challenge_deadline() -> None:
@@ -576,14 +420,7 @@ async def _m19_challenge_deadline() -> None:
 
 
 async def _m20_shop_items() -> None:
-    await _exec("""
-        CREATE TABLE IF NOT EXISTS shop_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            cost INTEGER NOT NULL,
-            emoji TEXT DEFAULT '🎁'
-        )
-    """)
+    await _exec("CREATE TABLE IF NOT EXISTS shop_items (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, cost INTEGER NOT NULL, emoji TEXT DEFAULT '🎁')")
     rs = await _exec("SELECT COUNT(*) FROM shop_items")
     if rs.rows[0][0] == 0:
         await _exec("INSERT INTO shop_items (title, cost, emoji) VALUES (?, ?, ?)", ("Массаж", 50, "💆"))
@@ -592,15 +429,7 @@ async def _m20_shop_items() -> None:
 
 
 async def _m21_event_comments() -> None:
-    await _exec("""
-        CREATE TABLE IF NOT EXISTS event_comments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            text TEXT NOT NULL,
-            created_at INTEGER NOT NULL
-        )
-    """)
+    await _exec("CREATE TABLE IF NOT EXISTS event_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL, user_id INTEGER NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL)")
 
 
 async def _m22_last_viewed() -> None:
@@ -617,20 +446,8 @@ async def _m23_performance_indexes() -> None:
 
 
 async def _m24_moods() -> None:
-    await _exec("""
-        CREATE TABLE IF NOT EXISTS moods (
-            pair_key   TEXT NOT NULL,
-            user_id    INTEGER NOT NULL,
-            date       TEXT NOT NULL,
-            emoji      TEXT NOT NULL DEFAULT '',
-            text       TEXT NOT NULL DEFAULT '',
-            updated_at INTEGER NOT NULL,
-            PRIMARY KEY (pair_key, user_id, date)
-        )
-    """)
-    await _exec(
-        "CREATE INDEX IF NOT EXISTS idx_moods_pair_date ON moods (pair_key, date)"
-    )
+    await _exec("CREATE TABLE IF NOT EXISTS moods (pair_key TEXT NOT NULL, user_id INTEGER NOT NULL, date TEXT NOT NULL, emoji TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, PRIMARY KEY (pair_key, user_id, date))")
+    await _exec("CREATE INDEX IF NOT EXISTS idx_moods_pair_date ON moods (pair_key, date)")
 
 
 async def _m25_alt_time() -> None:
@@ -639,71 +456,39 @@ async def _m25_alt_time() -> None:
 
 
 async def _m26_fix_schema() -> None:
-    """Починка схемы для баз, которые прошли миграцию 16 (возможно, дважды)."""
     await _exec("DROP TABLE IF EXISTS events_new")
-    
     try:
         cols = await _columns("events")
     except DbError:
-        log.error("Не удалось прочитать колонки events в миграции 26")
         return
-
-    expected = {
-        "date_end": "TEXT NOT NULL DEFAULT ''",
-        "visibility": "TEXT NOT NULL DEFAULT 'shared'",
-        "alt_date": "TEXT NOT NULL DEFAULT ''",
-        "alt_time": "TEXT NOT NULL DEFAULT ''",
-    }
+    expected = {"date_end": "TEXT NOT NULL DEFAULT ''", "visibility": "TEXT NOT NULL DEFAULT 'shared'", "alt_date": "TEXT NOT NULL DEFAULT ''", "alt_time": "TEXT NOT NULL DEFAULT ''"}
     for name, ddl in expected.items():
         if name not in cols:
-            log.warning("Миграция 26: добавляю колонку events.%s", name)
             try:
                 await _exec(f"ALTER TABLE events ADD COLUMN {name} {ddl}")
-            except DbError as e:
-                log.error("Не удалось добавить колонку %s: %s", name, e)
+            except DbError:
+                pass
 
 
 async def _m28_soft_unlink() -> None:
     await _add_column("users", "unlinked_at", "INTEGER NOT NULL DEFAULT 0")
 
 
+async def _m29_pair_rev() -> None:
+    await _exec("CREATE TABLE IF NOT EXISTS pair_rev (pair_key TEXT PRIMARY KEY, rev INTEGER NOT NULL DEFAULT 1)")
+
+
 MIGRATIONS = [
-    (1, _m1_base),
-    (2, _m2_features),
-    (3, _m3_sex_ideas),
-    (4, _m4_ideas_source),
-    (5, _m5_fix_checklist),
-    (6, _m6_hidden_ideas),
-    (7, _m7_archived_ideas),
-    (8, _m8_todo),
-    (9, _m9_reactions),
-    (10, _m10_two_comments),
-    (11, _m11_reactions_table),
-    (12, _m12_todo_remind_before),
-    (13, _m13_idea_responses),
-    (14, _m14_checklist_position),
-    (15, _m15_personal_section),
-    (16, _m16_indexes_and_idea_keys),
-    (17, _m17_challenges),
-    (18, _m18_challenge_messages),
-    (19, _m19_challenge_deadline),
-    (20, _m20_shop_items),
-    (21, _m21_event_comments),
-    (22, _m22_last_viewed),
-    (23, _m23_performance_indexes),
-    (24, _m24_moods),
-    (25, _m25_alt_time),
-    (26, _m26_fix_schema),
-    (27, _m16_add_done_status),
-    (28, _m28_soft_unlink),
+    (1, _m1_base), (2, _m2_features), (3, _m3_sex_ideas), (4, _m4_ideas_source), (5, _m5_fix_checklist),
+    (6, _m6_hidden_ideas), (7, _m7_archived_ideas), (8, _m8_todo), (9, _m9_reactions), (10, _m10_two_comments),
+    (11, _m11_reactions_table), (12, _m12_todo_remind_before), (13, _m13_idea_responses), (14, _m14_checklist_position),
+    (15, _m15_personal_section), (16, _m16_indexes_and_idea_keys), (17, _m17_challenges), (18, _m18_challenge_messages),
+    (19, _m19_challenge_deadline), (20, _m20_shop_items), (21, _m21_event_comments), (22, _m22_last_viewed),
+    (23, _m23_performance_indexes), (24, _m24_moods), (25, _m25_alt_time), (26, _m26_fix_schema),
+    (27, _m16_add_done_status), (28, _m28_soft_unlink), (29, _m29_pair_rev),
 ]
 
-_REQUIRED_COLUMNS = {
-    15: [
-        ("events", "date_end", "TEXT NOT NULL DEFAULT ''"),
-        ("events", "visibility", "TEXT NOT NULL DEFAULT 'shared'"),
-    ],
-}
+_REQUIRED_COLUMNS = {15: [("events", "date_end", "TEXT NOT NULL DEFAULT ''"), ("events", "visibility", "TEXT NOT NULL DEFAULT 'shared'")]}
 
 
 async def _ensure_required_columns() -> None:
@@ -711,37 +496,24 @@ async def _ensure_required_columns() -> None:
         for table, name, ddl in cols:
             try:
                 exists = name in await _columns(table)
-            except DbError as e:
-                log.error("Не удалось прочитать PRAGMA table_info(%s): %s", table, e)
+            except DbError:
                 continue
             if exists:
-                log.debug("Колонка %s.%s уже есть", table, name)
                 continue
             try:
                 await _exec(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
-                log.warning(
-                    "До-добавлена колонка %s.%s (миграция v%s была применена частично)",
-                    table, name, version,
-                )
-            except DbError as e:
-                log.error("Не удалось до-добавить колонку %s.%s: %s", table, name, e)
-
+            except DbError:
+                pass
     try:
-        await _exec(
-            "CREATE INDEX IF NOT EXISTS idx_events_personal "
-            "ON events (created_by, category, date)"
-        )
-    except DbError as e:
-        log.error("Не удалось создать индекс idx_events_personal: %s", e)
+        await _exec("CREATE INDEX IF NOT EXISTS idx_events_personal ON events (created_by, category, date)")
+    except DbError:
+        pass
 
 
 async def _migrate() -> None:
     await _exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
     current = (await _exec("SELECT MAX(version) FROM schema_version")).rows[0][0] or 0
     log.info("Текущая версия схемы: %s", current)
-    
-    # ПРИНУДИТЕЛЬНАЯ ПРОВЕРКА: если база говорит, что она на 26+, но колонок нет — 
-    # откатываем версию, чтобы миграция 26 выполнилась заново.
     try:
         cols = await _columns("events")
         if "alt_date" not in cols and current >= 26:
@@ -758,6 +530,7 @@ async def _migrate() -> None:
             await _exec("INSERT INTO schema_version (version) VALUES (?)", (version,))
     await _ensure_required_columns()
 
+
 def _idea_key(category: str, text: str) -> str:
     return "json_h" + hashlib.sha1(f"{category}\n{text}".encode("utf-8")).hexdigest()[:12]
 
@@ -769,7 +542,6 @@ def _read_json_ideas_raw() -> list[tuple[str, str]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        log.exception("Не удалось прочитать sex_ideas.json")
         return []
     if not isinstance(data, dict):
         return []
@@ -789,11 +561,7 @@ def _json_ideas() -> list[dict]:
     if _ideas_cache is None:
         raw = _read_json_ideas_raw()
         last = {t.strip().lower(): i for i, (_, t) in enumerate(raw)}
-        _ideas_cache = [
-            {"id": _idea_key(c, t), "category_title": c, "text": t}
-            for i, (c, t) in enumerate(raw)
-            if last[t.strip().lower()] == i
-        ]
+        _ideas_cache = [{"id": _idea_key(c, t), "category_title": c, "text": t} for i, (c, t) in enumerate(raw) if last[t.strip().lower()] == i]
     return _ideas_cache
 
 
@@ -803,18 +571,16 @@ USER_COLS = "telegram_id, partner_id, invite_code, invite_expires, tz, unlinked_
 def _user(r) -> dict | None:
     if not r:
         return None
-    return {
-        "telegram_id": r[0],
-        "partner_id": r[1],
-        "invite_code": r[2],
-        "invite_expires": r[3] or 0,
-        "tz": r[4] or "",
-        "unlinked_at": r[5] or 0,
-    }
+    return {"telegram_id": r[0], "partner_id": r[1], "invite_code": r[2], "invite_expires": r[3] or 0, "tz": r[4] or "", "unlinked_at": r[5] or 0}
 
 
 def _new_code() -> str:
     return secrets.token_urlsafe(9)
+
+
+def pair_key(a: int, b: int) -> str:
+    x, y = sorted((int(a), int(b)))
+    return f"{x}:{y}"
 
 
 async def get_user(telegram_id: int) -> dict | None:
@@ -827,10 +593,7 @@ async def get_or_create_user(telegram_id: int) -> dict:
     if user:
         return user
     for _ in range(5):
-        await _exec(
-            "INSERT OR IGNORE INTO users (telegram_id, invite_code, invite_expires) VALUES (?, ?, ?)",
-            (telegram_id, _new_code(), int(time.time()) + INVITE_TTL),
-        )
+        await _exec("INSERT OR IGNORE INTO users (telegram_id, invite_code, invite_expires) VALUES (?, ?, ?)", (telegram_id, _new_code(), int(time.time()) + INVITE_TTL))
         user = await get_user(telegram_id)
         if user:
             return user
@@ -847,10 +610,7 @@ async def ensure_invite(user: dict) -> dict:
         return user
     for _ in range(5):
         try:
-            await _exec(
-                "UPDATE users SET invite_code = ?, invite_expires = ? WHERE telegram_id = ?",
-                (_new_code(), int(time.time()) + INVITE_TTL, user["telegram_id"]),
-            )
+            await _exec("UPDATE users SET invite_code = ?, invite_expires = ? WHERE telegram_id = ?", (_new_code(), int(time.time()) + INVITE_TTL, user["telegram_id"]))
         except DbError:
             continue
         return await get_user(user["telegram_id"])
@@ -862,73 +622,43 @@ async def set_timezone(telegram_id: int, tz: str) -> None:
 
 
 async def link_partners(a: int, b: int) -> bool:
-    rs = await _exec(
-        "UPDATE users SET partner_id = CASE telegram_id WHEN ? THEN ? ELSE ? END "
-        "WHERE telegram_id IN (?, ?) AND "
-        "(SELECT COUNT(*) FROM users WHERE telegram_id IN (?, ?) AND partner_id IS NULL) = 2",
-        (a, b, a, a, b, a, b),
-    )
+    rs = await _exec("UPDATE users SET partner_id = CASE telegram_id WHEN ? THEN ? ELSE ? END WHERE telegram_id IN (?, ?) AND (SELECT COUNT(*) FROM users WHERE telegram_id IN (?, ?) AND partner_id IS NULL) = 2", (a, b, a, a, b, a, b))
     return rs.affected == 2
 
 
 async def unlink_partners(user_id: int) -> int | None:
-    """Мягкая отвязка: ставит partner_id = NULL, но не удаляет события (дает 24 часа на откат)."""
     user = await get_user(user_id)
     if not user or user["partner_id"] is None:
         return None
     p = user["partner_id"]
-    
-    # Записываем время отвязки для обоих, чтобы знать, когда удалять
     now = int(time.time())
-    await _exec(
-        "UPDATE users SET partner_id = NULL, invite_expires = 0, unlinked_at = ? WHERE telegram_id IN (?, ?)",
-        (now, user_id, p)
-    )
+    await _exec("UPDATE users SET partner_id = NULL, invite_expires = 0, unlinked_at = ? WHERE telegram_id IN (?, ?)", (now, user_id, p))
     return p
 
 
 async def restore_partners(user_id: int) -> int | None:
-    """Восстановление связи, если прошло меньше 24 часов."""
     user = await get_user(user_id)
     if not user or not user.get("unlinked_at"):
         return None
-    
-    # Ищем бывшего партнёра (у кого такое же время отвязки)
-    rs = await _exec(
-        "SELECT telegram_id FROM users WHERE unlinked_at = ? AND telegram_id != ?",
-        (user["unlinked_at"], user_id)
-    )
+    rs = await _exec("SELECT telegram_id FROM users WHERE unlinked_at = ? AND telegram_id != ?", (user["unlinked_at"], user_id))
     if not rs.rows:
         return None
     partner_id = rs.rows[0][0]
-    
-    # Восстанавливаем связь и стираем метку
-    await _exec(
-        "UPDATE users SET partner_id = CASE telegram_id WHEN ? THEN ? ELSE ? END, unlinked_at = 0 WHERE telegram_id IN (?, ?)",
-        (user_id, partner_id, user_id, user_id, partner_id)
-    )
+    await _exec("UPDATE users SET partner_id = CASE telegram_id WHEN ? THEN ? ELSE ? END, unlinked_at = 0 WHERE telegram_id IN (?, ?)", (user_id, partner_id, user_id, user_id, partner_id))
     return partner_id
 
 
 async def finalize_unlink(user_id: int) -> None:
-    """Полное удаление данных пары (вызывается, когда истекли 24 часа)."""
     user = await get_user(user_id)
     if not user or not user.get("unlinked_at"):
         return
     p = None
-    # Ищем бывшего партнёра по времени
-    rs = await _exec(
-        "SELECT telegram_id FROM users WHERE unlinked_at = ? AND telegram_id != ?",
-        (user["unlinked_at"], user_id)
-    )
+    rs = await _exec("SELECT telegram_id FROM users WHERE unlinked_at = ? AND telegram_id != ?", (user["unlinked_at"], user_id))
     if rs.rows:
         p = rs.rows[0][0]
-    
-    # Выполняем полную очистку
     pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
     pargs = (user_id, p, p, user_id) if p else (user_id, user_id, user_id, user_id)
     pk = pair_key(user_id, p) if p else ""
-    
     stmts = [
         (f"DELETE FROM checklist_items WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
         (f"DELETE FROM reminders WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
@@ -944,119 +674,67 @@ async def finalize_unlink(user_id: int) -> None:
             ("DELETE FROM moods WHERE pair_key = ?", (pk,)),
         ])
     await _batch(stmts)
-    
-    # Стираем метки у обоих
     if p:
         await _exec("UPDATE users SET unlinked_at = 0 WHERE telegram_id IN (?, ?)", (user_id, p))
     else:
         await _exec("UPDATE users SET unlinked_at = 0 WHERE telegram_id = ?", (user_id,))
-EVENT_COLS = (
-    "id, created_by, target_user, title, description, date, date_end, time, category, status, "
-    "color, priority, reaction, reaction_by, decline_comment, "
-    "decline_comment_creator, decline_comment_target, remind_before, visibility, "
-    "alt_date, alt_time"
-)
+
+
+async def bump_pair_rev(pair_key_value: str) -> None:
+    if not pair_key_value:
+        return
+    await _exec("INSERT INTO pair_rev (pair_key, rev) VALUES (?, 1) ON CONFLICT(pair_key) DO UPDATE SET rev = rev + 1", (pair_key_value,))
+
+
+async def get_pair_rev(pair_key_value: str) -> int:
+    if not pair_key_value:
+        return 0
+    rs = await _exec("SELECT rev FROM pair_rev WHERE pair_key = ?", (pair_key_value,))
+    return rs.rows[0][0] if rs.rows else 0
+
+
+EVENT_COLS = "id, created_by, target_user, title, description, date, date_end, time, category, status, color, priority, reaction, reaction_by, decline_comment, decline_comment_creator, decline_comment_target, remind_before, visibility, alt_date, alt_time"
 
 
 def _event(r) -> dict | None:
     if not r:
         return None
-    return {
-        "id": r[0],
-        "created_by": r[1],
-        "target_user": r[2],
-        "title": r[3],
-        "description": r[4],
-        "date": r[5],
-        "date_end": r[6] or r[5],
-        "time": r[7] or "",
-        "category": r[8],
-        "status": r[9],
-        "color": r[10] or "",
-        "priority": r[11] or "",
-        "reaction": r[12] or "",
-        "reaction_by": r[13],
-        "decline_comment": r[14] or "",
-        "decline_comment_creator": r[15] or "",
-        "decline_comment_target": r[16] or "",
-        "remind_before": r[17] or 0,
-        "visibility": r[18] or "shared",
-        "alt_date": r[19] or "",
-        "alt_time": r[20] or "",
-        "reactions": {},
-        "idea_responses": {},
-        "checklist": [],
-        "comments": [],
-    }
+    return {"id": r[0], "created_by": r[1], "target_user": r[2], "title": r[3], "description": r[4], "date": r[5], "date_end": r[6] or r[5], "time": r[7] or "", "category": r[8], "status": r[9], "color": r[10] or "", "priority": r[11] or "", "reaction": r[12] or "", "reaction_by": r[13], "decline_comment": r[14] or "", "decline_comment_creator": r[15] or "", "decline_comment_target": r[16] or "", "remind_before": r[17] or 0, "visibility": r[18] or "shared", "alt_date": r[19] or "", "alt_time": r[20] or "", "reactions": {}, "idea_responses": {}, "checklist": [], "comments": []}
 
 
 async def _attach_items(events: list[dict]) -> list[dict]:
     if not events:
         return events
-
     ids = [e["id"] for e in events]
     marks = ",".join("?" for _ in ids)
     by_id = {e["id"]: e for e in events}
-
-    tasks = []
-    task_names = []
-
+    tasks, task_names = [], []
     shop_ids = [e["id"] for e in events if e["category"] == "shop"]
     if shop_ids:
         shop_marks = ",".join("?" for _ in shop_ids)
-        tasks.append(_exec(
-            "SELECT id, event_id, text, checked FROM checklist_items "
-            f"WHERE event_id IN ({shop_marks}) ORDER BY position, id",
-            tuple(shop_ids),
-        ))
+        tasks.append(_exec(f"SELECT id, event_id, text, checked FROM checklist_items WHERE event_id IN ({shop_marks}) ORDER BY position, id", tuple(shop_ids)))
         task_names.append("checklist")
-
-    tasks.append(_exec(
-        f"SELECT event_id, user_id, emoji FROM reactions WHERE event_id IN ({marks})",
-        tuple(ids),
-    ))
+    tasks.append(_exec(f"SELECT event_id, user_id, emoji FROM reactions WHERE event_id IN ({marks})", tuple(ids)))
     task_names.append("reactions")
-
-    tasks.append(_exec(
-        "SELECT event_id, idea_idx, status, user_id, ts FROM idea_responses "
-        f"WHERE event_id IN ({marks})",
-        tuple(ids),
-    ))
+    tasks.append(_exec(f"SELECT event_id, idea_idx, status, user_id, ts FROM idea_responses WHERE event_id IN ({marks})", tuple(ids)))
     task_names.append("ideas")
-
     chat_ids = [e["id"] for e in events if e["category"] in ("rest", "sex")]
     if chat_ids:
         chat_marks = ",".join("?" for _ in chat_ids)
-        tasks.append(_exec(
-            "SELECT event_id, id, user_id, text, created_at FROM event_comments "
-            f"WHERE event_id IN ({chat_marks}) ORDER BY created_at, id",
-            tuple(chat_ids),
-        ))
+        tasks.append(_exec(f"SELECT event_id, id, user_id, text, created_at FROM event_comments WHERE event_id IN ({chat_marks}) ORDER BY created_at, id", tuple(chat_ids)))
         task_names.append("comments")
-
     results = await asyncio.gather(*tasks)
     result_by_name = dict(zip(task_names, results))
-
     if "comments" in result_by_name:
         for event_id, cid, uid, text, created_at in result_by_name["comments"].rows:
-            by_id[event_id]["comments"].append({
-                "id": cid, "sender_id": uid, "text": text, "created_at": created_at,
-            })
-
+            by_id[event_id]["comments"].append({"id": cid, "sender_id": uid, "text": text, "created_at": created_at})
     if "checklist" in result_by_name:
         for item_id, event_id, text, checked in result_by_name["checklist"].rows:
-            by_id[event_id]["checklist"].append({
-                "id": item_id, "text": text, "checked": bool(checked)
-            })
-
+            by_id[event_id]["checklist"].append({"id": item_id, "text": text, "checked": bool(checked)})
     for event_id, user_id, emoji in result_by_name["reactions"].rows:
         by_id[event_id]["reactions"][user_id] = emoji
-
     for event_id, idx, status, uid, ts in result_by_name["ideas"].rows:
-        by_id[event_id]["idea_responses"][idx] = {
-            "status": status, "user_id": uid, "ts": ts,
-        }
-
+        by_id[event_id]["idea_responses"][idx] = {"status": status, "user_id": uid, "ts": ts}
     return events
 
 
@@ -1065,45 +743,22 @@ async def count_events_created(user_id: int) -> int:
     return rs.rows[0][0]
 
 
-async def create_event(created_by, target_user, title, description, date, event_time, category,
-                       items=None, color: str = "", remind_before: int = 0,
-                       date_end: str = "", visibility: str = "shared"):
+async def create_event(created_by, target_user, title, description, date, event_time, category, items=None, color: str = "", remind_before: int = 0, date_end: str = "", visibility: str = "shared"):
     initial_status = "accepted" if category in ("shop", "todo", "personal") else "pending"
-    rs = await _exec(
-        "INSERT INTO events "
-        "(created_by, target_user, title, description, date, date_end, time, category, status, "
-        " color, remind_before, visibility) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (created_by, target_user, title, description, date, date_end, event_time, category,
-         initial_status, color, remind_before, visibility),
-    )
+    rs = await _exec("INSERT INTO events (created_by, target_user, title, description, date, date_end, time, category, status, color, remind_before, visibility) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (created_by, target_user, title, description, date, date_end, event_time, category, initial_status, color, remind_before, visibility))
     event_id = rs.last_id
     if items and category == "shop":
         try:
-            await _batch(
-                [("INSERT INTO checklist_items (event_id, text, checked, position) VALUES (?, ?, ?, ?)",
-                  (event_id, it["text"], int(it["checked"]), i + 1))
-                 for i, it in enumerate(items)]
-            )
+            await _batch([("INSERT INTO checklist_items (event_id, text, checked, position) VALUES (?, ?, ?, ?)", (event_id, it["text"], int(it["checked"]), i + 1)) for i, it in enumerate(items)])
         except DbError:
             await _exec("DELETE FROM events WHERE id = ?", (event_id,))
             raise
+    await bump_pair_rev(pair_key(created_by, target_user))
     return await get_event(event_id)
 
 
 async def list_events_range(user_id: int, start: str, end: str) -> list[dict]:
-    rs = await _exec(
-        f"SELECT {EVENT_COLS} FROM events "
-        "WHERE ("
-        "  (COALESCE(NULLIF(date_end, ''), date) >= ? AND date < ?) "
-        ") AND ("
-        "  (category != 'personal' AND (created_by = ? OR target_user = ?)) "
-        "  OR (category = 'personal' AND created_by = ?) "
-        "  OR (category = 'personal' AND visibility = 'shared' AND target_user = ?) "
-        ") "
-        "ORDER BY date, time, id",
-        (start, end, user_id, user_id, user_id, user_id),
-    )
+    rs = await _exec(f"SELECT {EVENT_COLS} FROM events WHERE (COALESCE(NULLIF(date_end, ''), date) >= ? AND date < ?) AND ((category != 'personal' AND (created_by = ? OR target_user = ?)) OR (category = 'personal' AND created_by = ?) OR (category = 'personal' AND visibility = 'shared' AND target_user = ?)) ORDER BY date, time, id", (start, end, user_id, user_id, user_id, user_id))
     return await _attach_items([_event(r) for r in rs.rows])
 
 
@@ -1124,19 +779,8 @@ async def set_target_user(event_id: int, target_user: int) -> None:
     await _exec("UPDATE events SET target_user = ? WHERE id = ?", (target_user, event_id))
 
 
-async def update_event(event_id, title, description, date, event_time, category, reset_status: bool,
-                       color: str = "", remind_before: int = 0,
-                       date_end: str = "", visibility: str | None = None,
-                       reset_reminders: bool = False):
-    stmts = [
-        (
-            "UPDATE events SET title = ?, description = ?, date = ?, date_end = ?, time = ?, "
-            "category = ?, color = ?, remind_before = ?, "
-            "status = CASE WHEN ? THEN 'pending' ELSE status END WHERE id = ?",
-            (title, description, date, date_end, event_time, category, color, remind_before,
-             int(reset_status), event_id),
-        )
-    ]
+async def update_event(event_id, title, description, date, event_time, category, reset_status: bool, color: str = "", remind_before: int = 0, date_end: str = "", visibility: str | None = None, reset_reminders: bool = False):
+    stmts = [("UPDATE events SET title = ?, description = ?, date = ?, date_end = ?, time = ?, category = ?, color = ?, remind_before = ?, status = CASE WHEN ? THEN 'pending' ELSE status END WHERE id = ?", (title, description, date, date_end, event_time, category, color, remind_before, int(reset_status), event_id))]
     if visibility is not None:
         stmts.append(("UPDATE events SET visibility = ? WHERE id = ?", (visibility, event_id)))
     if reset_status or reset_reminders:
@@ -1146,56 +790,43 @@ async def update_event(event_id, title, description, date, event_time, category,
     if category != "shop":
         stmts.append(("DELETE FROM checklist_items WHERE event_id = ?", (event_id,)))
     await _batch(stmts)
-    return await get_event(event_id)
+    ev = await get_event(event_id)
+    if ev:
+        await bump_pair_rev(pair_key(ev["created_by"], ev["target_user"]))
+    return ev
 
 
 async def delete_event(event_id: int) -> None:
-    await _batch(
-        [
-            ("DELETE FROM checklist_items WHERE event_id = ?", (event_id,)),
-            ("DELETE FROM reminders WHERE event_id = ?", (event_id,)),
-            ("DELETE FROM reactions WHERE event_id = ?", (event_id,)),
-            ("DELETE FROM idea_responses WHERE event_id = ?", (event_id,)),
-            ("DELETE FROM events WHERE id = ?", (event_id,)),
-        ]
-    )
-
+    ev = await get_event(event_id)
+    await _batch([
+        ("DELETE FROM checklist_items WHERE event_id = ?", (event_id,)),
+        ("DELETE FROM reminders WHERE event_id = ?", (event_id,)),
+        ("DELETE FROM reactions WHERE event_id = ?", (event_id,)),
+        ("DELETE FROM idea_responses WHERE event_id = ?", (event_id,)),
+        ("DELETE FROM events WHERE id = ?", (event_id,)),
+    ])
+    if ev:
+        await bump_pair_rev(pair_key(ev["created_by"], ev["target_user"]))
 
 async def add_items(event_id: int, texts: list[str]) -> int:
     if not texts:
         return 0
-    rs = await _exec(
-        "SELECT COUNT(*), COALESCE(MAX(position), 0) FROM checklist_items WHERE event_id = ?",
-        (event_id,),
-    )
+    rs = await _exec("SELECT COUNT(*), COALESCE(MAX(position), 0) FROM checklist_items WHERE event_id = ?", (event_id,))
     count, last_pos = rs.rows[0]
     texts = texts[: max(0, MAX_ITEMS_PER_EVENT - count)]
     if not texts:
         return 0
-    await _batch([
-        ("INSERT INTO checklist_items (event_id, text, checked, position) VALUES (?, ?, 0, ?)",
-         (event_id, t, last_pos + i + 1))
-        for i, t in enumerate(texts)
-    ])
+    await _batch([("INSERT INTO checklist_items (event_id, text, checked, position) VALUES (?, ?, 0, ?)", (event_id, t, last_pos + i + 1)) for i, t in enumerate(texts)])
     return len(texts)
 
 
 async def add_item(event_id: int, text: str) -> bool:
-    rs = await _exec(
-        "INSERT INTO checklist_items (event_id, text, checked, position) "
-        "SELECT ?, ?, 0, "
-        "COALESCE((SELECT MAX(position) FROM checklist_items WHERE event_id = ?), 0) + 1 "
-        "WHERE (SELECT COUNT(*) FROM checklist_items WHERE event_id = ?) < ?",
-        (event_id, text, event_id, event_id, MAX_ITEMS_PER_EVENT),
-    )
+    rs = await _exec("INSERT INTO checklist_items (event_id, text, checked, position) SELECT ?, ?, 0, COALESCE((SELECT MAX(position) FROM checklist_items WHERE event_id = ?), 0) + 1 WHERE (SELECT COUNT(*) FROM checklist_items WHERE event_id = ?) < ?", (event_id, text, event_id, event_id, MAX_ITEMS_PER_EVENT))
     return rs.affected == 1
 
 
 async def set_item_checked(event_id: int, item_id: int, checked: bool) -> bool:
-    rs = await _exec(
-        "UPDATE checklist_items SET checked = ? WHERE id = ? AND event_id = ?",
-        (int(checked), item_id, event_id),
-    )
+    rs = await _exec("UPDATE checklist_items SET checked = ? WHERE id = ? AND event_id = ?", (int(checked), item_id, event_id))
     return rs.affected == 1
 
 
@@ -1205,51 +836,34 @@ async def delete_item(event_id: int, item_id: int) -> bool:
 
 
 async def move_item(event_id: int, item_id: int, new_position: int) -> bool:
-    rs = await _exec(
-        "SELECT id FROM checklist_items WHERE event_id = ? ORDER BY position, id",
-        (event_id,),
-    )
+    rs = await _exec("SELECT id FROM checklist_items WHERE event_id = ? ORDER BY position, id", (event_id,))
     ids = [r[0] for r in rs.rows]
     if item_id not in ids:
         return False
-
     ids.remove(item_id)
     new_position = max(0, min(new_position, len(ids)))
     ids.insert(new_position, item_id)
-
-    await _batch(
-        [
-            ("UPDATE checklist_items SET position = ? WHERE id = ?", (i + 1, cid))
-            for i, cid in enumerate(ids)
-        ]
-    )
+    await _batch([("UPDATE checklist_items SET position = ? WHERE id = ?", (i + 1, cid)) for i, cid in enumerate(ids)])
     return True
 
 
 async def set_reaction(event_id: int, emoji: str, by_user_id: int) -> None:
     if not emoji:
-        await _exec(
-            "DELETE FROM reactions WHERE event_id = ? AND user_id = ?",
-            (event_id, by_user_id),
-        )
+        await _exec("DELETE FROM reactions WHERE event_id = ? AND user_id = ?", (event_id, by_user_id))
         return
-    await _exec(
-        "INSERT INTO reactions (event_id, user_id, emoji) VALUES (?, ?, ?) "
-        "ON CONFLICT(event_id, user_id) DO UPDATE SET emoji = excluded.emoji",
-        (event_id, by_user_id, emoji),
-    )
+    await _exec("INSERT INTO reactions (event_id, user_id, emoji) VALUES (?, ?, ?) ON CONFLICT(event_id, user_id) DO UPDATE SET emoji = excluded.emoji", (event_id, by_user_id, emoji))
+    ev = await get_event(event_id)
+    if ev:
+        await bump_pair_rev(pair_key(ev["created_by"], ev["target_user"]))
 
 
 async def set_idea_response(event_id: int, idea_idx: int, status: str, user_id: int) -> None:
     if status not in ("accepted", "declined"):
         raise ValueError("bad status")
-    await _exec(
-        "INSERT INTO idea_responses (event_id, idea_idx, status, user_id, ts) "
-        "VALUES (?, ?, ?, ?, ?) "
-        "ON CONFLICT(event_id, idea_idx) DO UPDATE SET "
-        "status = excluded.status, user_id = excluded.user_id, ts = excluded.ts",
-        (event_id, idea_idx, status, user_id, int(time.time())),
-    )
+    await _exec("INSERT INTO idea_responses (event_id, idea_idx, status, user_id, ts) VALUES (?, ?, ?, ?, ?) ON CONFLICT(event_id, idea_idx) DO UPDATE SET status = excluded.status, user_id = excluded.user_id, ts = excluded.ts", (event_id, idea_idx, status, user_id, int(time.time())))
+    ev = await get_event(event_id)
+    if ev:
+        await bump_pair_rev(pair_key(ev["created_by"], ev["target_user"]))
 
 
 async def set_decline_comment_slot(event_id: int, slot: str, comment: str) -> None:
@@ -1265,68 +879,42 @@ async def set_alt_time(event_id: int, date: str, time: str) -> None:
 
 async def _hidden_idea_keys(user_id: int, partner_id: int | None) -> set[str]:
     if partner_id:
-        rs = await _exec(
-            "SELECT DISTINCT idea_key FROM hidden_ideas WHERE user_id IN (?, ?)",
-            (user_id, partner_id),
-        )
+        rs = await _exec("SELECT DISTINCT idea_key FROM hidden_ideas WHERE user_id IN (?, ?)", (user_id, partner_id))
     else:
-        rs = await _exec(
-            "SELECT idea_key FROM hidden_ideas WHERE user_id = ?", (user_id,)
-        )
+        rs = await _exec("SELECT idea_key FROM hidden_ideas WHERE user_id = ?", (user_id,))
     return {r[0] for r in rs.rows}
 
 
 async def get_sex_ideas(user_id: int, partner_id: int | None) -> list[dict]:
     hidden = await _hidden_idea_keys(user_id, partner_id)
     ideas = [dict(i) for i in _json_ideas() if i["id"] not in hidden]
-
     if partner_id:
-        rs = await _exec(
-            "SELECT id, category_title, text FROM sex_ideas "
-            "WHERE source = 'sex' AND user_id IN (?, ?) ORDER BY id DESC",
-            (user_id, partner_id)
-        )
+        rs = await _exec("SELECT id, category_title, text FROM sex_ideas WHERE source = 'sex' AND user_id IN (?, ?) ORDER BY id DESC", (user_id, partner_id))
     else:
-        rs = await _exec(
-            "SELECT id, category_title, text FROM sex_ideas "
-            "WHERE source = 'sex' AND user_id = ? ORDER BY id DESC",
-            (user_id,)
-        )
+        rs = await _exec("SELECT id, category_title, text FROM sex_ideas WHERE source = 'sex' AND user_id = ? ORDER BY id DESC", (user_id,))
     for r in rs.rows:
         ideas.append({"id": r[0], "category_title": r[1], "text": r[2]})
-
     return ideas
 
 
 async def add_sex_idea(user_id: int, category_title: str, text: str) -> int | None:
-    rs = await _exec(
-        "INSERT INTO sex_ideas (user_id, category_title, text, source) VALUES (?, ?, ?, 'sex')",
-        (user_id, category_title, text)
-    )
+    rs = await _exec("INSERT INTO sex_ideas (user_id, category_title, text, source) VALUES (?, ?, ?, 'sex')", (user_id, category_title, text))
     return rs.last_id
 
 
 async def archive_idea(category_title: str, text: str, source: str, archived_by: int | None) -> None:
-    await _exec(
-        "INSERT OR IGNORE INTO archived_ideas "
-        "(category_title, text, source, archived_by, archived_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (category_title, text, source, archived_by, int(time.time())),
-    )
+    await _exec("INSERT OR IGNORE INTO archived_ideas (category_title, text, source, archived_by, archived_at) VALUES (?, ?, ?, ?, ?)", (category_title, text, source, archived_by, int(time.time())))
 
 
 async def delete_sex_idea(idea_id: int, archived_by: int | None = None) -> bool:
-    rs = await _exec(
-        "SELECT category_title, text FROM sex_ideas WHERE id = ? AND source = 'sex'",
-        (idea_id,),
-    )
+    rs = await _exec("SELECT category_title, text FROM sex_ideas WHERE id = ? AND source = 'sex'", (idea_id,))
     if not rs.rows:
         return False
     _category_title, text = rs.rows[0]
     try:
         await archive_idea(CUSTOM_ARCHIVE_TITLE, text, "custom", archived_by)
     except Exception:
-        log.exception("Не удалось записать идею в архив (не критично)")
+        pass
     rs2 = await _exec("DELETE FROM sex_ideas WHERE id = ? AND source = 'sex'", (idea_id,))
     return rs2.affected == 1
 
@@ -1338,170 +926,78 @@ async def hide_json_idea_for_pair(user_id: int, partner_id: int | None, idea_key
     try:
         await archive_idea(idea["category_title"], idea["text"], "builtin", user_id)
     except Exception:
-        log.exception("Не удалось архивировать JSON-идею (не критично)")
-
+        pass
     rows = [(user_id, idea_key)]
     if partner_id and partner_id != user_id:
         rows.append((partner_id, idea_key))
-    await _batch(
-        [("INSERT OR IGNORE INTO hidden_ideas (user_id, idea_key) VALUES (?, ?)", r) for r in rows]
-    )
+    await _batch([("INSERT OR IGNORE INTO hidden_ideas (user_id, idea_key) VALUES (?, ?)", r) for r in rows])
 
 
 async def get_archived_ideas(limit: int = 2000) -> list[dict]:
-    rs = await _exec(
-        "SELECT id, category_title, text, source, archived_by, archived_at "
-        "FROM archived_ideas ORDER BY archived_at DESC, id DESC LIMIT ?",
-        (limit,),
-    )
-    return [
-        {
-            "id": r[0],
-            "category_title": r[1],
-            "text": r[2],
-            "source": r[3],
-            "archived_by": r[4],
-            "archived_at": r[5],
-        }
-        for r in rs.rows
-    ]
+    rs = await _exec("SELECT id, category_title, text, source, archived_by, archived_at FROM archived_ideas ORDER BY archived_at DESC, id DESC LIMIT ?", (limit,))
+    return [{"id": r[0], "category_title": r[1], "text": r[2], "source": r[3], "archived_by": r[4], "archived_at": r[5]} for r in rs.rows]
 
 
 async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
-    rs = await _exec(
-        "SELECT e.id, e.title, e.date, COALESCE(NULLIF(e.date_end,''), e.date) AS date_end, "
-        "       e.time, u.telegram_id, u.tz, e.category, e.remind_before, e.visibility "
-        "FROM events e JOIN users u ON u.telegram_id IN (e.created_by, e.target_user) "
-        "WHERE e.status = 'accepted' "
-        "  AND COALESCE(NULLIF(e.date_end,''), e.date) BETWEEN ? AND ? "
-        "  AND (e.visibility = 'shared' OR u.telegram_id = e.created_by) "
-        "  AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.event_id = e.id AND r.user_id = u.telegram_id)",
-        (date_from, date_to),
-    )
-    return [
-        {
-            "event_id": r[0], "title": r[1], "date": r[2], "date_end": r[3],
-            "time": r[4] or "", "user_id": r[5], "tz": r[6] or "",
-            "category": r[7] or "", "remind_before": r[8] or 0,
-            "visibility": r[9] or "shared",
-        }
-        for r in rs.rows
-    ]
+    rs = await _exec("SELECT e.id, e.title, e.date, COALESCE(NULLIF(e.date_end,''), e.date) AS date_end, e.time, u.telegram_id, u.tz, e.category, e.remind_before, e.visibility FROM events e JOIN users u ON u.telegram_id IN (e.created_by, e.target_user) WHERE e.status = 'accepted' AND COALESCE(NULLIF(e.date_end,''), e.date) BETWEEN ? AND ? AND (e.visibility = 'shared' OR u.telegram_id = e.created_by) AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.event_id = e.id AND r.user_id = u.telegram_id)", (date_from, date_to))
+    return [{"event_id": r[0], "title": r[1], "date": r[2], "date_end": r[3], "time": r[4] or "", "user_id": r[5], "tz": r[6] or "", "category": r[7] or "", "remind_before": r[8] or 0, "visibility": r[9] or "shared"} for r in rs.rows]
 
 
 async def mark_reminded(event_id: int, user_id: int) -> bool:
-    rs = await _exec(
-        "INSERT OR IGNORE INTO reminders (event_id, user_id) VALUES (?, ?)", (event_id, user_id)
-    )
+    rs = await _exec("INSERT OR IGNORE INTO reminders (event_id, user_id) VALUES (?, ?)", (event_id, user_id))
     return rs.affected == 1
 
 
 async def purge_old_reminders(date_before: str) -> int:
-    rs = await _exec(
-        "DELETE FROM reminders WHERE event_id IN "
-        "(SELECT id FROM events WHERE date < ?)",
-        (date_before,),
-    )
+    rs = await _exec("DELETE FROM reminders WHERE event_id IN (SELECT id FROM events WHERE date < ?)", (date_before,))
     return rs.affected
 
 
 async def purge_old_todos(date_before: str) -> int:
-    old = (
-        "SELECT id FROM events WHERE category = 'todo' "
-        "AND COALESCE(NULLIF(date_end, ''), date) < ?"
-    )
+    old = "SELECT id FROM events WHERE category = 'todo' AND COALESCE(NULLIF(date_end, ''), date) < ?"
     a = (date_before,)
-    rs = await _batch(
-        [
-            (f"DELETE FROM checklist_items WHERE event_id IN ({old})", a),
-            (f"DELETE FROM reminders WHERE event_id IN ({old})", a),
-            (f"DELETE FROM reactions WHERE event_id IN ({old})", a),
-            (f"DELETE FROM idea_responses WHERE event_id IN ({old})", a),
-            (
-                "DELETE FROM events WHERE category = 'todo' "
-                "AND COALESCE(NULLIF(date_end, ''), date) < ?",
-                a,
-            ),
-        ]
-    )
+    rs = await _batch([
+        (f"DELETE FROM checklist_items WHERE event_id IN ({old})", a),
+        (f"DELETE FROM reminders WHERE event_id IN ({old})", a),
+        (f"DELETE FROM reactions WHERE event_id IN ({old})", a),
+        (f"DELETE FROM idea_responses WHERE event_id IN ({old})", a),
+        ("DELETE FROM events WHERE category = 'todo' AND COALESCE(NULLIF(date_end, ''), date) < ?", a),
+    ])
     return rs[4].affected
 
 
 async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=31)).strftime("%Y-%m-%d")
-    rs = await _exec(
-        f"SELECT {EVENT_COLS} FROM events "
-        "WHERE category = 'todo' AND COALESCE(NULLIF(date_end, ''), date) < ? "
-        "AND (created_by = ? OR target_user = ?) "
-        "ORDER BY date DESC, id DESC LIMIT ?",
-        (cutoff, user_id, user_id, limit),
-    )
+    rs = await _exec(f"SELECT {EVENT_COLS} FROM events WHERE category = 'todo' AND COALESCE(NULLIF(date_end, ''), date) < ? AND (created_by = ? OR target_user = ?) ORDER BY date DESC, id DESC LIMIT ?", (cutoff, user_id, user_id, limit))
     return [_event(r) for r in rs.rows]
 
 
 async def pair_stats(user_id: int, partner_id: int) -> dict:
-    rs = await _exec(
-        "SELECT category, status, COUNT(*) FROM events "
-        "WHERE ((created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)) "
-        "AND visibility = 'shared' AND category IN ('rest', 'sex') "
-        "GROUP BY category, status",
-        (user_id, partner_id, partner_id, user_id),
-    )
-    by_status: dict[str, int] = {}
-    by_category: dict[str, int] = {}
+    rs = await _exec("SELECT category, status, COUNT(*) FROM events WHERE ((created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)) AND visibility = 'shared' AND category IN ('rest', 'sex') GROUP BY category, status", (user_id, partner_id, partner_id, user_id))
+    by_status, by_category = {}, {}
     for category, status, n in rs.rows:
         by_status[status] = by_status.get(status, 0) + n
         by_category[category] = by_category.get(category, 0) + n
-    return {
-        "total": sum(by_status.values()),
-        "pending": by_status.get("pending", 0),
-        "accepted": by_status.get("accepted", 0),
-        "declined": by_status.get("declined", 0),
-        "by_category": by_category,
-    }
-
-def pair_key(a: int, b: int) -> str:
-    """Стабильный ключ пары: одинаковый для обоих участников."""
-    x, y = sorted((int(a), int(b)))
-    return f"{x}:{y}"
+    return {"total": sum(by_status.values()), "pending": by_status.get("pending", 0), "accepted": by_status.get("accepted", 0), "declined": by_status.get("declined", 0), "by_category": by_category}
 
 
 async def get_moods(pair_key_value: str, date: str) -> list[dict]:
-    """Настроения обоих участников на указанную дату (0, 1 или 2 записи)."""
-    rs = await _exec(
-        "SELECT user_id, emoji, text, updated_at FROM moods "
-        "WHERE pair_key = ? AND date = ? ORDER BY user_id",
-        (pair_key_value, date),
-    )
-    return [
-        {"user_id": r[0], "emoji": r[1] or "", "text": r[2] or "", "updated_at": r[3]}
-        for r in rs.rows
-    ]
+    rs = await _exec("SELECT user_id, emoji, text, updated_at FROM moods WHERE pair_key = ? AND date = ? ORDER BY user_id", (pair_key_value, date))
+    return [{"user_id": r[0], "emoji": r[1] or "", "text": r[2] or "", "updated_at": r[3]} for r in rs.rows]
 
 
-async def set_mood(
-    pair_key_value: str, user_id: int, date: str, emoji: str, text: str
-) -> dict:
-    """Ставит/обновляет настроение. Пустые emoji+text — удаляют запись."""
+async def set_mood(pair_key_value: str, user_id: int, date: str, emoji: str, text: str) -> dict:
     emoji = (emoji or "")[:8]
     text = (text or "")[:280]
     if not emoji and not text:
-        await _exec(
-            "DELETE FROM moods WHERE pair_key = ? AND user_id = ? AND date = ?",
-            (pair_key_value, user_id, date),
-        )
+        await _exec("DELETE FROM moods WHERE pair_key = ? AND user_id = ? AND date = ?", (pair_key_value, user_id, date))
+        await bump_pair_rev(pair_key_value)
         return {"user_id": user_id, "emoji": "", "text": "", "updated_at": 0}
     now = int(time.time())
-    await _exec(
-        "INSERT INTO moods (pair_key, user_id, date, emoji, text, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(pair_key, user_id, date) DO UPDATE SET "
-        "emoji = excluded.emoji, text = excluded.text, updated_at = excluded.updated_at",
-        (pair_key_value, user_id, date, emoji, text, now),
-    )
+    await _exec("INSERT INTO moods (pair_key, user_id, date, emoji, text, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(pair_key, user_id, date) DO UPDATE SET emoji = excluded.emoji, text = excluded.text, updated_at = excluded.updated_at", (pair_key_value, user_id, date, emoji, text, now))
+    await bump_pair_rev(pair_key_value)
     return {"user_id": user_id, "emoji": emoji, "text": text, "updated_at": now}
 
-# === ЧЕЛЛЕНДЖИ И БАЛЛЫ ===
 
 async def get_user_balance(user_id: int) -> int:
     rs = await _exec("SELECT balance FROM users WHERE telegram_id = ?", (user_id,))
@@ -1511,47 +1007,29 @@ async def get_user_balance(user_id: int) -> int:
 async def add_balance(user_id: int, amount: int) -> None:
     await _exec("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (amount, user_id))
 
+
 async def spend_balance(user_id: int, cost: int) -> bool:
-    """Атомарно списывает баллы, если их достаточно. Возвращает True при успехе."""
-    rs = await _exec(
-        "UPDATE users SET balance = balance - ? WHERE telegram_id = ? AND balance >= ?",
-        (cost, user_id, cost),
-    )
-    return rs.affected == 1   
+    rs = await _exec("UPDATE users SET balance = balance - ? WHERE telegram_id = ? AND balance >= ?", (cost, user_id, cost))
+    return rs.affected == 1
 
 
 async def create_user_challenge(creator_id: int, target_id: int, category: str, text: str, reward: int, deadline: int = 0) -> dict:
-    rs = await _exec(
-        "INSERT INTO user_challenges (creator_id, target_id, category, text, reward, deadline, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (creator_id, target_id, category, text, reward, deadline, int(time.time()))
-    )
+    rs = await _exec("INSERT INTO user_challenges (creator_id, target_id, category, text, reward, deadline, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (creator_id, target_id, category, text, reward, deadline, int(time.time())))
+    await bump_pair_rev(pair_key(creator_id, target_id))
     return await get_user_challenge(rs.last_id)
 
 
 async def get_user_challenge(challenge_id: int) -> dict | None:
     rs = await _exec("SELECT * FROM user_challenges WHERE id = ?", (challenge_id,))
-    if not rs.rows: return None
+    if not rs.rows:
+        return None
     r = rs.rows[0]
-    return {
-        "id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3],
-        "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8],
-        "deadline": r[9] if len(r) > 9 else 0
-    }
+    return {"id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3], "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8], "deadline": r[9] if len(r) > 9 else 0}
 
 
 async def get_all_user_challenges(user_id: int) -> list[dict]:
-    rs = await _exec(
-        "SELECT * FROM user_challenges WHERE creator_id = ? OR target_id = ? ORDER BY created_at DESC",
-        (user_id, user_id)
-    )
-    return [
-        {
-            "id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3],
-            "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8],
-            "deadline": r[9] if len(r) > 9 else 0
-        } for r in rs.rows
-    ]
+    rs = await _exec("SELECT * FROM user_challenges WHERE creator_id = ? OR target_id = ? ORDER BY created_at DESC", (user_id, user_id))
+    return [{"id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3], "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7], "created_at": r[8], "deadline": r[9] if len(r) > 9 else 0} for r in rs.rows]
 
 
 async def update_user_challenge(challenge_id: int, status: str, photo_id: str | None = None) -> None:
@@ -1575,13 +1053,8 @@ async def get_challenges_json() -> dict:
         if not isinstance(data, dict):
             data = {}
         _challenges_json_cache = (mtime_ns, data)
-        logging.info("Загружено %s категорий из challenges.json", len(data))
         return data
-    except FileNotFoundError:
-        logging.error("ФАЙЛ challenges.json НЕ НАЙДЕН ПО ПУТИ: %s", path)
-        return {}
-    except Exception as e:
-        logging.error("ОШИБКА ЧТЕНИЯ challenges.json: %s", e)
+    except Exception:
         return {}
 
 
@@ -1594,25 +1067,20 @@ def get_shop_items_json() -> list[dict]:
     try:
         mtime_ns = path.stat().st_mtime_ns
     except FileNotFoundError:
-        logging.error("ФАЙЛ shop_items.json НЕ НАЙДЕН")
         return []
     if _shop_cache is not None and _shop_cache[0] == mtime_ns:
         return _shop_cache[1]
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         data = data if isinstance(data, list) else []
-    except Exception as e:
-        logging.error("ОШИБКА ЧТЕНИЯ shop_items.json: %s", e)
+    except Exception:
         return []
     _shop_cache = (mtime_ns, data)
     return data
 
 
 async def update_challenge_photo(challenge_id: int, photo_path: str) -> None:
-    await _exec(
-        "UPDATE user_challenges SET photo_id = ? WHERE id = ?",
-        (photo_path, challenge_id)
-    )
+    await _exec("UPDATE user_challenges SET photo_id = ? WHERE id = ?", (photo_path, challenge_id))
 
 
 async def get_challenge_by_photo(photo_path: str) -> dict | None:
@@ -1620,8 +1088,7 @@ async def get_challenge_by_photo(photo_path: str) -> dict | None:
     return await get_user_challenge(rs.rows[0][0]) if rs.rows else None
 
 
-async def transition_challenge(challenge_id: int, from_statuses: Sequence[str], new_status: str,
-                               photo_id: str | None = None) -> bool:
+async def transition_challenge(challenge_id: int, from_statuses: Sequence[str], new_status: str, photo_id: str | None = None) -> bool:
     marks = ",".join("?" for _ in from_statuses)
     if photo_id is None:
         sql = f"UPDATE user_challenges SET status = ? WHERE id = ? AND status IN ({marks})"
@@ -1630,79 +1097,46 @@ async def transition_challenge(challenge_id: int, from_statuses: Sequence[str], 
         sql = f"UPDATE user_challenges SET status = ?, photo_id = ? WHERE id = ? AND status IN ({marks})"
         args = (new_status, photo_id, challenge_id, *from_statuses)
     rs = await _exec(sql, args)
+    if rs.affected == 1:
+        c = await get_user_challenge(challenge_id)
+        if c:
+            await bump_pair_rev(pair_key(c["creator_id"], c["target_id"]))
     return rs.affected == 1
 
 
 async def delete_user_challenge(challenge_id: int, user_id: int) -> bool:
-    rs = await _exec(
-        "DELETE FROM user_challenges WHERE id = ? AND creator_id = ? AND status = 'pending'",
-        (challenge_id, user_id)
-    )
+    rs = await _exec("DELETE FROM user_challenges WHERE id = ? AND creator_id = ? AND status = 'pending'", (challenge_id, user_id))
     return rs.affected == 1
 
+
 async def process_expired_challenges() -> list[dict]:
-    """
-    Находит просроченные pending-челленджи и списывает штраф.
-    Использует атомарный UPDATE, чтобы не затереть статус 'submitted', если исполнитель успел отправить фото.
-    """
     now = int(time.time())
-    rs = await _exec(
-        "SELECT id, creator_id, target_id, text, reward FROM user_challenges "
-        "WHERE status = 'pending' AND deadline > 0 AND deadline < ?",
-        (now,),
-    )
+    rs = await _exec("SELECT id, creator_id, target_id, text, reward FROM user_challenges WHERE status = 'pending' AND deadline > 0 AND deadline < ?", (now,))
     expired = []
     for cid, creator_id, target_id, text, reward in rs.rows:
         penalty = reward // 2
-        
-        # 1. Атомарно закрываем челлендж, только если он всё ещё pending
-        rs_status = await _exec(
-            "UPDATE user_challenges SET status = 'rejected' WHERE id = ? AND status = 'pending'",
-            (cid,)
-        )
-        
+        rs_status = await _exec("UPDATE user_challenges SET status = 'rejected' WHERE id = ? AND status = 'pending'", (cid,))
         if rs_status.affected == 0:
-            # Кто-то успел отправить фото (submitted) или архивировать. Штраф не берем.
             continue
-            
-        # 2. Списываем штраф (атомарно, не уходя в минус)
         actual_penalty = 0
         if penalty > 0:
-            # Читаем баланс для уведомления (не для логики)
             bal_rs = await _exec("SELECT balance FROM users WHERE telegram_id = ?", (target_id,))
             current_balance = bal_rs.rows[0][0] if bal_rs.rows else 0
-            
-            # Атомарный апдейт: вычитаем штраф, но не уходим в минус
-            rs_bal = await _exec(
-                "UPDATE users SET balance = CASE WHEN balance >= ? THEN balance - ? ELSE 0 END "
-                "WHERE telegram_id = ?",
-                (penalty, penalty, target_id)
-            )
-            
-            # Считаем, сколько реально списалось (для текста уведомления)
+            rs_bal = await _exec("UPDATE users SET balance = CASE WHEN balance >= ? THEN balance - ? ELSE 0 END WHERE telegram_id = ?", (penalty, penalty, target_id))
             if rs_bal.affected > 0 and current_balance > 0:
                 actual_penalty = min(penalty, current_balance)
-
-        expired.append({
-            "id": cid, "creator_id": creator_id, "target_id": target_id,
-            "text": text, "reward": reward, "penalty": actual_penalty
-        })
+        await bump_pair_rev(pair_key(creator_id, target_id))
+        expired.append({"id": cid, "creator_id": creator_id, "target_id": target_id, "text": text, "reward": reward, "penalty": actual_penalty})
     return expired
 
+
 async def dump_all_tables() -> dict:
-    """Полный снимок всех таблиц для резервной копии. Без секретов."""
-    tables = [
-        "users", "events", "checklist_items", "reminders", "sex_ideas",
-        "hidden_ideas", "archived_ideas", "reactions", "idea_responses",
-        "user_challenges", "challenge_messages", "shop_items",
-        "event_comments", "moods",
-    ]
+    tables = ["users", "events", "checklist_items", "reminders", "sex_ideas", "hidden_ideas", "archived_ideas", "reactions", "idea_responses", "user_challenges", "challenge_messages", "shop_items", "event_comments", "moods"]
     out: dict = {"exported_at": int(time.time()), "tables": {}}
     for table in tables:
         try:
             rs = await _exec(f"SELECT * FROM {table}")
         except DbError as e:
-            log.warning("dump: таблица %s недоступна: %s", table, e)
             continue
         cols_rs = await _exec(f"PRAGMA table_info({table})")
         columns = [r[1] for r in cols_rs.rows]

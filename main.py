@@ -13,10 +13,10 @@ from collections import deque
 from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
-from aiogram import Dispatcher, Router  # type: ignore[reportMissingImports]
+from aiogram import Dispatcher, Router
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiogram.filters import Command, CommandObject, CommandStart  # type: ignore[reportMissingImports]
-from aiogram.types import (  # type: ignore[reportMissingImports]
+from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.types import (
     BotCommand,
     CallbackQuery,
     ErrorEvent,
@@ -24,10 +24,9 @@ from aiogram.types import (  # type: ignore[reportMissingImports]
     InlineKeyboardMarkup,
     Message,
 )
-from aiogram.utils.web_app import safe_parse_webapp_init_data  # type: ignore[reportMissingImports]
-from aiohttp import web  # type: ignore[reportMissingImports]
+from aiogram.utils.web_app import safe_parse_webapp_init_data
+from aiohttp import web
 
-# common импортируем первым: он читает .env до импорта db
 from common import (
     BOT_TOKEN,
     CATEGORIES,
@@ -52,7 +51,6 @@ PORT = int(os.getenv("PORT", "8080"))
 INDEX_FILE = Path(__file__).parent / "webapp" / "index.html"
 
 WEBHOOK_PATH = "/webhook"
-# Секрет вебхука лучше задавать в env. Без env — генерируем, но при рестарте webhook сломается.
 _webhook_from_env = os.getenv("WEBHOOK_SECRET", "").strip()
 WEBHOOK_SECRET = _webhook_from_env or secrets.token_urlsafe(32)
 WEBHOOK_URL = f"{WEBAPP_URL}{WEBHOOK_PATH}"
@@ -81,7 +79,6 @@ ALLOWED_ORIGINS = {_origin(WEBAPP_URL)} | {
 }
 
 MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
-# Было 24ч — слишком долго при утечке initData. 6ч достаточно для WebApp-сессии.
 INIT_DATA_MAX_AGE = int(os.getenv("INIT_DATA_MAX_AGE", str(6 * 3600)))
 RATE_LIMIT_READ = int(os.getenv("RATE_LIMIT_READ", "90"))
 RATE_LIMIT_WRITE = int(os.getenv("RATE_LIMIT_WRITE", "40"))
@@ -111,14 +108,11 @@ def title_part(title: str) -> str:
 
 
 _rate_hits: dict[int, deque] = {}
-
-# Кэш признака «есть новое в челленджах»: запрос тяжёлый, а опрос идёт каждые 20 с.
 _new_cache: dict[int, tuple[float, bool]] = {}
 NEW_ACTIVITY_TTL = 45
 
 
 def rate_limit(uid: int, *, write: bool = False) -> None:
-    """Скользящее окно на uid. Write жёстче, read — под polling."""
     now = time.monotonic()
     q = _rate_hits.setdefault(uid, deque())
     while q and now - q[0] > RATE_WINDOW:
@@ -188,7 +182,7 @@ async def cmd_unlink(message: Message):
         await message.answer("У вас нет партнёра — отвязывать нечего.")
         return
     await message.answer(
-        "Отвязать партнёра? Все общие события будут удалены безвозвратно. Личные (приватные) события останутся у вас.",
+        "Отвязать партнёра? Общие данные будут удалены навсегда через 24 часа. За это время вы сможете передумать и восстановить связь.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -214,8 +208,8 @@ async def unlink_confirm(call: CallbackQuery):
     if partner is None:
         await call.message.edit_text("У вас нет партнёра.")
     else:
-        await call.message.edit_text("Готово: связь разорвана, общие события удалены.")
-        notify(partner, "💔 Партнёр отвязал вас. Общие события удалены.")
+        await call.message.edit_text("Готово: связь разорвана. Данные будут удалены через 24 часа.")
+        notify(partner, "💔 Партнёр отвязал вас. У вас есть 24 часа, чтобы восстановить связь и вернуть данные.")
     await call.answer()
 
 
@@ -287,13 +281,10 @@ def _add_cors(request: web.Request, response: web.StreamResponse) -> None:
         h["Access-Control-Max-Age"] = "86400"
 
 
-# --- НОВЫЙ MIDDLEWARE ДЛЯ СЖАТИЯ (GZIP) ---
 @web.middleware
 async def gzip_middleware(request: web.Request, handler):
     response = await handler(request)
     
-    # Сжимаем только если это не файл из storage и клиент поддерживает gzip
-    # Статику (/js, /css, index) отдаёт static_file/index уже сжатой и закэшированной.
     if (
         isinstance(response, web.Response)
         and response.status == 200
@@ -308,7 +299,6 @@ async def gzip_middleware(request: web.Request, handler):
             response.body = compressed
             response.headers["Content-Encoding"] = "gzip"
             response.headers["Vary"] = "Accept-Encoding"
-            # Убираем Content-Length, так как он изменился
             response.headers.pop("Content-Length", None)
         except Exception as e:
             logging.error("Gzip compression failed: %s", e)
@@ -336,16 +326,14 @@ async def api_middleware(request: web.Request, handler):
         logging.exception("Необработанная ошибка в API")
         response = web.json_response({"error": "Внутренняя ошибка сервера"}, status=500)
 
-    # Кэширование статики
     if request.path.startswith(("/css/", "/js/")):
         response.headers.setdefault("Cache-Control", "no-cache")
 
-    # Безопасность: CSP и защита от MIME-sniffing
     if not response.headers.get("Content-Security-Policy"):
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' https://telegram.org; " # <-- убран 'unsafe-inline'
-            "style-src 'self' 'unsafe-inline'; "        # стили оставляем, их много в HTML
+            "script-src 'self' https://telegram.org; "
+            "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob: https://*.supabase.co; "
             "connect-src 'self' https://*.supabase.co; "
             "object-src 'none'; "
@@ -359,6 +347,7 @@ async def api_middleware(request: web.Request, handler):
     _add_cors(request, response)
     return response
 
+
 def authenticate(request: web.Request, write: bool = False):
     raw = request.headers.get("X-Init-Data", "")
     try:
@@ -370,9 +359,9 @@ def authenticate(request: web.Request, write: bool = False):
         or time.time() - data.auth_date.timestamp() > INIT_DATA_MAX_AGE
     ):
         raise ApiError("session expired", 401)
-    # Лимит на все API-запросы (чтение и запись), write — жёстче
     rate_limit(data.user.id, write=write)
     return data.user
+
 async def read_json(request: web.Request) -> dict:
     try:
         body = await request.json()
@@ -604,14 +593,24 @@ async def api_state(request: web.Request) -> web.Response:
     tz = request.headers.get("X-TZ", "").strip()
     if tz and tz != user["tz"] and get_zone(tz):
         await db.set_timezone(tg_user.id, tz)
-    start, end = parse_month(request.query.get("month"))
+    
     has_partner = bool(user["partner_id"])
+    pk = db.pair_key(tg_user.id, user["partner_id"]) if has_partner else ""
+    
+    # 1. Запрашиваем ревизию пары
+    rev = await db.get_pair_rev(pk) if has_partner else 0
+    etag = f'"{rev}"'
+    
+    if request.headers.get("If-None-Match") == etag:
+        return web.Response(status=304, headers={"ETag": etag, "Cache-Control": "no-store"})
+    
+    # 2. Если ревизия изменилась (или её нет) — собираем полный ответ
+    start, end = parse_month(request.query.get("month"))
     link = ""
     if not has_partner:
         user = await db.ensure_invite(user)
         link = invite_link(user["invite_code"])
-        
-    # Независимые чтения выполняем одновременно
+
     async def _safe_ideas():
         try:
             return await db.get_sex_ideas(tg_user.id, user["partner_id"])
@@ -632,10 +631,8 @@ async def api_state(request: web.Request) -> web.Response:
         if not has_partner:
             return None
         try:
-            pk = db.pair_key(tg_user.id, user["partner_id"])
-            # Берем дату по часовому поясу пользователя (а не по UTC!)
-            tz = get_zone(user["tz"]) or timezone.utc
-            local_now = datetime.now(timezone.utc).astimezone(tz)
+            tz_obj = get_zone(user["tz"]) or timezone.utc
+            local_now = datetime.now(timezone.utc).astimezone(tz_obj)
             date = local_now.strftime("%Y-%m-%d")
             
             moods = await db.get_moods(pk, date)
@@ -692,6 +689,7 @@ async def api_state(request: web.Request) -> web.Response:
     body = json.dumps(
         {
             "has_partner": has_partner,
+            "is_unlinking": bool(user.get("unlinked_at")),
             "invite_link": link,
             "month": start[:7],
             "events": [event_to_dict(e, tg_user.id) for e in events],
@@ -704,15 +702,12 @@ async def api_state(request: web.Request) -> web.Response:
             "balance": balance,
             "has_new_challenges": has_new,
             "moods": moods,
-            "is_unlinking": bool(user.get("unlinked_at")),
         },
         ensure_ascii=False,
         sort_keys=True,
     )
-    etag = '"' + hashlib.sha1(body.encode()).hexdigest() + '"'
+    
     headers = {"ETag": etag, "Cache-Control": "no-store"}
-    if request.headers.get("If-None-Match") == etag:
-        return web.Response(status=304, headers=headers)
     return web.Response(text=body, content_type="application/json", headers=headers)
 
 
@@ -900,7 +895,6 @@ async def api_delete_event(request: web.Request) -> web.Response:
     await db.delete_event(event["id"])
     return web.json_response({"status": "deleted"})
 
-
 async def api_respond(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
@@ -920,7 +914,6 @@ async def api_respond(request: web.Request) -> web.Response:
     alt_date = str(body.get("alt_date") or "").strip()
     alt_time = str(body.get("alt_time") or "").strip()
     
-    # Валидация предложенной даты
     if alt_date and not valid_date(alt_date):
         alt_date = ""
         alt_time = ""
@@ -950,6 +943,7 @@ async def api_respond(request: web.Request) -> web.Response:
             f"{icon} {tg_user.first_name} {what} событие на "
             f"{fmt_range(event['date'], event.get('date_end', ''))}{title_part(event['title'])}.{alt_text}{extra}",
         )
+        await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
         event = await db.get_event(event["id"])
 
     return web.json_response(event_to_dict(event, tg_user.id))
@@ -1015,6 +1009,7 @@ async def api_set_decline_comment(request: web.Request) -> web.Response:
         else:
             body_text = f"💬 {tg_user.first_name} удалил(а) свой комментарий к событию на {fmt_range(event['date'], event.get('date_end', ''))}{at}{title_part(event['title'])}."
         notify(event["created_by"], body_text)
+        await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
     updated = await db.get_event(event["id"])
     return web.json_response(event_to_dict(updated, tg_user.id))
 
@@ -1034,6 +1029,7 @@ async def api_add_item(request: web.Request) -> web.Response:
         raise ApiError("Введите текст пункта")
     if not await db.add_item(event["id"], text):
         raise ApiError(f"Не больше {db.MAX_ITEMS_PER_EVENT} пунктов в списке", 409)
+    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
     return web.json_response(
         event_to_dict(await db.get_event(event["id"]), tg_user.id), status=201
     )
@@ -1049,6 +1045,7 @@ async def api_set_item(request: web.Request) -> web.Response:
         event["id"], _int_param(request, "item_id"), checked
     ):
         raise ApiError("Пункт не найден", 404)
+    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
     return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id))
 
 
@@ -1057,6 +1054,7 @@ async def api_delete_item(request: web.Request) -> web.Response:
     event = await _shop_event(request, tg_user.id)
     if not await db.delete_item(event["id"], _int_param(request, "item_id")):
         raise ApiError("Пункт не найден", 404)
+    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
     return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id))
 
 
@@ -1072,6 +1070,7 @@ async def api_move_item(request: web.Request) -> web.Response:
         raise ApiError("Некорректная позиция")
     if not await db.move_item(event["id"], _int_param(request, "item_id"), position):
         raise ApiError("Пункт не найден", 404)
+    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
     return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id))
 
 
@@ -1086,6 +1085,8 @@ async def api_add_sex_idea(request: web.Request) -> web.Response:
     if not text:
         raise ApiError("Укажите текст идеи")
     await db.add_sex_idea(tg_user.id, category_title, text)
+    if user["partner_id"]:
+        await db.bump_pair_rev(db.pair_key(tg_user.id, user["partner_id"]))
     ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
     return web.json_response({"status": "ok", "ideas": ideas})
 
@@ -1103,6 +1104,8 @@ async def api_delete_sex_idea(request: web.Request) -> web.Response:
             raise ApiError("Некорректный id идеи")
         if not await db.delete_sex_idea(idea_id, archived_by=tg_user.id):
             raise ApiError("Идея не найдена", 404)
+    if user["partner_id"]:
+        await db.bump_pair_rev(db.pair_key(tg_user.id, user["partner_id"]))
     ideas = await db.get_sex_ideas(tg_user.id, user["partner_id"])
     return web.json_response({"status": "deleted", "ideas": ideas})
 
@@ -1151,6 +1154,7 @@ async def api_unlink(request: web.Request) -> web.Response:
         raise ApiError("У вас нет партнёра", 409)
     notify(partner, "💔 Партнёр отвязал вас. У вас есть 24 часа, чтобы восстановить связь и вернуть данные.")
     return web.json_response({"status": "soft_unlinked"})
+
 
 async def api_restore_unlink(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
@@ -1201,13 +1205,10 @@ async def api_set_mood(request: web.Request) -> web.Response:
 
     pk = db.pair_key(tg_user.id, user["partner_id"])
     before = await db.get_moods(pk, date)
-    
-    # Проверяем, ставил ли Я уже настроение сегодня (а не партнёр!)
     mine_had = any(m["user_id"] == tg_user.id for m in before)
     
     await db.set_mood(pk, tg_user.id, date, emoji, text)
 
-    # Уведомляем партнёра только при ПЕРВОМ за день изменении
     if (emoji or text) and not mine_had:
         part = f" {emoji}" if emoji else ""
         msg = f"💭 {tg_user.first_name} поделился(ась) настроением{part}"
@@ -1217,7 +1218,6 @@ async def api_set_mood(request: web.Request) -> web.Response:
 
     return web.json_response({"status": "ok"})
 
-# --- SUPABASE AND CHALLENGES ---
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
@@ -1257,9 +1257,8 @@ def get_supabase():
 BACKUP_BUCKET = os.getenv("SUPABASE_BACKUP_BUCKET", "").strip()
 BACKUP_KEEP_DAYS = int(os.getenv("SUPABASE_BACKUP_KEEP_DAYS", "14"))
 
+
 async def backup_database() -> None:
-    """Дамп всех таблиц в JSON.gz → Supabase Storage. Раз в сутки из reminder_loop.
-    Тихо пропускается, если бакет/ключи не заданы."""
     if not SUPABASE_URL or not SUPABASE_KEY or not BACKUP_BUCKET:
         return
     try:
@@ -1276,7 +1275,6 @@ async def backup_database() -> None:
         )
         logging.info("Бэкап БД загружен: %s (%s байт)", name, len(gz))
 
-        # Чистим старые бэкапы (по дате в имени)
         try:
             listing = await asyncio.to_thread(sb.storage.from_(BACKUP_BUCKET).list)
             cutoff = datetime.now(timezone.utc) - timedelta(days=BACKUP_KEEP_DAYS)
@@ -1308,7 +1306,6 @@ def _storage_url(url: str) -> str:
 
 
 def _photo_path_ok(path: str, challenge_id: int) -> bool:
-    """Строго: только пути вида challenge_<id>_<ts>_<hex8>.<ext>, без path traversal."""
     if not path or len(path) > 500:
         return False
     if ".." in path or "/" in path or "\\" in path:
@@ -1326,7 +1323,6 @@ def _photo_path_ok(path: str, challenge_id: int) -> bool:
 
 
 def _short_text(text: str, limit: int = 80) -> str:
-    """Обрезка текста для уведомлений (не светить длинные/чувствительные строки)."""
     t = (text or "").strip().replace("\n", " ")
     if len(t) <= limit:
         return t
@@ -1371,8 +1367,6 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     if not path:
         raise ApiError("Путь не указан", 400)
         
-    # Извлекаем ID челленджа из пути (формат: challenge_<id>_<ts>_<hex>.<ext>)
-    # Это позволяет точно проверить права без запроса LIKE
     m = re.search(r"^challenge_(\d+)_", path)
     if not m:
         raise ApiError("Некорректный формат пути", 400)
@@ -1385,7 +1379,6 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Фото не найдено", 404)
 
-     # Проверяем, что этот путь действительно принадлежит челленджу
     raw_photo_id = challenge.get("photo_id") or ""
     paths = [p.strip() for p in raw_photo_id.split(",") if p.strip()]
     if path not in paths:
@@ -1425,7 +1418,6 @@ async def api_set_challenge_photo(request: web.Request) -> web.Response:
 async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     
-    # refresh=1: клиент уже держит каталог и уже отметил просмотр, нужен только список
     refresh = request.query.get("refresh") == "1"
     catalog = None
     if refresh:
@@ -1519,13 +1511,11 @@ async def api_challenge_action(request: web.Request) -> web.Response:
     is_creator = tg_user.id == challenge["creator_id"]
 
     if action == "approve" and is_creator:
-        # Разрешаем засчитать, если челлендж ещё не завершён (pending или submitted)
         if not await db.transition_challenge(challenge_id, ("pending", "submitted"), "approved"):
             raise ApiError("Этот вызов нельзя засчитать (возможно, он уже завершён)", 409)
         await db.add_balance(challenge["target_id"], challenge["reward"])
         notify(challenge["target_id"], f"✅ Твой челлендж засчитан! Тебе начислено {challenge['reward']} баллов.")
     elif action == "reject" and is_creator:
-        # Разрешаем отклонить из любого активного статуса
         if not await db.transition_challenge(challenge_id, ("pending", "submitted"), "rejected"):
             raise ApiError("Этот вызов нельзя отклонить (возможно, он уже завершён)", 409)
         notify(challenge["target_id"], f"❌ Челлендж отклонён: «{_short_text(challenge['text'])}». Можно прислать другое фото.")
@@ -1545,7 +1535,6 @@ async def api_get_challenge_messages(request: web.Request) -> web.Response:
     user = await db.get_or_create_user(tg_user.id)
     partner_id = challenge["target_id"] if tg_user.id == challenge["creator_id"] else challenge["creator_id"]
     
-    # Если они больше не пара, запрещаем читать переписку
     if user["partner_id"] != partner_id:
         raise ApiError("Нет доступа к переписке бывшего партнёра", 403)
         
@@ -1586,6 +1575,7 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
         (challenge_id, tg_user.id, text, int(time.time()))
     )
     
+    await db.bump_pair_rev(db.pair_key(challenge["creator_id"], challenge["target_id"]))
     notify(partner_id, f"💬 Новое сообщение по челленджу «{_short_text(challenge['text'])}»:\n\n{_short_text(text, 200)}")
     
     return web.json_response({"status": "ok"})
@@ -1623,11 +1613,9 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
     cost = item.get("cost")
     emoji = item.get("emoji", "🎁")
 
-    # Атомарно списываем баллы (защита от гонок)
     if not await db.spend_balance(tg_user.id, cost):
         raise ApiError("Недостаточно баллов для покупки", 403)
 
-    # Если создание события упадет, вернем баллы обратно
     try:
         event = await db.create_event(
             created_by=tg_user.id,
@@ -1639,7 +1627,6 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
             category="rest",
         )
     except Exception as e:
-        # Возврат средств
         await db.add_balance(tg_user.id, cost)
         logging.exception("Ошибка при создании события покупки, средства возвращены")
         raise ApiError("Ошибка при создании события. Баллы возвращены.", 500)
@@ -1687,6 +1674,7 @@ async def api_post_event_comment(request: web.Request) -> web.Response:
         (event_id, tg_user.id, text, int(time.time()))
     )
     
+    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
     partner_id = event["target_user"] if tg_user.id == event["created_by"] else event["created_by"]
     notify(partner_id, f"💬 Новый комментарий к событию «{event['title']}»:\n\n{text}")
     
@@ -1707,6 +1695,7 @@ async def api_delete_challenge(request: web.Request) -> web.Response:
 
     await db._exec("DELETE FROM challenge_messages WHERE challenge_id = ?", (challenge_id,))
     await db.delete_user_challenge(challenge_id, tg_user.id)
+    await db.bump_pair_rev(db.pair_key(challenge["creator_id"], challenge["target_id"]))
     
     return web.json_response({"status": "deleted"})
 
@@ -1722,7 +1711,6 @@ async def api_archive_challenge_manually(request: web.Request) -> web.Response:
     if tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Нет доступа", 403)
 
-    # Архивировать можно ТОЛЬКО завершенные (approved/rejected) или уже архивные
     if not await db.transition_challenge(challenge_id, ("approved", "rejected"), "archived"):
         c_check = await db.get_user_challenge(challenge_id)
         if not c_check or c_check["status"] != "archived":
@@ -1763,7 +1751,6 @@ def _asset_versions() -> dict[str, str]:
 
 
 def _build_index() -> tuple:
-    """index.html с автоматическими ?v=<mtime> у скриптов/стилей (ручные ?v=NN больше не нужны)."""
     global _index_cache
     versions = _asset_versions()
     sig = (INDEX_FILE.stat().st_mtime_ns, tuple(sorted(versions.items())))
@@ -1772,9 +1759,10 @@ def _build_index() -> tuple:
     short = {name: ver for name, ver in versions.items()}
     html = INDEX_FILE.read_text(encoding="utf-8")
     html = ASSET_RE.sub(lambda m: f'{m[1]}="{m[2]}/{m[3]}?v={short.get(m[3], "0")}"', html)
-     # Передаем версии через <meta>, чтобы не использовать unsafe-inline в CSP
+    
     meta_assets = '<meta name="asset-versions" content="' + json.dumps(short).replace('"', '&quot;') + '">'
     html = html.replace("</head>", meta_assets + "</head>", 1)
+    
     raw = html.encode("utf-8")
     etag = '"' + hashlib.sha1(raw).hexdigest()[:20] + '"'
     _index_cache = (sig, etag, raw, gzip.compress(raw, 9))
@@ -1795,9 +1783,8 @@ async def static_file(request: web.Request) -> web.Response:
     hit = _static_cache.get(path)
     if hit is None or hit[0] != mtime:
         raw = path.read_bytes()
-        hit = _static_cache[path] = (mtime, raw, gzip.compress(raw, 9))  # один раз на версию файла
+        hit = _static_cache[path] = (mtime, raw, gzip.compress(raw, 9))
     ctype = (mimetypes.guess_type(path.name)[0] or "application/octet-stream").split(";")[0]
-    # URL с ?v=<mtime> неизменяем: кэшируем на год; без версии — проверяем по ETag
     cache = "public, max-age=31536000, immutable" if request.query.get("v") else "no-cache"
     return _respond(request, f'"{mtime:x}"', hit[1], hit[2], ctype, cache)
 
@@ -1884,7 +1871,6 @@ async def reminder_loop() -> None:
     global _last_cleanup_day
     while True:
         try:
-            # 0. Проверяем, не истекли ли 24 часа с момента мягкой отвязки
             now = int(time.time())
             rs = await db._exec(
                 "SELECT telegram_id FROM users WHERE unlinked_at > 0 AND unlinked_at < ?",
@@ -1894,13 +1880,10 @@ async def reminder_loop() -> None:
                 await db.finalize_unlink(row[0])
                 logging.info("Удалены данные пары по истечении 24 часов (user %s)", row[0])
 
-            # 1. Отправляем обычные напоминания
             await send_due_reminders()
             
-            # 2. Проверяем просроченные челленджи
             expired = await db.process_expired_challenges()
             for c in expired:
-                # Уведомляем того, кому кинули (он потерял баллы)
                 notify(
                     c["target_id"],
                     f"⌛ Челлендж «{_short_text(c['text'])}» не выполнен в срок. "
@@ -1911,7 +1894,6 @@ async def reminder_loop() -> None:
                     f"⌛ Челлендж «{_short_text(c['text'])}» просрочен. Партнёр потерял {c['penalty']} баллов."
                 )
             
-            # 3. Ежедневная очистка + резервная копия
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             if today != _last_cleanup_day:
                 _last_cleanup_day = today
@@ -1943,17 +1925,13 @@ async def main() -> None:
                     command="invite", description="Ссылка-приглашение для партнёра"
                 ),
                 BotCommand(command="unlink", description="Отвязать партнёра"),
-                BotCommand(command="unlink/restore", description="Восстановить отвязанного партнёра"),
             ]
         )
 
-    # Функция, которая вызывается при старте приложения
     async def on_startup(app: web.Application):
-        # Устанавливаем вебхук в Telegram
         await bot.set_webhook(WEBHOOK_URL, secret_token=WEBHOOK_SECRET, drop_pending_updates=False)
         logging.info("Webhook установлен: %s", WEBHOOK_URL)
 
-    # Подключаем gzip_middleware ПЕРЕД api_middleware
     app = web.Application(middlewares=[gzip_middleware, api_middleware], client_max_size=1024 * 1024)
     
     app.router.add_get("/", index)
@@ -1979,7 +1957,6 @@ async def main() -> None:
     app.router.add_post("/api/unlink/restore", api_restore_unlink)
     app.router.add_post("/api/challenges/{id}/archive", api_archive_challenge_manually)
     
-    # Челленджи и магазин
     app.router.add_get("/api/challenges", api_get_challenges_data)
     app.router.add_post("/api/challenges", api_create_challenge)
     app.router.add_post("/api/challenges/{id}/action", api_challenge_action)
@@ -1990,22 +1967,16 @@ async def main() -> None:
     app.router.add_get("/api/challenges/{id}/messages", api_get_challenge_messages)
     app.router.add_post("/api/challenges/{id}/messages", api_post_challenge_message)
     
-    # Магазин
     app.router.add_get("/api/shop", api_get_shop_items)
     app.router.add_post("/api/shop/buy", api_buy_shop_item)
     
-    # Комментарии
     app.router.add_get("/api/events/{id}/comments", api_get_event_comments)
     app.router.add_post("/api/events/{id}/comments", api_post_event_comment)
 
-    # Настроение дня
     app.router.add_get("/api/mood", api_get_mood)
     app.router.add_post("/api/mood", api_set_mood)
     
-    # --- ВЕБХУК ДЛЯ БОТА ---
-    # Регистрируем обработчик вебхука на нашем aiohttp приложении
     SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=WEBHOOK_SECRET).register(app, path=WEBHOOK_PATH)
-    # Настраиваем startup/shutdown для правильной работы диспетчера
     setup_application(app, dp, bot=bot)
     app.on_startup.append(on_startup)
 
@@ -2017,13 +1988,11 @@ async def main() -> None:
     
     reminders = asyncio.create_task(reminder_loop())
     try:
-        # Вместо dp.start_polling(bot) просто ждём, пока приложение работает
         await asyncio.Event().wait()
     finally:
         reminders.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reminders
-        # Удаляем вебхук при остановке, чтобы Telegram не слал обновления в пустоту
         with contextlib.suppress(Exception):
             await bot.delete_webhook()
         await runner.cleanup()
