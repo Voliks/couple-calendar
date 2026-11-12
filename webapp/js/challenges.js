@@ -50,7 +50,7 @@ async function openChallenges({ refresh = false, focusId = null } = {}) {
     if (res.catalog) catalogData = res.catalog;
     $("challengeBalance").textContent = res.balance ?? 0;
 
-    // 🔥 Скрываем красный кружок, так как мы только что прочитали челленджи
+    // Скрываем бейдж, так как мы прочитали челленджи
     const badge = $("challengeBadge");
     if (badge) badge.hidden = true;
 
@@ -64,7 +64,6 @@ async function openChallenges({ refresh = false, focusId = null } = {}) {
     }
     renderChallenges(visibleChallenges());
 
-    // DEEP-LINK: автоматически открыть детали нужного челленджа
     if (focusId) {
       const c = allChallenges.find(x => x.id === focusId);
       if (c) {
@@ -94,7 +93,7 @@ function statusLabel(c) {
 
 function renderChallenges(listToRender = []) {
   const list = $("challengesList");
-  const scrollTop = list.scrollTop; // сохраняем скролл — иначе будет «прыгать»
+  const scrollTop = list.scrollTop;
   if (!listToRender.length) {
     list.innerHTML = `<div class="empty">${showArchive ? "Архив пуст" : "Пока нет вызовов. Брось первый!"}</div>`;
     return;
@@ -258,7 +257,6 @@ function openChallengeDetails(id) {
   startChatPolling(id);
 }
 
-// Опрос чата
 function startChatPolling(id) {
   stopChatPolling();
   const gen = ++chatPollGen;
@@ -300,9 +298,20 @@ function renderChatMessages(list) {
   list.innerHTML = chatMessages.map(m => {
     const isMine = m.sender_id === myId;
     const align = isMine ? "align-self: flex-end; background: var(--accent); color: #fff;" : "align-self: flex-start; background: var(--bg2); color: var(--text);";
-    return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; ${align}">${esc(m.text)}</div>`;
+    
+    let imgHtml = "";
+    if (m.photo_id) {
+      imgHtml = `<img data-src="${esc(m.photo_id)}" class="comment-img" style="max-width:200px; border-radius:8px; margin-top:6px; display:block; background:rgba(0,0,0,0.1); min-height:50px; cursor:pointer;">`;
+    }
+    
+    return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; ${align}">
+      ${m.text ? `<div>${esc(m.text)}</div>` : ""}
+      ${imgHtml}
+    </div>`;
   }).join("");
   list.scrollTop = list.scrollHeight;
+  
+  if (typeof loadCommentImages === "function") loadCommentImages();
 }
 
 async function loadMessages(challengeId, silent = false, force = false) {
@@ -507,19 +516,16 @@ try {
 } catch (e) {}
 
 (() => {
-  // Аккордеон категорий
   $("catAccordionHeader").onclick = () => {
     const content = $("catAccordionContent");
     content.style.display = content.style.display === "none" ? "block" : "none";
   };
 
-  // Аккордеон заданий
   $("ideaAccordionHeader").onclick = () => {
     const content = $("ideaAccordionContent");
     content.style.display = content.style.display === "none" ? "block" : "none";
   };
 
-  // Выбор категории
   $("catAccordionContent").addEventListener("click", (e) => {
     const card = e.target.closest("[data-cat]");
     if (!card) return;
@@ -534,7 +540,6 @@ try {
     $("catAccordionContent").style.display = "none";
   });
 
-  // Выбор задания
   $("challengeIdeaList").addEventListener("click", (e) => {
     const card = e.target.closest("[data-idea-idx]");
     if (!card) return;
@@ -549,7 +554,6 @@ try {
     $("ideaAccordionContent").style.display = "none";
   });
 
-  // Кастомное задание
   $("customChallengeBtn").onclick = () => {
     const text = $("customChallengeInput").value.trim();
     if (!text) return toast("Введите текст задания");
@@ -578,7 +582,6 @@ try {
   $("challengesClose").onclick = closeChallenges;
   $("createChallengeBtn").onclick = createChallenge;
 
-  // Обработка клика по крестику (в архив)
   $("challengesList").addEventListener("click", async (ev) => {
     const archiveBtn = ev.target.closest(".archive-btn");
     if (archiveBtn) {
@@ -605,7 +608,6 @@ try {
     }
   });
 
-  // Клик по всей карточке открывает детали (чат)
   $("challengesList").addEventListener("click", (ev) => {
     if (ev.target.closest(".archive-btn")) return;
     const card = ev.target.closest("[data-challenge-id]");
@@ -620,7 +622,6 @@ try {
     if (e.target === $("challengeChatOverlay")) closeChallengeDetails();
   });
 
-  // Обработчики для окна просмотра фото
   $("photoViewerClose").onclick = () => { $("photoViewerOverlay").hidden = true; };
   $("photoViewerOverlay").onclick = (e) => { 
     if (e.target === $("photoViewerOverlay")) $("photoViewerOverlay").hidden = true; 
@@ -649,4 +650,17 @@ try {
   $("chatMessageInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
   });
+
+  // 📷 Кнопка фото в чате
+  const attachBtn = $("chatAttachCommentBtn");
+  if (attachBtn) {
+    attachBtn.onclick = () => {
+      if (!currentChallenge) return;
+      if (typeof commentFileInput !== "undefined" && commentFileInput) {
+        commentFileInput.click();
+      } else {
+        toast("Ошибка: поле загрузки не найдено");
+      }
+    };
+  }
 })();

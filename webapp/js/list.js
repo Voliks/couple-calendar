@@ -83,23 +83,33 @@ function declineCommentHtml(e) {
   return `${lines.join("")}${button}`;
 }
 
+// Отображение комментариев с поддержкой фото
 function commentsListHtml(comments) {
   if (!comments.length) return `<div class="cm-empty">Нет комментариев</div>`;
   const myId = state?.my_id || 0;
-  return comments.map((c) =>
-    `<div class="cm${c.sender_id === myId ? " mine" : ""}">${esc(c.text)}</div>`).join("");
+  return comments.map((c) => {
+    let imgHtml = "";
+    if (c.photo_id) {
+      imgHtml = `<div style="margin-top:6px;">
+        <img data-src="${esc(c.photo_id)}" class="comment-img" style="max-width:100%; border-radius:8px; min-height:40px; background:rgba(0,0,0,0.05); cursor:pointer;" alt="Фото">
+      </div>`;
+    }
+    return `<div class="cm${c.sender_id === myId ? " mine" : ""}">
+      ${c.text ? `<div>${esc(c.text)}</div>` : ""}
+      ${imgHtml}
+    </div>`;
+  }).join("");
 }
 
 function eventCommentsHtml(e) {
-  // Комментарии доступны везде, кроме Магазина
   if (e.category === "shop") return "";
   
-  // Комментарии приходят вместе со state — отдельных запросов на каждую карточку нет
   return `
     <div class="event-comments-block" data-event-id="${e.id}">
       <div class="event-comments-list" id="comments-list-${e.id}">${commentsListHtml(e.comments || [])}</div>
       <div class="comment-row">
         <input type="text" class="comment-input" placeholder="Написать комментарий..." maxlength="500">
+        <button class="btn-attach-comment" style="padding:0 12px; font-size:18px; background:var(--bg2); border-radius:8px; border:none;">📷</button>
         <button class="btn-send-comment">➤</button>
       </div>
     </div>
@@ -208,6 +218,7 @@ async function loadEventComments(eventId) {
     if (ev) ev.comments = comments;
     const list = document.getElementById(`comments-list-${eventId}`);
     if (list) list.innerHTML = commentsListHtml(comments);
+    if (typeof loadCommentImages === "function") loadCommentImages(); // Загружаем картинки
   } catch (e) {
     console.error("Ошибка загрузки комментариев", e);
   }
@@ -233,24 +244,21 @@ function renderList() {
   const prevScrollY = window.scrollY;
   $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
   
-  // Сначала фильтруем события на выбранный день
+  // Фильтруем события на выбранный день
   const dayEvents = state.events.filter((e) => dayHasDate(e, selected));
 
   // 🔥 МАГИЯ СОРТИРОВКИ:
   const weight = (status) => {
     if (status === "declined" || status === "expired") return 2; // В самый низ
     if (status === "pending") return 0; // Вверх
-    return 1; // Accepted и остальные (например, done) в середину
+    return 1; // Accepted и остальные
   };
 
   dayEvents.sort((a, b) => {
-    // 1. Сначала по статусу (отклонённые вниз)
     const wA = weight(statusKey(a));
     const wB = weight(statusKey(b));
     if (wA !== wB) return wA - wB;
-
-    // 2. Если статус одинаковый — по ID (новые сверху)
-    return b.id - a.id;
+    return b.id - a.id; // Новые сверху
   });
 
   const items = dayEvents.map((e) => ({ id: String(e.id), html: cardHtml(e) }));
@@ -259,12 +267,16 @@ function renderList() {
   if (!ok) {
     $("list").innerHTML = `<div class="empty">На этот день ничего нет. Нажмите «+», чтобы добавить событие.</div>`;
   }
+  
   if (prevScrollY > 0) {
     requestAnimationFrame(() => {
       const max = document.documentElement.scrollHeight - window.innerHeight;
       window.scrollTo(0, Math.min(prevScrollY, Math.max(0, max)));
     });
   }
+
+  // Загружаем картинки в комментариях
+  if (typeof loadCommentImages === "function") loadCommentImages();
 }
 
 function replaceEvent(updated) {
@@ -602,3 +614,117 @@ $("list").addEventListener("keydown", (ev) => {
     sendEventComment(block.dataset.eventId, ev.target);
   }
 });
+
+/* ---------- ЗАГРУЗКА ФОТО В КОММЕНТАРИИ ---------- */
+
+const commentFileInput = document.createElement("input");
+commentFileInput.type = "file";
+commentFileInput.accept = "image/*";
+commentFileInput.style.display = "none";
+document.body.appendChild(commentFileInput);
+
+let pendingCommentContext = null;
+
+$("list").addEventListener("click", (ev) => {
+  const btn = ev.target.closest(".btn-attach-comment");
+  if (!btn) return;
+  const row = btn.closest(".comment-row");
+  const input = row.querySelector(".comment-input");
+  const block = btn.closest(".event-comments-block");
+  
+  pendingCommentContext = { eventId: block.dataset.eventId, inputEl: input };
+  commentFileInput.click();
+});
+
+commentFileInput.addEventListener("change", async (ev) => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  ev.target.value = ""; // Сброс
+
+  // Если открыт чат челленджа
+  if (typeof currentChallenge !== "undefined" && currentChallenge) {
+    const btn = $("chatSendBtn");
+    btn.disabled = true;
+    try {
+      const up = await api("/comments/upload-url", { method: "POST", body: { filename: file.name } });
+      const form = new FormData();
+      form.append("cacheControl", "3600");
+      form.append("", file);
+      const resp = await fetch(up.upload_url, { method: "PUT", body: form });
+      if (!resp.ok) throw new Error("Ошибка загрузки фото");
+      
+      const text = $("chatMessageInput").value.trim();
+      await api(`/challenges/${currentChallenge.id}/messages`, { method: "POST", body: { text, photo_id: up.path } });
+      $("chatMessageInput").value = "";
+      await loadMessages(currentChallenge.id, true, true);
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+    return;
+  }
+
+  // Если это комментарий в списке (события)
+  if (pendingCommentContext) {
+    const { eventId, inputEl } = pendingCommentContext;
+    pendingCommentContext = null;
+    const sendBtn = inputEl.closest(".comment-row").querySelector(".btn-send-comment");
+    
+    sendBtn.disabled = true;
+    sendBtn.textContent = "⏳";
+    try {
+      const up = await api("/comments/upload-url", { method: "POST", body: { filename: file.name } });
+      const form = new FormData();
+      form.append("cacheControl", "3600");
+      form.append("", file);
+      const resp = await fetch(up.upload_url, { method: "PUT", body: form });
+      if (!resp.ok) throw new Error("Ошибка загрузки фото");
+      
+      const text = inputEl.value.trim();
+      await api(`/events/${eventId}/comments`, { method: "POST", body: { text, photo_id: up.path } });
+      inputEl.value = "";
+      await loadEventComments(eventId);
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = "➤";
+    }
+  }
+});
+
+// Автозагрузка изображений
+async function loadCommentImages() {
+  const images = document.querySelectorAll('img.comment-img[data-src]:not([src])');
+  for (const img of images) {
+    const path = img.dataset.src;
+    if (!path) continue;
+    try {
+      const res = await api(`/comments/photo-url?path=${encodeURIComponent(path)}`);
+      if (res.view_url) {
+        img.src = res.view_url;
+        img.onclick = () => window.open(res.view_url, "_blank");
+      }
+    } catch (e) {
+      console.warn("Не удалось загрузить фото", e);
+      img.alt = "Ошибка загрузки";
+    }
+  }
+}
+
+// Вызываем после каждого рендера списка
+const originalRenderList = renderList;
+renderList = function() {
+  originalRenderList();
+  loadCommentImages();
+};
+
+// Вызываем после обновления комментариев
+const originalLoadEventComments = loadEventComments;
+loadEventComments = async function(id) {
+  await originalLoadEventComments(id);
+  loadCommentImages();
+};

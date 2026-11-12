@@ -7,9 +7,9 @@ from datetime import date as date_cls
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
-from aiogram import Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-from dotenv import load_dotenv
+from aiogram import Bot  # type: ignore[import-not-found]
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo  # type: ignore[import-not-found]
+from dotenv import load_dotenv  # type: ignore[import-not-found]
 
 # .env нужно прочитать до импорта db (он читает TURSO_* при импорте)
 load_dotenv()

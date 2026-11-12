@@ -241,7 +241,7 @@ async def event_inline_action(call: CallbackQuery):
     if call.from_user.id != event["target_user"]:
         await call.answer("Отвечать может только приглашённый", show_alert=True)
         return
-    if event["category"] in ("shop", "todo", "personal"):
+    if event["category"] in ("shop", "todo", "personal", "sex"):
         await call.answer("Это не требует ответа", show_alert=True)
         return
     if action == "accept":
@@ -580,7 +580,6 @@ def parse_month(raw) -> tuple:
 async def health_check(_: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
-# --- СТАТИКА ДЛЯ КЛИЕНТА ---
 async def api_config(request: web.Request) -> web.Response:
     """Статичные данные (цвета, реакции, время напоминаний). Идеи — в /api/state."""
     authenticate(request)  # проверка авторизации и rate limit
@@ -996,7 +995,6 @@ async def api_move_item(request: web.Request) -> web.Response:
     await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
     return web.json_response(event_to_dict(await db.get_event(event["id"]), tg_user.id))
 
-
 async def api_add_sex_idea(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     user = await db.get_or_create_user(tg_user.id)
@@ -1136,6 +1134,47 @@ async def api_set_mood(request: web.Request) -> web.Response:
 
     return web.json_response({"status": "ok"})
 
+
+# --- КОММЕНТАРИИ К СОБЫТИЯМ ---
+
+async def api_get_event_comments(request: web.Request) -> web.Response:
+    tg_user = authenticate(request)
+    event_id = _int_param(request, "id")
+    event = await member_event(request, tg_user.id)
+    
+    if event["category"] == "shop":
+        return web.json_response({"comments": []})
+        
+    comments = await db.get_event_comments(event_id)
+    return web.json_response({"comments": comments})
+
+
+async def api_post_event_comment(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    event_id = _int_param(request, "id")
+    event = await member_event(request, tg_user.id)
+    
+    if event["category"] == "shop":
+        raise ApiError("Комментарии недоступны для списка покупок", 403)
+
+    body = await read_json(request)
+    text = str(body.get("text") or "").strip()[:500]
+    photo_id = str(body.get("photo_id") or "").strip()
+    
+    if not text and not photo_id:
+        raise ApiError("Введите текст или прикрепите фото", 400)
+
+    if photo_id and not photo_id.startswith(f"comment_{tg_user.id}_"):
+        raise ApiError("Некорректный путь к фото", 400)
+
+    await db.add_event_comment(event_id, tg_user.id, text, photo_id)
+    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
+    
+    partner_id = event["target_user"] if tg_user.id == event["created_by"] else event["created_by"]
+    preview = text if text else "📷 Фото"
+    notify(partner_id, f"💬 Новый комментарий к событию «{event['title']}»:\n\n{preview}")
+    return web.json_response({"status": "ok"})
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
 PHOTO_BUCKET = os.getenv("SUPABASE_BUCKET", "challenges").strip() or "challenges"
@@ -1189,7 +1228,6 @@ async def _supabase_request(method: str, endpoint: str, body: dict = None) -> di
             text = await resp.text()
             if not resp.ok:
                 logging.error("Supabase error %s: %s", resp.status, text)
-                # Возвращаем текст ошибки клиенту для отладки
                 raise ApiError(f"Ошибка хранилища ({resp.status}): {text[:120]}", 502)
             try:
                 return json.loads(text)
@@ -1230,6 +1268,8 @@ def _short_text(text: str, limit: int = 80) -> str:
     return t[: limit - 1] + "…"
 
 
+# --- ЗАГРУЗКА ФОТО ---
+
 async def api_upload_photo_url(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     body = await read_json(request)
@@ -1252,19 +1292,41 @@ async def api_upload_photo_url(request: web.Request) -> web.Response:
 
     res = await _supabase_request("POST", f"/object/upload/sign/{PHOTO_BUCKET}/{path}", {})
     
-    # Пытаемся найти ссылку в разных форматах ответа Supabase
     upload_url = _storage_url(
         res.get("signed_url") 
         or res.get("signedUrl") 
         or res.get("signedURL") 
         or res.get("url")
         or (res.get("data") or {}).get("signedUrl")
-        or (res.get("data") or {}).get("signed_url")
     )
     
     if not upload_url:
         logging.error("Supabase upload-url response (не найдена ссылка): %s", res)
         raise ApiError("Не удалось подготовить загрузку (в ответе нет ссылки)", 502)
+    
+    return web.json_response({"upload_url": upload_url, "path": path})
+
+
+async def api_upload_comment_photo_url(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    body = await read_json(request)
+    name = str(body.get("filename") or "")
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in PHOTO_EXTS:
+        ext = "jpg"
+    path = f"comment_{tg_user.id}_{int(time.time())}_{secrets.token_hex(4)}.{ext}"
+
+    res = await _supabase_request("POST", f"/object/upload/sign/{PHOTO_BUCKET}/{path}", {})
+    upload_url = _storage_url(
+        res.get("signed_url") 
+        or res.get("signedUrl") 
+        or res.get("signedURL") 
+        or res.get("url")
+        or (res.get("data") or {}).get("signedUrl")
+    )
+    
+    if not upload_url:
+        raise ApiError("Не удалось подготовить загрузку", 502)
     
     return web.json_response({"upload_url": upload_url, "path": path})
 
@@ -1293,20 +1355,24 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
         raise ApiError("Фото не найдено", 404)
 
     res = await _supabase_request("POST", f"/object/sign/{PHOTO_BUCKET}/{path}", {"expiresIn": 3600})
-    
-    # Пытаемся найти ссылку в разных форматах
-    view_url = _storage_url(
-        res.get("signedURL") 
-        or res.get("signedUrl") 
-        or res.get("signed_url")
-        or res.get("url")
-        or (res.get("data") or {}).get("signedUrl")
-    )
+    view_url = _storage_url(res.get("signedURL") or res.get("signedUrl"))
     
     if not view_url:
-        logging.error("Supabase photo-url response (не найдена ссылка): %s", res)
         raise ApiError("Ошибка получения ссылки на фото", 502)
-        
+    return web.json_response({"view_url": view_url})
+
+
+async def api_get_comment_photo_url(request: web.Request) -> web.Response:
+    authenticate(request)
+    path = request.query.get("path", "").strip()
+    if not path or not path.startswith("comment_"):
+        raise ApiError("Некорректный путь", 400)
+
+    res = await _supabase_request("POST", f"/object/sign/{PHOTO_BUCKET}/{path}", {"expiresIn": 3600})
+    view_url = _storage_url(res.get("signedURL") or res.get("signedUrl"))
+    
+    if not view_url:
+        raise ApiError("Ошибка получения ссылки", 502)
     return web.json_response({"view_url": view_url})
 
 
@@ -1337,7 +1403,6 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     refresh = request.query.get("refresh") == "1"
 
-    # 1. Баланс и история одним batch-запросом к Turso (вместо двух отдельных)
     rs_balance, rs_history = await db._batch([
         ("SELECT balance FROM users WHERE telegram_id = ?", (tg_user.id,)),
         ("SELECT * FROM user_challenges WHERE creator_id = ? OR target_id = ? ORDER BY created_at DESC", (tg_user.id, tg_user.id)),
@@ -1353,7 +1418,6 @@ async def api_get_challenges_data(request: web.Request) -> web.Response:
         for r in rs_history.rows
     ]
 
-    # 2. Обновляем last_viewed и получаем каталог (если нужно)
     catalog = None
     if not refresh:
         await db.set_last_viewed_challenges(tg_user.id)
@@ -1484,20 +1548,25 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
 
     body = await read_json(request)
     text = str(body.get("text") or "").strip()[:500]
-    if not text:
-        raise ApiError("Введите текст", 400)
+    photo_id = str(body.get("photo_id") or "").strip()
+    
+    if not text and not photo_id:
+        raise ApiError("Введите текст или прикрепите фото", 400)
+
+    if photo_id and not photo_id.startswith(f"comment_{tg_user.id}_"):
+        raise ApiError("Некорректный путь к фото", 400)
         
-    await db.add_challenge_message(challenge_id, tg_user.id, text)
+    await db.add_challenge_message(challenge_id, tg_user.id, text, photo_id)
     await db.bump_pair_rev(db.pair_key(challenge["creator_id"], challenge["target_id"]))
-    notify(partner_id, f"💬 Новое сообщение по челленджу «{_short_text(challenge['text'])}»:\n\n{_short_text(text, 200)}")
+    
+    preview = text if text else "📷 Фото"
+    notify(partner_id, f"💬 Новое сообщение по челленджу «{_short_text(challenge['text'])}»:\n\n{preview}")
     
     return web.json_response({"status": "ok"})
 
 
 async def api_get_shop_items(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
-    # Каталог магазина читается из JSON-файла (кэшируется в памяти), а баланс — из БД.
-    # Один запрос к БД.
     items = db.get_shop_items_json()
     balance = await db.get_user_balance(tg_user.id)
     return web.json_response({"items": items, "balance": balance})
@@ -1552,40 +1621,6 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
         reply_markup=event_reply_keyboard(event["id"], event["date"]),
     )
     return web.json_response({"status": "ok", "event": event_to_dict(event, tg_user.id)})
-
-
-async def api_get_event_comments(request: web.Request) -> web.Response:
-    tg_user = authenticate(request)
-    event_id = _int_param(request, "id")
-    event = await member_event(request, tg_user.id)
-    
-    # Разрешаем комментарии для всех категорий, кроме магазина (у него свой чек-лист)
-    if event["category"] == "shop":
-        return web.json_response({"comments": []})
-        
-    comments = await db.get_event_comments(event_id)
-    return web.json_response({"comments": comments})
-
-
-async def api_post_event_comment(request: web.Request) -> web.Response:
-    tg_user = authenticate(request, write=True)
-    event_id = _int_param(request, "id")
-    event = await member_event(request, tg_user.id)
-    
-    if event["category"] == "shop":
-        raise ApiError("Комментарии недоступны для списка покупок", 403)
-
-    body = await read_json(request)
-    text = str(body.get("text") or "").strip()[:500]
-    if not text:
-        raise ApiError("Введите текст", 400)
-
-    await db.add_event_comment(event_id, tg_user.id, text)
-    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
-    
-    partner_id = event["target_user"] if tg_user.id == event["created_by"] else event["created_by"]
-    notify(partner_id, f"💬 Новый комментарий к событию «{event['title']}»:\n\n{text}")
-    return web.json_response({"status": "ok"})
 
 
 async def api_delete_challenge(request: web.Request) -> web.Response:
@@ -1646,7 +1681,6 @@ _asset_versions_cache: tuple[tuple, dict[str, str]] | None = None
 
 
 def _asset_versions() -> dict[str, str]:
-    """Кэшируем хэши файлов по их mtime_ns, чтобы не читать диск при каждом запросе."""
     global _asset_versions_cache
     
     files = []
@@ -1670,7 +1704,6 @@ def _asset_versions() -> dict[str, str]:
 
 
 def _build_index() -> tuple:
-    """Кэширует итоговый HTML по mtime index.html и версиям ассетов."""
     global _index_cache
     versions = _asset_versions()
     sig = (INDEX_FILE.stat().st_mtime_ns, tuple(sorted(versions.items())))
@@ -1756,21 +1789,18 @@ async def send_due_reminders() -> None:
 async def cleanup_old_reminders() -> None:
     now_utc = datetime.now(timezone.utc)
     
-    # 1. Напоминания старше 30 дней
     cutoff_reminders = (now_utc - timedelta(days=30)).strftime("%Y-%m-%d")
     try:
         n = await db.purge_old_reminders(cutoff_reminders)
         if n: logging.info("Очищено старых напоминаний: %s", n)
     except Exception: logging.exception("Не удалось очистить старые напоминания")
 
-    # 2. Архивация: события старше 6 месяцев (180 дней) уходят в архив
     cutoff_archive = (now_utc - timedelta(days=180)).strftime("%Y-%m-%d")
     try:
         n2 = await db.archive_old_events(cutoff_archive)
         if n2: logging.info("Архивировано событий (6+ мес): %s", n2)
     except Exception: logging.exception("Не удалось архивировать события")
 
-    # 3. Хард-удаление: из архива старше 6 месяцев (180 дней)
     cutoff_delete = int((now_utc - timedelta(days=180)).timestamp())
     try:
         n3 = await db.purge_archived_events(cutoff_delete)
@@ -1876,6 +1906,9 @@ async def main() -> None:
     
     app.router.add_get("/api/events/{id}/comments", api_get_event_comments)
     app.router.add_post("/api/events/{id}/comments", api_post_event_comment)
+
+    app.router.add_post("/api/comments/upload-url", api_upload_comment_photo_url)
+    app.router.add_get("/api/comments/photo-url", api_get_comment_photo_url)
 
     app.router.add_get("/api/mood", api_get_mood)
     app.router.add_post("/api/mood", api_set_mood)

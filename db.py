@@ -538,6 +538,11 @@ async def _m31_archived_at() -> None:
     await _add_column("events", "archived_at", "INTEGER NOT NULL DEFAULT 0")
 
 
+async def _m32_comment_photos() -> None:
+    await _add_column("event_comments", "photo_id", "TEXT NOT NULL DEFAULT ''")
+    await _add_column("challenge_messages", "photo_id", "TEXT NOT NULL DEFAULT ''")
+
+
 MIGRATIONS = [
     (1, _m1_base), (2, _m2_features), (3, _m3_sex_ideas), (4, _m4_ideas_source), (5, _m5_fix_checklist),
     (6, _m6_hidden_ideas), (7, _m7_archived_ideas), (8, _m8_todo), (9, _m9_reactions), (10, _m10_two_comments),
@@ -546,7 +551,7 @@ MIGRATIONS = [
     (19, _m19_challenge_deadline), (20, _m20_shop_items), (21, _m21_event_comments), (22, _m22_last_viewed),
     (23, _m23_performance_indexes), (24, _m24_moods), (25, _m25_alt_time), (26, _m26_fix_schema),
     (27, _m16_add_done_status), (28, _m28_soft_unlink), (29, _m29_pair_rev),
-    (30, _m30_reliable_unlink), (31, _m31_archived_at),
+    (30, _m30_reliable_unlink), (31, _m31_archived_at), (32, _m32_comment_photos),
 ]
 
 _REQUIRED_COLUMNS = {15: [("events", "date_end", "TEXT NOT NULL DEFAULT ''"), ("events", "visibility", "TEXT NOT NULL DEFAULT 'shared'")]}
@@ -873,6 +878,7 @@ async def get_pair_rev(pair_key_value: str) -> int:
     rs = await _exec("SELECT rev FROM pair_rev WHERE pair_key = ?", (pair_key_value,))
     return rs.rows[0][0] if rs.rows else 0
 
+
 # --- События ---
 
 EVENT_COLS = (
@@ -906,7 +912,7 @@ async def _attach_items(events: list[dict]) -> list[dict]:
     by_id = {e["id"]: e for e in events}
 
     shop_ids = [e["id"] for e in events if e["category"] == "shop"]
-     # Теперь комментарии грузим для всех, кроме магазина
+    # Теперь комментарии грузим для всех, кроме магазина
     chat_ids = [e["id"] for e in events if e["category"] != "shop"]
 
     stmts: list[tuple[str, tuple]] = []
@@ -938,7 +944,7 @@ async def _attach_items(events: list[dict]) -> list[dict]:
         cm = ",".join("?" for _ in chat_ids)
         pos["comments"] = len(stmts)
         stmts.append((
-            f"SELECT event_id, id, user_id, text, created_at FROM event_comments "
+            f"SELECT event_id, id, user_id, text, photo_id, created_at FROM event_comments "
             f"WHERE event_id IN ({cm}) ORDER BY created_at, id",
             tuple(chat_ids),
         ))
@@ -950,9 +956,9 @@ async def _attach_items(events: list[dict]) -> list[dict]:
         return events
 
     if "comments" in pos:
-        for event_id, cid, uid, text, created_at in results[pos["comments"]].rows:
+        for event_id, cid, uid, text, photo_id, created_at in results[pos["comments"]].rows:
             by_id[event_id]["comments"].append(
-                {"id": cid, "sender_id": uid, "text": text, "created_at": created_at}
+                {"id": cid, "sender_id": uid, "text": text, "photo_id": photo_id, "created_at": created_at}
             )
     if "checklist" in pos:
         for item_id, event_id, text, checked in results[pos["checklist"]].rows:
@@ -1214,32 +1220,32 @@ async def set_last_viewed_challenges(user_id: int) -> None:
 
 async def get_event_comments(event_id: int) -> list[dict]:
     rs = await _exec(
-        "SELECT id, user_id, text, created_at FROM event_comments WHERE event_id = ? ORDER BY created_at ASC",
+        "SELECT id, user_id, text, photo_id, created_at FROM event_comments WHERE event_id = ? ORDER BY created_at ASC",
         (event_id,),
     )
-    return [{"id": r[0], "sender_id": r[1], "text": r[2], "created_at": r[3]} for r in rs.rows]
+    return [{"id": r[0], "sender_id": r[1], "text": r[2], "photo_id": r[3], "created_at": r[4]} for r in rs.rows]
 
 
-async def add_event_comment(event_id: int, user_id: int, text: str) -> None:
+async def add_event_comment(event_id: int, user_id: int, text: str, photo_id: str = "") -> None:
     await _exec(
-        "INSERT INTO event_comments (event_id, user_id, text, created_at) VALUES (?, ?, ?, ?)",
-        (event_id, user_id, text, int(time.time())),
+        "INSERT INTO event_comments (event_id, user_id, text, photo_id, created_at) VALUES (?, ?, ?, ?, ?)",
+        (event_id, user_id, text, photo_id, int(time.time())),
     )
 
 
 async def get_challenge_messages(challenge_id: int, after: int = 0) -> list[dict]:
     rs = await _exec(
-        "SELECT id, sender_id, text, created_at FROM challenge_messages "
+        "SELECT id, sender_id, text, photo_id, created_at FROM challenge_messages "
         "WHERE challenge_id = ? AND id > ? ORDER BY id ASC",
         (challenge_id, after),
     )
-    return [{"id": r[0], "sender_id": r[1], "text": r[2], "created_at": r[3]} for r in rs.rows]
+    return [{"id": r[0], "sender_id": r[1], "text": r[2], "photo_id": r[3], "created_at": r[4]} for r in rs.rows]
 
 
-async def add_challenge_message(challenge_id: int, sender_id: int, text: str) -> None:
+async def add_challenge_message(challenge_id: int, sender_id: int, text: str, photo_id: str = "") -> None:
     await _exec(
-        "INSERT INTO challenge_messages (challenge_id, sender_id, text, created_at) VALUES (?, ?, ?, ?)",
-        (challenge_id, sender_id, text, int(time.time())),
+        "INSERT INTO challenge_messages (challenge_id, sender_id, text, photo_id, created_at) VALUES (?, ?, ?, ?, ?)",
+        (challenge_id, sender_id, text, photo_id, int(time.time())),
     )
 
 
@@ -1256,7 +1262,6 @@ async def count_active_challenges_today(creator_id: int) -> int:
         (creator_id, start_of_day),
     )
     return rs.rows[0][0]
-
 
 async def _hidden_idea_keys(user_id: int, partner_id: int | None) -> set[str]:
     if partner_id:

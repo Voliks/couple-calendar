@@ -31,7 +31,7 @@
     <div class="cal-title" id="title" role="button" tabindex="0" aria-label="Вернуться к текущему месяцу"></div>
     <button class="nav" id="next" aria-label="Следующий месяц">›</button>
     <button class="today-btn" id="todayBtn" aria-label="Сегодня">Сегодня</button>
-    <button class="today-btn" id="archiveBtn" aria-label="Архив дел">Архив</button>
+    <button class="today-btn" id="archiveBtn" aria-label="Архив событий">Архив</button>
   </div>
 
   <!-- Баннер восстановления после отвязки -->
@@ -243,7 +243,7 @@
 
 <div class="overlay" id="archiveOverlay" hidden>
   <div class="sheet" role="dialog" aria-modal="true">
-    <h2>Архив дел</h2>
+    <h2>Архив событий</h2>
     <div id="archiveList"></div>
     <div class="row">
       <button class="btn ghost" id="archiveClose" style="grid-column: 1 / -1;">Закрыть</button>
@@ -357,8 +357,11 @@
       </div>
     </div>
     <div id="chatMessagesList" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; padding-right: 4px;"></div>
+    
+    <!-- Поле ввода сообщения с кнопкой ФОТО -->
     <div style="display: flex; gap: 8px;">
       <input type="text" id="chatMessageInput" placeholder="Написать сообщение..." maxlength="500" style="flex: 1; padding: 12px; border-radius: 12px; border: none; background: var(--bg2); color: var(--text); outline: none;">
+      <button id="chatAttachCommentBtn" style="padding: 0 14px; font-size: 18px; border-radius: 12px; background: var(--bg2); color: var(--text); border: none;">📷</button>
       <button id="chatSendBtn" class="btn primary" style="padding: 0 16px; border-radius: 12px; font-weight: bold;">➤</button>
     </div>
   </div>
