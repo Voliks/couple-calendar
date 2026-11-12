@@ -45,6 +45,9 @@ from common import (
     open_app_keyboard,
     safe_send,
     valid_date,
+    challenge_deeplink_keyboard,
+    event_deeplink_keyboard,
+    set_bot_username,
 )
 import db
 from voice import close_http as close_voice_http, router as voice_router
@@ -809,8 +812,11 @@ async def api_create_event(request: web.Request) -> web.Response:
         notify(user["partner_id"], f"📌 Новое дело на {fmt_range(data['date'], data['date_end'])}{at}.{extra} Откройте календарь, чтобы посмотреть.")
     else:
         icon = CATEGORY_ICONS.get(data["category"], "➕")
-        notify(user["partner_id"], f"{icon} Новое событие на {fmt_range(data['date'], data['date_end'])}{(' в ' + data['time']) if data['time'] else ''}. Ответьте прямо здесь или откройте календарь.", reply_markup=event_reply_keyboard(event["id"]))
-    return web.json_response(event_to_dict(event, tg_user.id), status=201)
+        notify(
+            user["partner_id"],
+            f"{icon} Новое событие на {fmt_range(data['date'], data['date_end'])}{(' в ' + data['time']) if data['time'] else ''}. Ответьте прямо здесь или откройте календарь.",
+            reply_markup=event_reply_keyboard(event["id"], event["date"]),
+        )
 
 
 async def api_update_event(request: web.Request) -> web.Response:
@@ -1374,7 +1380,11 @@ async def api_set_challenge_photo(request: web.Request) -> web.Response:
     if not await db.transition_challenge(challenge_id, ("pending", "rejected"), "submitted", photo_id=path):
         raise ApiError("Этот вызов уже отправлен на проверку", 409)
 
-    notify(challenge["creator_id"], f"🔥 Партнёр выполнил челлендж: «{_short_text(challenge['text'])}». Зайди в календарь, чтобы проверить!")
+    notify(
+        challenge["creator_id"],
+        f"🔥 Партнёр выполнил челлендж: «{_short_text(challenge['text'])}». Зайди в календарь, чтобы проверить!",
+        reply_markup=challenge_deeplink_keyboard(challenge_id),
+    )
     return web.json_response({"status": "ok"})
 
 
@@ -1453,7 +1463,11 @@ async def api_create_challenge(request: web.Request) -> web.Response:
     deadline = int(time.time()) + hours * 3600
 
     challenge = await db.create_user_challenge(tg_user.id, user["partner_id"], category, text, points, deadline)
-    notify(user["partner_id"], f"⚔️ Тебе бросили вызов: «{_short_text(text)}» ({points} б.). На выполнение {hours} ч.")
+    notify(
+        user["partner_id"],
+        f"⚔️ Тебе бросили вызов: «{_short_text(text)}» ({points} б.). На выполнение {hours} ч.",
+        reply_markup=challenge_deeplink_keyboard(challenge["id"]),
+    )
     return web.json_response({"status": "created", "challenge": challenge}, status=201)
 
 
@@ -1471,11 +1485,19 @@ async def api_challenge_action(request: web.Request) -> web.Response:
         if not await db.transition_challenge(challenge_id, ("pending", "submitted"), "approved"):
             raise ApiError("Этот вызов нельзя засчитать (возможно, он уже завершён)", 409)
         await db.add_balance(challenge["target_id"], challenge["reward"])
-        notify(challenge["target_id"], f"✅ Твой челлендж засчитан! Тебе начислено {challenge['reward']} баллов.")
+        notify(
+            challenge["target_id"],
+            f"✅ Твой челлендж засчитан! Тебе начислено {challenge['reward']} баллов.",
+            reply_markup=challenge_deeplink_keyboard(challenge_id),
+        )
     elif action == "reject" and is_creator:
         if not await db.transition_challenge(challenge_id, ("pending", "submitted"), "rejected"):
             raise ApiError("Этот вызов нельзя отклонить (возможно, он уже завершён)", 409)
-        notify(challenge["target_id"], f"❌ Челлендж отклонён: «{_short_text(challenge['text'])}». Можно прислать другое фото.")
+        notify(
+            challenge["target_id"],
+            f"❌ Челлендж отклонён: «{_short_text(challenge['text'])}». Можно прислать другое фото.",
+            reply_markup=challenge_deeplink_keyboard(challenge_id),
+        )
     else:
         raise ApiError("Недопустимое действие", 400)
         
@@ -1579,8 +1601,11 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
         logging.exception("Ошибка при создании события покупки, средства возвращены")
         raise ApiError("Ошибка при создании события. Баллы возвращены.", 500)
     
-    notify(user["partner_id"], f"🎁 Партнёр купил желание «{title}» на {fmt_range(date, '')}. Загляните в календарь!", reply_markup=event_reply_keyboard(event["id"]))
-    return web.json_response({"status": "ok", "event": event_to_dict(event, tg_user.id)})
+    notify(
+        user["partner_id"],
+        f"🎁 Партнёр купил желание «{title}» на {fmt_range(date, '')}. Загляните в календарь!",
+        reply_markup=event_reply_keyboard(event["id"], event["date"]),
+    )
 
 
 async def api_get_event_comments(request: web.Request) -> web.Response:
@@ -1755,7 +1780,11 @@ async def send_due_reminders() -> None:
                 continue
             left = max(1, int((event_dt_local - local_now).total_seconds() // 60))
             prefix = "📝" if c["category"] == "personal" else "📌"
-            await safe_send(c["user_id"], f"{prefix} Напоминание: {c['title']} в {c['time']} (через {_humanize_minutes(left)}).")
+            await safe_send(
+                c["user_id"],
+                f"{prefix} Напоминание: {c['title']} в {c['time']} (через {_humanize_minutes(left)}).",
+                reply_markup=event_deeplink_keyboard(c["event_id"], c["date"]),
+            )
             continue
         if local_now.strftime("%Y-%m-%d") != c["date"] or local_now.hour < REMINDER_HOUR:
             continue
@@ -1764,11 +1793,14 @@ async def send_due_reminders() -> None:
         at = f" в {c['time']}" if c["time"] else ""
         rng = fmt_range(c["date"], c.get("date_end", ""))
         if c["category"] == "todo":
-            await safe_send(c["user_id"], f"📌 Сегодня дело{at}{title_part(c['title'])}. Откройте календарь, чтобы посмотреть.")
+            await safe_send(c["user_id"], f"📌 Сегодня дело{at}{title_part(c['title'])}. Откройте календарь, чтобы посмотреть.",
+                            reply_markup=event_deeplink_keyboard(c["event_id"], c["date"]))
         elif c["category"] == "personal":
-            await safe_send(c["user_id"], f"📝 Сегодня личное дело{at}{title_part(c['title'])}. Откройте календарь, чтобы посмотреть.")
+            await safe_send(c["user_id"], f"📝 Сегодня личное дело{at}{title_part(c['title'])}. Откройте календарь, чтобы посмотреть.",
+                            reply_markup=event_deeplink_keyboard(c["event_id"], c["date"]))
         else:
-            await safe_send(c["user_id"], f"⏰ Сегодня у вас запланировано событие{at}{title_part(c['title'])} (на {rng}). Откройте календарь, чтобы посмотреть детали.")
+            await safe_send(c["user_id"], f"⏰ Сегодня у вас запланировано событие{at}{title_part(c['title'])} (на {rng}). Откройте календарь, чтобы посмотреть детали.",
+                            reply_markup=event_deeplink_keyboard(c["event_id"], c["date"]))
 
 
 async def cleanup_old_reminders() -> None:
@@ -1823,6 +1855,7 @@ async def main() -> None:
         logging.warning("WEBHOOK_SECRET не задан в env — сгенерирован временный. Задайте WEBHOOK_SECRET.")
     await db.init_db()
     bot_username = (await bot.get_me()).username
+    set_bot_username(bot_username)
     with contextlib.suppress(Exception):
         await bot.set_my_commands([
             BotCommand(command="start", description="Открыть календарь"),

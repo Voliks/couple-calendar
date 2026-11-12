@@ -32,7 +32,7 @@ function visibleChallenges() {
     : allChallenges.filter(c => c.status !== "archived" && !c.is_archived);
 }
 
-async function openChallenges({ refresh = false } = {}) {
+async function openChallenges({ refresh = false, focusId = null } = {}) {
   const requestId = ++challengesRequestSeq;
   const light = refresh && Object.keys(catalogData).length > 0;
   if (!light) {
@@ -59,6 +59,16 @@ async function openChallenges({ refresh = false } = {}) {
       updateIdeaList();
     }
     renderChallenges(visibleChallenges());
+
+    // DEEP-LINK: автоматически открыть детали нужного челленджа
+    if (focusId) {
+      const c = allChallenges.find(x => x.id === focusId);
+      if (c) {
+        requestAnimationFrame(() => openChallengeDetails(focusId));
+      } else {
+        toast("Вызов не найден — возможно, он удалён");
+      }
+    }
   } catch (e) {
     if (requestId !== challengesRequestSeq || $("challengesOverlay").hidden) return;
     $("challengesList").innerHTML = `<div class="empty">${esc(e.message)}</div>`;

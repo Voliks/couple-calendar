@@ -82,14 +82,21 @@ def open_app_keyboard() -> InlineKeyboardMarkup:
     ]])
 
 
-def event_reply_keyboard(event_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def event_reply_keyboard(event_id: int, event_date: str = "") -> InlineKeyboardMarkup:
+    buttons = [
         [
             InlineKeyboardButton(text="✅ Принять", callback_data=f"ev:accept:{event_id}"),
             InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ev:decline:{event_id}"),
         ],
-        [InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))],
-    ])
+    ]
+    if _bot_username and event_date:
+        month = event_date[:7]
+        buttons.append([InlineKeyboardButton(
+            text="📅 Открыть событие",
+            url=f"https://t.me/{_bot_username}?startapp=event_{event_id}_{month}",
+        )])
+    buttons.append([InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 async def safe_send(chat_id: int, text: str, reply_markup=None) -> None:
@@ -107,3 +114,51 @@ def notify(chat_id: int, text: str, reply_markup=None) -> None:
     task = asyncio.create_task(safe_send(chat_id, text, reply_markup))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
+
+# --- Deep-link в Mini App (кнопки в уведомлениях) ---
+
+_bot_username: str = ""
+
+
+def set_bot_username(username: str) -> None:
+    """Устанавливается из main.py после bot.get_me()."""
+    global _bot_username
+    _bot_username = (username or "").lstrip("@")
+
+
+def _deeplink_url(payload: str) -> str:
+    if not _bot_username:
+        return WEBAPP_URL
+    return f"https://t.me/{_bot_username}?startapp={payload}"
+
+
+def challenge_deeplink_keyboard(challenge_id: int) -> InlineKeyboardMarkup:
+    """Кнопка открыть конкретный челлендж."""
+    if not _bot_username:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))
+        ]])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="⚔️ Открыть вызов",
+            url=_deeplink_url(f"challenge_{challenge_id}"),
+        )],
+        [InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))],
+    ])
+
+
+def event_deeplink_keyboard(event_id: int, event_date: str) -> InlineKeyboardMarkup:
+    """Кнопка открыть конкретное событие (с указанием месяца — чтобы фронт переключил вид)."""
+    if not _bot_username:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))
+        ]])
+    month = (event_date or "")[:7]  # YYYY-MM
+    payload = f"event_{event_id}_{month}" if month else f"event_{event_id}"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="📅 Открыть событие",
+            url=_deeplink_url(payload),
+        )],
+        [InlineKeyboardButton(text="📅 Открыть Календарь", web_app=WebAppInfo(url=WEBAPP_URL))],
+    ])

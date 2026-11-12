@@ -30,6 +30,66 @@ async function load(silent = false) {
   }
 }
 
+/* ---------- DEEP-LINK: обработка start_param ---------- */
+
+async function handleStartParam() {
+  const param = tg.initDataUnsafe?.start_param || "";
+  if (!param) return;
+
+  try {
+    // challenge_<id>
+    if (param.startsWith("challenge_")) {
+      const id = parseInt(param.slice("challenge_".length), 10);
+      if (!id) return;
+      if (typeof openChallenges !== "function") {
+        await loadScript(assetUrl("challenges.js"));
+      }
+      if (typeof showArchive !== "undefined") showArchive = false;
+      await openChallenges({ focusId: id });
+      return;
+    }
+
+    // event_<id>[_YYYY-MM]
+    if (param.startsWith("event_")) {
+      const parts = param.split("_");
+      const id = parseInt(parts[1], 10);
+      const month = parts[2] || ""; // YYYY-MM
+      if (!id) return;
+
+      // Если указан месяц и он отличается от текущего вида — переключаемся
+      if (/^\d{4}-\d{2}$/.test(month)) {
+        const [y, m] = month.split("-").map(Number);
+        if (y && m >= 1 && m <= 12) {
+          const sameView = view.y === y && view.m === (m - 1);
+          if (!sameView) {
+            view = { y, m: m - 1 };
+            selected = todayStr();
+            clearMultiSelect();
+            renderCalendar();
+            renderList();
+            await load();
+          }
+        }
+      }
+
+      const ev = state.events.find(e => e.id === id);
+      if (ev) {
+        selected = ev.date;
+        renderList();
+        // Плавный скролл к карточке после отрисовки
+        requestAnimationFrame(() => {
+          document.querySelector(`.card[data-id="${id}"]`)
+            ?.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+      } else {
+        toast("Событие не найдено — возможно, оно удалено");
+      }
+    }
+  } catch (e) {
+    console.warn("Ошибка обработки start_param", e);
+  }
+}
+
 async function bootstrap() {
   const hint = $("loadingHint");
   const slow = setTimeout(() => { hint.textContent = "Сервер просыпается, это может занять до минуты…"; }, 5000);
@@ -55,6 +115,7 @@ async function bootstrap() {
   $("loading").hidden = true;
   render();
   startPolling();
+  await handleStartParam(); // ← deep-link: открыть челлендж/событие, если пришли по ссылке
 }
 
 function render() {
