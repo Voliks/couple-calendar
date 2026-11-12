@@ -1372,8 +1372,9 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Фото не найдено", 404)
 
-    # Проверяем, что этот путь действительно принадлежит челленджу
-    paths = [p.strip() for p in challenge["photo_id"].split(",") if p.strip()]
+     # Проверяем, что этот путь действительно принадлежит челленджу
+    raw_photo_id = challenge.get("photo_id") or ""
+    paths = [p.strip() for p in raw_photo_id.split(",") if p.strip()]
     if path not in paths:
         raise ApiError("Фото не найдено", 404)
 

@@ -59,7 +59,11 @@ function closeBuyDatePicker() {
 async function confirmBuy() {
   const date = $("buyDateInput").value;
   if (!date) return toast("Выберите дату");
-  if (!selectedShopItem) return;
+
+  // Сохраняем товар в локальную переменную ДО закрытия модалки,
+  // потому что closeBuyDatePicker() обнуляет selectedShopItem
+  const item = selectedShopItem;
+  if (!item) return;
 
   const btn = $("buyConfirm");
   btn.disabled = true;
@@ -68,7 +72,7 @@ async function confirmBuy() {
   try {
     await api("/shop/buy", { 
       method: "POST", 
-      body: { item_id: selectedShopItem.id, date } 
+      body: { item_id: item.id, date } 
     });
     toast("Желание куплено!");
     tg.HapticFeedback?.notificationOccurred("success");
@@ -77,7 +81,7 @@ async function confirmBuy() {
     closeShop();
     
     // Обновляем баланс локально, чтобы не тянуть каталог заново
-    state.balance = Math.max(0, (state.balance || 0) - selectedShopItem.cost);
+    state.balance = Math.max(0, (state.balance || 0) - item.cost);
     etag = null;
     await load();
   } catch (e) {

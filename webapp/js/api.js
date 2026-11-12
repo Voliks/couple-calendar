@@ -56,7 +56,8 @@ let loaded = false;
 const monthKey = () => `${view.y}-${pad(view.m + 1)}`;
 const monthCache = {};
 
-const API_BASE = (document.querySelector('meta[name="api-base"]')?.content || "").replace(/\/$/, "");
+// Фронтенд и API раздаются с одного домена, поэтому используем относительные пути (без CORS)
+const API_BASE = "";
 
 class HttpError extends Error {
   constructor(message, status) { super(message); this.status = status; }
