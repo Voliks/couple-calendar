@@ -1,15 +1,12 @@
-// Настроение дня. Ленивый модуль, грузится вместе с main.js.
-
+// Настроение дня.
 const MOOD_COLLAPSED_KEY = "mood_collapsed";
 
 let moodState = { date: "", mine: null, partner: null, partner_id: 0 };
-let moodLoadSeq = 0;
 
 function moodDateStr() {
   return todayStr();
 }
 
-/* ---------- Сворачивание ---------- */
 function applyMoodCollapsed(collapsed) {
   const block = $("moodBlock");
   if (!block) return;
@@ -34,7 +31,6 @@ function initMoodCollapsed() {
   }
 }
 
-/* ---------- Отрисовка ---------- */
 function moodCellHtml(label, m, isMine) {
   const has = !!(m && (m.emoji || m.text));
   const cls = "mood-cell" + (has ? "" : " empty");
@@ -61,7 +57,11 @@ function renderMood() {
   const row = $("moodRow");
   const quickInput = $("moodQuickInput");
   const editBtn = $("moodEditBtn");
-  if (!block || !row || !quickInput || !editBtn) return;
+  
+  if (!block || !row || !quickInput || !editBtn) {
+    console.warn("Не найдены элементы настроения в HTML");
+    return;
+  }
 
   if (!state.has_partner) {
     block.hidden = true;
@@ -72,7 +72,6 @@ function renderMood() {
   const mineHas = !!(moodState.mine && (moodState.mine.emoji || moodState.mine.text));
 
   if (mineHas) {
-    // Настроение есть: показываем плашки, скрываем ввод, показываем «Изменить»
     quickInput.hidden = true;
     row.hidden = false;
     editBtn.hidden = false;
@@ -80,14 +79,12 @@ function renderMood() {
       moodCellHtml("Вы", moodState.mine, true) +
       moodCellHtml("Партнёр", moodState.partner, false);
   } else {
-    // Настроения нет: показываем ввод, скрываем плашки и «Изменить»
     quickInput.hidden = false;
     row.hidden = true;
     editBtn.hidden = true;
   }
 }
 
-/* ---------- Сохранение ---------- */
 async function quickSetMood() {
   if (!state.has_partner) return;
   const text = ($("moodQuickText").value || "").trim().slice(0, 280);
@@ -105,7 +102,6 @@ async function quickSetMood() {
       body: { date: moodDateStr(), emoji, text },
     });
     moodState.mine = { emoji, text };
-    // Очищаем поля
     $("moodQuickText").value = "";
     $("moodQuickEmoji").value = "";
     renderMood();
@@ -117,19 +113,15 @@ async function quickSetMood() {
   }
 }
 
-/* ---------- Кнопка Изменить ---------- */
 function resetMoodForEdit() {
-  // Показываем форму с текущими значениями
   $("moodQuickText").value = (moodState.mine && moodState.mine.text) || "";
   $("moodQuickEmoji").value = (moodState.mine && moodState.mine.emoji) || "";
-  
-  // Принудительно переключаем вид на ввод
   $("moodRow").hidden = true;
   $("moodQuickInput").hidden = false;
   $("moodEditBtn").hidden = true;
 }
 
-/* ---------- Связка ---------- */
+// Связка событий
 (() => {
   initMoodCollapsed();
 
@@ -150,11 +142,10 @@ function resetMoodForEdit() {
   if (editBtn) editBtn.addEventListener("click", resetMoodForEdit);
 })();
 
-// Точка входа из main.js#render()
+// Вызывается из main.js#render()
 window.refreshMoodAndBanner = () => {
   if (!state.has_partner) return;
   
-  // Настроение приходит в state.moods из /api/state
   if (state.moods) {
     moodState = {
       date: state.moods.date,
@@ -162,6 +153,10 @@ window.refreshMoodAndBanner = () => {
       partner: state.moods.partner || { emoji: "", text: "" },
       partner_id: state.partner_id || 0,
     };
+    renderMood();
+  } else {
+    // Если в state.moods пусто, показываем пустой блок
+    moodState.mine = { emoji: "", text: "" };
     renderMood();
   }
 };
