@@ -1213,28 +1213,45 @@ async def api_set_challenge_photo(request: web.Request) -> web.Response:
 async def api_get_challenges_data(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     refresh = request.query.get("refresh") == "1"
-    catalog = None
-    if refresh:
-        balance, history = await asyncio.gather(db.get_user_balance(tg_user.id), db.get_all_user_challenges(tg_user.id))
-    else:
-        await db.set_last_viewed_challenges(tg_user.id)
-        balance, history, catalog = await asyncio.gather(
-            db.get_user_balance(tg_user.id),
-            db.get_all_user_challenges(tg_user.id),
-            db.get_challenges_json(),
-        )
-        _new_cache.pop(tg_user.id, None)
+
+    # 1. Баланс и история одним batch-запросом к Turso (вместо двух отдельных)
+    rs_balance, rs_history = await db._batch([
+        ("SELECT balance FROM users WHERE telegram_id = ?", (tg_user.id,)),
+        ("SELECT * FROM user_challenges WHERE creator_id = ? OR target_id = ? ORDER BY created_at DESC", (tg_user.id, tg_user.id)),
+    ])
     
+    balance = rs_balance.rows[0][0] if rs_balance.rows else 0
+    history = [
+        {
+            "id": r[0], "creator_id": r[1], "target_id": r[2], "category": r[3],
+            "text": r[4], "reward": r[5], "status": r[6], "photo_id": r[7],
+            "created_at": r[8], "deadline": r[9] if len(r) > 9 else 0,
+        }
+        for r in rs_history.rows
+    ]
+
+    # 2. Обновляем last_viewed и получаем каталог (если нужно)
+    catalog = None
+    if not refresh:
+        await db.set_last_viewed_challenges(tg_user.id)
+        catalog = await db.get_challenges_json()
+        _new_cache.pop(tg_user.id, None)
+
     now = int(time.time())
     for h in history:
         h["is_creator"] = (h["creator_id"] == tg_user.id)
         h["is_archived"] = False
+        
         if h["status"] in ("approved", "rejected"):
             dl = h.get("deadline") or 0
             if dl > 0 and now > dl:
                 h["is_archived"] = True
 
-    payload = {"balance": balance, "history": history, "my_id": tg_user.id}
+    payload = {
+        "balance": balance,
+        "history": history,
+        "my_id": tg_user.id,
+    }
     if catalog is not None:
         payload["catalog"] = catalog
     return web.json_response(payload)
@@ -1344,6 +1361,8 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
 
 async def api_get_shop_items(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
+    # Каталог магазина читается из JSON-файла (кэшируется в памяти), а баланс — из БД.
+    # Один запрос к БД.
     items = db.get_shop_items_json()
     balance = await db.get_user_balance(tg_user.id)
     return web.json_response({"items": items, "balance": balance})
