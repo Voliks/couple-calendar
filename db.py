@@ -534,6 +534,10 @@ async def _m30_reliable_unlink() -> None:
         await _batch(stmts)
 
 
+async def _m31_archived_at() -> None:
+    await _add_column("events", "archived_at", "INTEGER NOT NULL DEFAULT 0")
+
+
 MIGRATIONS = [
     (1, _m1_base), (2, _m2_features), (3, _m3_sex_ideas), (4, _m4_ideas_source), (5, _m5_fix_checklist),
     (6, _m6_hidden_ideas), (7, _m7_archived_ideas), (8, _m8_todo), (9, _m9_reactions), (10, _m10_two_comments),
@@ -542,7 +546,7 @@ MIGRATIONS = [
     (19, _m19_challenge_deadline), (20, _m20_shop_items), (21, _m21_event_comments), (22, _m22_last_viewed),
     (23, _m23_performance_indexes), (24, _m24_moods), (25, _m25_alt_time), (26, _m26_fix_schema),
     (27, _m16_add_done_status), (28, _m28_soft_unlink), (29, _m29_pair_rev),
-    (30, _m30_reliable_unlink),
+    (30, _m30_reliable_unlink), (31, _m31_archived_at),
 ]
 
 _REQUIRED_COLUMNS = {15: [("events", "date_end", "TEXT NOT NULL DEFAULT ''"), ("events", "visibility", "TEXT NOT NULL DEFAULT 'shared'")]}
@@ -634,13 +638,11 @@ def _invalidate_user_cache(*uids: int) -> None:
 
 def _user_cache_put(uid: int, value: dict) -> None:
     if len(_user_cache) >= _USER_CACHE_MAX:
-        # удаляем самые старые записи
         now = time.monotonic()
         stale = [k for k, v in _user_cache.items() if now - v[0] > _USER_CACHE_TTL]
         for k in stale:
             _user_cache.pop(k, None)
         if len(_user_cache) >= _USER_CACHE_MAX:
-            # жёсткая очистка при переполнении
             _user_cache.clear()
     _user_cache[uid] = (time.monotonic(), value)
 
@@ -871,14 +873,13 @@ async def get_pair_rev(pair_key_value: str) -> int:
     rs = await _exec("SELECT rev FROM pair_rev WHERE pair_key = ?", (pair_key_value,))
     return rs.rows[0][0] if rs.rows else 0
 
-
 # --- События ---
 
 EVENT_COLS = (
     "id, created_by, target_user, title, description, date, date_end, time, category, status, "
     "color, priority, reaction, reaction_by, decline_comment, "
     "decline_comment_creator, decline_comment_target, remind_before, visibility, "
-    "alt_date, alt_time"
+    "alt_date, alt_time, archived_at"
 )
 
 
@@ -892,12 +893,12 @@ def _event(r) -> dict | None:
         "decline_comment": r[14] or "", "decline_comment_creator": r[15] or "",
         "decline_comment_target": r[16] or "", "remind_before": r[17] or 0,
         "visibility": r[18] or "shared", "alt_date": r[19] or "", "alt_time": r[20] or "",
+        "archived_at": r[21] or 0,
         "reactions": {}, "idea_responses": {}, "checklist": [], "comments": [],
     }
 
 
 async def _attach_items(events: list[dict]) -> list[dict]:
-    """Прикрепляет checklist/reactions/ideas/comments ОДНИМ batch-запросом (1 HTTP вместо 4)."""
     if not events:
         return events
     ids = [e["id"] for e in events]
@@ -945,7 +946,7 @@ async def _attach_items(events: list[dict]) -> list[dict]:
         results = await _batch(stmts)
     except DbError:
         log.exception("Не удалось загрузить вложения событий (graceful degradation)")
-        return events  # отдаём события без вложений вместо 500
+        return events
 
     if "comments" in pos:
         for event_id, cid, uid, text, created_at in results[pos["comments"]].rows:
@@ -972,7 +973,7 @@ async def count_events_created(user_id: int) -> int:
 async def create_event(created_by, target_user, title, description, date, event_time, category,
                        items=None, color: str = "", remind_before: int = 0,
                        date_end: str = "", visibility: str = "shared"):
-    initial_status = "accepted" if category in ("shop", "todo", "personal") else "pending"
+    initial_status = "accepted" if category in ("shop", "todo", "personal", "sex") else "pending"
     rs = await _exec(
         "INSERT INTO events (created_by, target_user, title, description, date, date_end, time, category, status, color, remind_before, visibility) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -997,7 +998,8 @@ async def create_event(created_by, target_user, title, description, date, event_
 async def list_events_range(user_id: int, start: str, end: str) -> list[dict]:
     rs = await _exec(
         f"SELECT {EVENT_COLS} FROM events "
-        "WHERE (COALESCE(NULLIF(date_end, ''), date) >= ? AND date < ?) "
+        "WHERE archived_at = 0 "
+        "AND (COALESCE(NULLIF(date_end, ''), date) >= ? AND date < ?) "
         "AND ((category != 'personal' AND (created_by = ? OR target_user = ?)) "
         "  OR (category = 'personal' AND created_by = ?) "
         "  OR (category = 'personal' AND visibility = 'shared' AND target_user = ?)) "
@@ -1254,6 +1256,7 @@ async def count_active_challenges_today(creator_id: int) -> int:
     )
     return rs.rows[0][0]
 
+
 async def _hidden_idea_keys(user_id: int, partner_id: int | None) -> set[str]:
     if partner_id:
         rs = await _exec("SELECT DISTINCT idea_key FROM hidden_ideas WHERE user_id IN (?, ?)", (user_id, partner_id))
@@ -1320,7 +1323,8 @@ async def reminder_candidates(date_from: str, date_to: str) -> list[dict]:
         "SELECT e.id, e.title, e.date, COALESCE(NULLIF(e.date_end,''), e.date) AS date_end, "
         "e.time, u.telegram_id, u.tz, e.category, e.remind_before, e.visibility "
         "FROM events e JOIN users u ON u.telegram_id IN (e.created_by, e.target_user) "
-        "WHERE e.status = 'accepted' AND COALESCE(NULLIF(e.date_end,''), e.date) BETWEEN ? AND ? "
+        "WHERE e.archived_at = 0 "
+        "AND e.status = 'accepted' AND COALESCE(NULLIF(e.date_end,''), e.date) BETWEEN ? AND ? "
         "AND (e.visibility = 'shared' OR u.telegram_id = e.created_by) "
         "AND NOT EXISTS (SELECT 1 FROM reminders r WHERE r.event_id = e.id AND r.user_id = u.telegram_id)",
         (date_from, date_to),
@@ -1343,26 +1347,36 @@ async def purge_old_reminders(date_before: str) -> int:
     return rs.affected
 
 
-async def purge_old_todos(date_before: str) -> int:
-    old = "SELECT id FROM events WHERE category = 'todo' AND COALESCE(NULLIF(date_end, ''), date) < ?"
-    a = (date_before,)
+async def archive_old_events(date_before: str) -> int:
+    now = int(time.time())
+    rs = await _exec(
+        "UPDATE events SET archived_at = ? "
+        "WHERE archived_at = 0 AND COALESCE(NULLIF(date_end, ''), date) < ?",
+        (now, date_before)
+    )
+    return rs.affected
+
+
+async def purge_archived_events(cutoff_timestamp: int) -> int:
+    old = "SELECT id FROM events WHERE archived_at > 0 AND archived_at < ?"
+    a = (cutoff_timestamp,)
     rs = await _batch([
         (f"DELETE FROM checklist_items WHERE event_id IN ({old})", a),
         (f"DELETE FROM reminders WHERE event_id IN ({old})", a),
         (f"DELETE FROM reactions WHERE event_id IN ({old})", a),
         (f"DELETE FROM idea_responses WHERE event_id IN ({old})", a),
-        ("DELETE FROM events WHERE category = 'todo' AND COALESCE(NULLIF(date_end, ''), date) < ?", a),
+        (f"DELETE FROM event_comments WHERE event_id IN ({old})", a),
+        ("DELETE FROM events WHERE archived_at > 0 AND archived_at < ?", a),
     ])
-    return rs[4].affected
+    return rs[-1].affected
 
 
 async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=31)).strftime("%Y-%m-%d")
     rs = await _exec(
         f"SELECT {EVENT_COLS} FROM events "
-        "WHERE category = 'todo' AND COALESCE(NULLIF(date_end, ''), date) < ? "
-        "AND (created_by = ? OR target_user = ?) ORDER BY date DESC, id DESC LIMIT ?",
-        (cutoff, user_id, user_id, limit),
+        "WHERE archived_at > 0 "
+        "AND (created_by = ? OR target_user = ?) ORDER BY archived_at DESC, id DESC LIMIT ?",
+        (user_id, user_id, limit),
     )
     return [_event(r) for r in rs.rows]
 
@@ -1370,7 +1384,8 @@ async def list_archived_todos(user_id: int, limit: int = 500) -> list[dict]:
 async def pair_stats(user_id: int, partner_id: int) -> dict:
     rs = await _exec(
         "SELECT category, status, COUNT(*) FROM events "
-        "WHERE ((created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)) "
+        "WHERE archived_at = 0 "
+        "AND ((created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)) "
         "AND visibility = 'shared' AND category IN ('rest', 'sex') GROUP BY category, status",
         (user_id, partner_id, partner_id, user_id),
     )

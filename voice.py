@@ -268,7 +268,7 @@ async def handle_voice_message(message: Message):
         elif cat in ("rest", "sex"):
             icon = "🌿" if cat == "rest" else "🔥"
             notify(partner, f"{icon} Новое событие на {fmt_range(ev['date'], '')}{at}. Ответьте прямо здесь или откройте календарь.",
-                   reply_markup=event_reply_keyboard(event["id"]))
+                   reply_markup=event_reply_keyboard(event["id"], event["date"]))
         await message.answer(
             header + f"✅ Добавлено в «{CATEGORY_TITLES[cat]}»:\n📅 {fmt_date(ev['date'])}{at}\n📝 {ev['title']}"
             + ("\n🔒 Видно только вам" if cat == "personal" else "")

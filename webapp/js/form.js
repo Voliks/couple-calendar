@@ -21,22 +21,23 @@ function availableTodoColors() {
 function updateRemindAvailability() {
   const cat = $("fCategory").value;
   const hasTime = !!$("fTime").value;
-  const isTodo = cat === "todo";
-  const isPersonal = cat === "personal";
+  const needsRemind = ["todo", "personal", "sex", "shop"].includes(cat);
+  
   const sel = $("fRemindBefore");
   if (sel) {
-    sel.disabled = !isTodo || !hasTime;
+    sel.disabled = !needsRemind || !hasTime;
     if (!hasTime) sel.value = "0";
   }
   const selP = $("fPersonalRemind");
   if (selP) {
-    selP.disabled = !isPersonal || !hasTime;
+    selP.disabled = cat !== "personal" || !hasTime;
     if (!hasTime) selP.value = "0";
   }
+  
   const hint = $("remindHint");
-  if (hint) hint.hidden = !isTodo || hasTime;
+  if (hint) hint.hidden = !needsRemind || hasTime;
   const hintP = $("personalRemindHint");
-  if (hintP) hintP.hidden = !isPersonal || hasTime;
+  if (hintP) hintP.hidden = cat !== "personal" || hasTime;
 }
 
 function updateFormSections() {
@@ -48,15 +49,15 @@ function updateFormSections() {
   const isRest = cat === "rest";
   const isRange = !!formDateEnd;
 
-  $("titleSection").hidden = !(isTodo || isPersonal);
+  $("titleSection").hidden = !(isTodo || isPersonal || isSex || isShop);
   $("checklistSection").hidden = !(isShop && !editingEvent);
   $("sexIdeasSection").hidden = !isSex;
-  $("todoSection").hidden = !isTodo;
+  $("todoSection").hidden = !(isTodo || isShop); // Магазин использует поля цвета и напоминаний из todoSection
   $("personalSection").hidden = !isPersonal;
   $("restSection").hidden = !((isRest || isSex) && isRange);
 
   if (isShop && !editingEvent) renderFormChecklist();
-  if (isTodo) renderColors("todoColors");
+  if (isTodo || isShop) renderColors("todoColors");
   if (isPersonal) renderColors("personalColors");
   if ((isRest || isSex) && isRange) renderColors("restColors");
   updateRemindAvailability();
@@ -128,7 +129,7 @@ function openForm(event = null) {
   $("fCategory").value = event ? event.category : "rest";
   $("fCategory").disabled = !!event; // категорию существующего события менять нельзя
 
-  const hasOwnTitle = event && (event.category === "todo" || event.category === "personal")
+  const hasOwnTitle = event && (event.category === "todo" || event.category === "personal" || event.category === "sex" || event.category === "shop")
     && event.title !== (CATEGORIES[event.category] || {}).label;
   $("fTitle").value = hasOwnTitle ? event.title : "";
 
@@ -144,16 +145,18 @@ function openForm(event = null) {
   $("fDesc").value = desc;
   renderChosen();
 
-  if (event && (event.category === "todo" || event.category === "personal")) {
+  if (event && (event.category === "todo" || event.category === "personal" || event.category === "sex" || event.category === "shop")) {
     formColor = event.color || availableTodoColors()[6];
-    if (event.category === "todo") {
+    if (event.category === "todo" || event.category === "shop") {
       $("fRemindBefore").value = String(event.remind_before || 0);
-    } else {
+    } else if (event.category === "personal") {
       $("fPersonalRemind").value = String(event.remind_before || 0);
       $("fPersonalDateEnd").value = event.date_end && event.date_end !== event.date ? event.date_end : "";
       $("fPersonalPublic").checked = event.visibility === "shared";
+    } else if (event.category === "sex") {
+      $("fRemindBefore").value = String(event.remind_before || 0);
     }
-  } else if (event && (event.category === "rest" || event.category === "sex") && event.date_end && event.date_end !== event.date) {
+  } else if (event && (event.category === "rest") && event.date_end && event.date_end !== event.date) {
     formColor = event.color || availableTodoColors()[3];
     $("fRemindBefore").value = "0";
     $("fPersonalRemind").value = "0";
@@ -287,9 +290,11 @@ $("fSave").onclick = async () => {
   // при переносе даты диапазон сохраняет свою длину
   const endForSave = formSpan > 0 ? addDays(date, formSpan) : "";
 
-  if (category === "todo" || category === "personal") payload.title = $("fTitle").value.trim();
+  if (category === "todo" || category === "personal" || category === "sex" || category === "shop") {
+    payload.title = $("fTitle").value.trim();
+  }
 
-  if (category === "todo") {
+  if (category === "todo" || category === "shop" || category === "sex") {
     if (!formColor) { $("fError").textContent = "Выберите цвет"; return; }
     payload.color = formColor;
     const rb = parseInt($("fRemindBefore").value, 10) || 0;
@@ -314,7 +319,7 @@ $("fSave").onclick = async () => {
     }
   }
 
-  if (category === "rest" || category === "sex") {
+  if (category === "rest") {
     payload.date_end = endForSave;
     if (endForSave) {
       if (!formColor) { $("fError").textContent = "Выберите цвет заливки"; return; }

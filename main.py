@@ -37,6 +37,8 @@ from common import (
     TIME_RE,
     WEBAPP_URL,
     bot,
+    challenge_deeplink_keyboard,
+    event_deeplink_keyboard,
     event_reply_keyboard,
     fmt_range,
     get_zone,
@@ -44,10 +46,8 @@ from common import (
     notify,
     open_app_keyboard,
     safe_send,
-    valid_date,
-    challenge_deeplink_keyboard,
-    event_deeplink_keyboard,
     set_bot_username,
+    valid_date,
 )
 import db
 from voice import close_http as close_voice_http, router as voice_router
@@ -254,10 +254,7 @@ async def event_inline_action(call: CallbackQuery):
     if event["status"] == status:
         await call.answer("Уже отмечено")
         return
-        
     await db.set_status(event_id, status)
-    
-    # 🔥 ВАЖНО: Увеличиваем rev пары, чтобы клиент понял, что данные изменились
     await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
     
     icon = "✅" if status == "accepted" else "❌"
@@ -445,33 +442,30 @@ def parse_event_payload(body: dict) -> dict:
             raise ApiError("Слишком длинный диапазон (максимум 366 дней)")
     if event_time and not TIME_RE.match(event_time):
         raise ApiError("Некорректное время")
-    if category == "personal":
+    if category in ("personal", "todo", "shop", "sex"):
+        # Для этих категорий разрешаем цвета и напоминания
         if color not in db.TODO_COLORS:
-            raise ApiError("Выберите цвет для личного события")
+            # Если цвет не передан, ставим дефолтный (например, фиолетовый)
+            color = db.TODO_COLORS[6] if not color else color
+            if color not in db.TODO_COLORS:
+                raise ApiError("Некорректный цвет")
+        
         if remind_before not in ALLOWED_REMIND_BEFORE:
             raise ApiError("Недопустимое время напоминания")
         if remind_before and not event_time:
             raise ApiError("Напоминание возможно только если указано время")
-        if visibility not in ("shared", "private"):
-            raise ApiError("Некорректная видимость")
-    elif category == "todo":
-        if color not in db.TODO_COLORS:
-            raise ApiError("Выберите цвет для дела")
-        if remind_before not in ALLOWED_REMIND_BEFORE:
-            raise ApiError("Недопустимое время напоминания")
-        if remind_before and not event_time:
-            raise ApiError("Напоминание возможно только если указано время")
-        visibility = "shared"
+        
+        if category == "personal":
+            if visibility not in ("shared", "private"):
+                raise ApiError("Некорректная видимость")
+        else:
+            visibility = "shared"
     else:
         remind_before = 0
         visibility = "shared"
-        if category not in ("rest", "sex"):
+        if category == "rest":
             date_end = ""
-        if category in ("rest", "sex") and date_end:
-            if color and color not in db.TODO_COLORS:
-                raise ApiError("Некорректный цвет")
-        else:
-            color = ""
+        color = ""
     if date_end == date:
         date_end = ""
     raw_title = str(body.get("title") or "").strip()[:100]
@@ -557,6 +551,7 @@ def event_to_dict(e: dict, uid: int) -> dict:
         "can_respond_ideas": can_respond_ideas,
         "alt_date": e.get("alt_date", ""),
         "alt_time": e.get("alt_time", ""),
+        "archived_at": e.get("archived_at", 0),
     }
 
 
@@ -662,7 +657,7 @@ async def api_state(request: web.Request) -> web.Response:
         _new_cache_put(tg_user.id, val)
         return val
 
-    # Все задачи параллельно, включая get_pair_rev если он ещё не получен
+    # Собираем все задачи, включая get_pair_rev если он ещё не получен
     tasks = [
         db.list_events_range(tg_user.id, start, end),
         _safe_stats(),
@@ -711,82 +706,6 @@ async def api_state(request: web.Request) -> web.Response:
     return web.Response(text=body, content_type="application/json", headers=headers)
 
 
-async def _has_new_cached(user_id: int) -> bool:
-    hit = _new_cache.get(user_id)
-    if hit and time.monotonic() - hit[0] < NEW_ACTIVITY_TTL:
-        return hit[1]
-    val = await db.has_new_activity(user_id)
-    _new_cache_put(user_id, val)
-    return val
-
-
-async def api_events(request: web.Request) -> web.Response:
-    tg_user = authenticate(request)
-    user = await db.get_or_create_user(tg_user.id)
-
-    start, end = parse_month(request.query.get("month"))
-    events = await db.list_events_range(tg_user.id, start, end)
-
-    return web.json_response({
-        "month": start[:7],
-        "events": [
-            event_to_dict(e, tg_user.id)
-            for e in events
-        ],
-    })
-
-
-async def api_pair_summary(request: web.Request) -> web.Response:
-    tg_user = authenticate(request)
-    user = await db.get_or_create_user(tg_user.id)
-
-    if not user["partner_id"]:
-        return web.json_response({
-            "has_partner": False,
-            "stats": None,
-            "balance": await db.get_user_balance(tg_user.id),
-        })
-
-    stats = None
-
-    try:
-        stats = await db.pair_stats(tg_user.id, user["partner_id"])
-    except Exception:
-        logging.exception("Не удалось получить статистику")
-
-    return web.json_response({
-        "has_partner": True,
-        "stats": stats,
-        "balance": await db.get_user_balance(tg_user.id),
-    })
-
-
-async def api_moods_today(request: web.Request) -> web.Response:
-    tg_user = authenticate(request)
-    user = await db.get_or_create_user(tg_user.id)
-
-    if not user["partner_id"]:
-        raise ApiError("Сначала свяжитесь с партнёром", 409)
-
-    tz_obj = get_zone(user["tz"]) or timezone.utc
-    today_local = datetime.now(timezone.utc).astimezone(tz_obj).strftime("%Y-%m-%d")
-
-    pk = db.pair_key(tg_user.id, user["partner_id"])
-    moods_raw = await db.get_moods(pk, today_local)
-
-    by_user = {m["user_id"]: m for m in moods_raw}
-    mine = by_user.get(tg_user.id) or {"emoji": "", "text": "", "updated_at": 0}
-    partner = by_user.get(user["partner_id"]) or {
-        "emoji": "", "text": "", "updated_at": 0
-    }
-
-    return web.json_response({
-        "date": today_local,
-        "mine": mine,
-        "partner": partner,
-    })
-
-
 async def api_create_event(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     user = await db.get_or_create_user(tg_user.id)
@@ -810,11 +729,13 @@ async def api_create_event(request: web.Request) -> web.Response:
         notify(user["partner_id"], f"🛒 Партнёр добавил список покупок на {fmt_range(data['date'], data['date_end'])}. Откройте календарь, чтобы посмотреть.")
     elif data["category"] == "personal":
         if data["visibility"] == "shared" and user["partner_id"]:
-            notify(user["partner_id"], f"📝 Партнёр добавил общее личное дело на {fmt_range(data['date'], data['date_end'])}{(' в ' + data['time']) if data['time'] else ''}. Откройте календарь, чтобы посмотреть.")
+            notify(user["partner_id"], f"📝 Партнёр добавил общее личное дело на {fmt_range(data['date'], data['date_end'])}. Откройте календарь.")
     elif data["category"] == "todo":
         at = f" в {data['time']}" if data["time"] else ""
         extra = f" (напомню за {_humanize_minutes(data['remind_before'])})" if data["time"] and data["remind_before"] else ""
-        notify(user["partner_id"], f"📌 Новое дело на {fmt_range(data['date'], data['date_end'])}{at}.{extra} Откройте календарь, чтобы посмотреть.")
+        notify(user["partner_id"], f"📌 Новое дело на {fmt_range(data['date'], data['date_end'])}{at}.{extra} Откройте календарь.")
+    elif data["category"] == "sex":
+        notify(user["partner_id"], f"🔥 Новое событие (Секс) на {fmt_range(data['date'], data['date_end'])}. Откройте календарь, чтобы посмотреть.")
     else:
         icon = CATEGORY_ICONS.get(data["category"], "➕")
         notify(
@@ -822,6 +743,7 @@ async def api_create_event(request: web.Request) -> web.Response:
             f"{icon} Новое событие на {fmt_range(data['date'], data['date_end'])}{(' в ' + data['time']) if data['time'] else ''}. Ответьте прямо здесь или откройте календарь.",
             reply_markup=event_reply_keyboard(event["id"], event["date"]),
         )
+    return web.json_response(event_to_dict(event, tg_user.id), status=201)
 
 
 async def api_update_event(request: web.Request) -> web.Response:
@@ -883,6 +805,7 @@ async def api_delete_event(request: web.Request) -> web.Response:
     await db.delete_event(event["id"])
     return web.json_response({"status": "deleted"})
 
+
 async def api_respond(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     event = await member_event(request, tg_user.id)
@@ -943,18 +866,12 @@ async def api_mark_event_done(request: web.Request) -> web.Response:
         raise ApiError("Это событие не требует отметки выполнения", 409)
 
     if event["status"] != "accepted":
-        raise ApiError(
-            "Отметить выполненным можно только принятое событие",
-            409,
-        )
+        raise ApiError("Отметить выполненным можно только принятое событие", 409)
 
     if not await db.mark_event_done(event["id"], tg_user.id):
         raise ApiError("Не удалось отметить событие выполненным", 409)
 
-    await db.bump_pair_rev(
-        db.pair_key(event["created_by"], event["target_user"])
-    )
-
+    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
     updated = await db.get_event(event["id"])
     return web.json_response(event_to_dict(updated, tg_user.id))
 
@@ -1147,6 +1064,7 @@ async def api_archived_todos(request: web.Request) -> web.Response:
             "color": e.get("color", ""),
             "is_creator": e["created_by"] == tg_user.id,
             "checklist": [],
+            "archived_at": e.get("archived_at", 0),
         }
         for e in items
     ]
@@ -1611,6 +1529,7 @@ async def api_buy_shop_item(request: web.Request) -> web.Response:
         f"🎁 Партнёр купил желание «{title}» на {fmt_range(date, '')}. Загляните в календарь!",
         reply_markup=event_reply_keyboard(event["id"], event["date"]),
     )
+    return web.json_response({"status": "ok", "event": event_to_dict(event, tg_user.id)})
 
 
 async def api_get_event_comments(request: web.Request) -> web.Response:
@@ -1809,17 +1728,28 @@ async def send_due_reminders() -> None:
 
 
 async def cleanup_old_reminders() -> None:
-    now = datetime.now(timezone.utc)
-    cutoff_reminders = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-    cutoff_todos = (now - timedelta(days=182)).strftime("%Y-%m-%d")
+    now_utc = datetime.now(timezone.utc)
+    
+    # 1. Напоминания старше 30 дней
+    cutoff_reminders = (now_utc - timedelta(days=30)).strftime("%Y-%m-%d")
     try:
         n = await db.purge_old_reminders(cutoff_reminders)
         if n: logging.info("Очищено старых напоминаний: %s", n)
     except Exception: logging.exception("Не удалось очистить старые напоминания")
+
+    # 2. Архивация: события старше 6 месяцев (180 дней) уходят в архив
+    cutoff_archive = (now_utc - timedelta(days=180)).strftime("%Y-%m-%d")
     try:
-        n2 = await db.purge_old_todos(cutoff_todos)
-        if n2: logging.info("Удалено старых дел (6+ мес): %s", n2)
-    except Exception: logging.exception("Не удалось очистить старые дела")
+        n2 = await db.archive_old_events(cutoff_archive)
+        if n2: logging.info("Архивировано событий (6+ мес): %s", n2)
+    except Exception: logging.exception("Не удалось архивировать события")
+
+    # 3. Хард-удаление: из архива старше 6 месяцев (180 дней)
+    cutoff_delete = int((now_utc - timedelta(days=180)).timestamp())
+    try:
+        n3 = await db.purge_archived_events(cutoff_delete)
+        if n3: logging.info("Удалено из архива (6+ мес): %s", n3)
+    except Exception: logging.exception("Не удалось очистить архив")
 
 
 _last_cleanup_day: str = ""
@@ -1880,9 +1810,6 @@ async def main() -> None:
     
     app.router.add_get("/api/config", api_config)
     app.router.add_get("/api/state", api_state)
-    app.router.add_get("/api/events", api_events)
-    app.router.add_get("/api/pair-summary", api_pair_summary)
-    app.router.add_get("/api/moods/today", api_moods_today)
     
     app.router.add_get("/api/archive.json", api_archive)
     app.router.add_get("/api/todos/archive", api_archived_todos)

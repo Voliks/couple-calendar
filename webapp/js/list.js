@@ -83,7 +83,6 @@ function declineCommentHtml(e) {
   return `${lines.join("")}${button}`;
 }
 
-// Блок комментариев для Секса и Отдыха
 function commentsListHtml(comments) {
   if (!comments.length) return `<div class="cm-empty">Нет комментариев</div>`;
   const myId = state?.my_id || 0;

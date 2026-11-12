@@ -244,7 +244,6 @@ function openChallengeDetails(id) {
   $("chatActionBlock").style.display = canAttach ? "block" : "none";
 
   const isCreator = c.is_creator;
-  // Создатель видит кнопки Засчитать/Отклонить всегда, пока челлендж не завершен
   const canReview = isCreator && (c.status === "pending" || c.status === "submitted");
   $("chatCreatorActions").style.display = canReview ? "flex" : "none";
 
