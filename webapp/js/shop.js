@@ -7,16 +7,18 @@ async function openShop() {
   tg.BackButton?.show();
   if (!shopItems) $("shopList").innerHTML = `<div class="spinner" style="margin:20px auto;"></div>`;
 
-  currentBalance = state.balance || 0;
-  $("shopBalance").textContent = currentBalance;
-
   try {
+    // Всегда запрашиваем свежий баланс вместе с товарами
+    const res = await api("/shop");
     if (!shopItems) {
-      const res = await api("/shop");
       shopItems = (res.items || []).slice().sort((a, b) => a.cost - b.cost);
     }
-    const items = shopItems;
+    
+    // Обновляем текущий баланс из ответа сервера
+    currentBalance = res.balance ?? 0;
+    $("shopBalance").textContent = currentBalance;
 
+    const items = shopItems;
     if (!items.length) {
       $("shopList").innerHTML = `<div class="empty">Магазин пока пуст.</div>`;
       return;
@@ -74,8 +76,10 @@ async function confirmBuy() {
     closeBuyDatePicker();
     closeShop();
     
+    // Сбрасываем кэш магазина, чтобы при следующем открытии подтянулся новый баланс
+    shopItems = null;
     etag = null;
-    await load();
+    await load(); // Обновляем state, чтобы balance обновился везде
   } catch (e) {
     toast(e.message);
   } finally {
@@ -86,7 +90,6 @@ async function confirmBuy() {
 
 // Привязка событий
 (() => {
-  
   const closeBtn = $("shopClose");
   if (closeBtn) closeBtn.onclick = closeShop;
   
@@ -114,6 +117,7 @@ async function confirmBuy() {
     const title = card.dataset.itemTitle;
     const cost = Number(card.dataset.itemCost);
     
+    // Проверка актуального баланса
     if (currentBalance < cost) {
       return toast("Недостаточно баллов для покупки");
     }

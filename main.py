@@ -1563,9 +1563,10 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
 
 
 async def api_get_shop_items(request: web.Request) -> web.Response:
-    authenticate(request)
+    tg_user = authenticate(request)
     items = db.get_shop_items_json()
-    return web.json_response({"items": items})
+    balance = await db.get_user_balance(tg_user.id)
+    return web.json_response({"items": items, "balance": balance})
 
 
 async def api_buy_shop_item(request: web.Request) -> web.Response:
