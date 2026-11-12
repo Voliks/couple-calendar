@@ -1722,13 +1722,14 @@ def _respond(request: web.Request, etag: str, raw: bytes, gz: bytes, ctype: str,
     return web.Response(body=body, content_type=ctype, charset=_text_charset(ctype), headers=headers)
 
 
-def _asset_versions() -> dict[str, int]:
-    return {
-        p.name: p.stat().st_mtime_ns
-        for d in ("js", "css")
-        for p in (WEB_DIR / d).glob("*")
-        if p.is_file()
-    }
+def _asset_versions() -> dict[str, str]:
+    res = {}
+    for d in ("js", "css"):
+        for p in (WEB_DIR / d).glob("*"):
+            if p.is_file():
+                content = p.read_bytes()
+                res[p.name] = hashlib.sha1(content).hexdigest()[:8]
+    return res
 
 
 def _build_index() -> tuple:
@@ -1738,7 +1739,7 @@ def _build_index() -> tuple:
     sig = (INDEX_FILE.stat().st_mtime_ns, tuple(sorted(versions.items())))
     if _index_cache and _index_cache[0] == sig:
         return _index_cache
-    short = {name: format(ns // 1_000_000, "x") for name, ns in versions.items()}
+    short = {name: ver for name, ver in versions.items()}
     html = INDEX_FILE.read_text(encoding="utf-8")
     html = ASSET_RE.sub(lambda m: f'{m[1]}="{m[2]}/{m[3]}?v={short.get(m[3], "0")}"', html)
     inject = "<script>window.ASSET_V=" + json.dumps(short) + ";</script>"
