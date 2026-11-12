@@ -50,6 +50,10 @@ async function openChallenges({ refresh = false, focusId = null } = {}) {
     if (res.catalog) catalogData = res.catalog;
     $("challengeBalance").textContent = res.balance ?? 0;
 
+    // 🔥 Скрываем красный кружок, так как мы только что прочитали челленджи
+    const badge = $("challengeBadge");
+    if (badge) badge.hidden = true;
+
     if (!light) {
       if (!selectedCategory && Object.keys(catalogData).length > 0) {
         selectedCategory = Object.keys(catalogData)[0];

@@ -248,6 +248,10 @@ function loadScript(src) {
 }
 
 $("challengeBtn").onclick = async () => {
+  // 🔥 Прячем красный кружок моментально
+  const badge = $("challengeBadge");
+  if (badge) badge.hidden = true;
+
   if (typeof openChallenges !== "function") {
     const icon = $("challengeBtn").querySelector(".nav-icon");
     const oldText = icon.textContent;
