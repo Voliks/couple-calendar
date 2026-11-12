@@ -5,11 +5,28 @@ import os
 import re
 from datetime import date as date_cls
 from functools import lru_cache
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from aiogram import Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-from dotenv import load_dotenv
+from aiogram import Bot  # type: ignore[reportMissingImports]
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo  # type: ignore[reportMissingImports]
+
+
+def load_dotenv() -> None:
+    """Load simple KEY=VALUE entries from the project's .env without dependencies."""
+    try:
+        lines = Path(".env").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        name = name.removeprefix("export ").strip()
+        value = value.strip().strip("\"'")
+        if name:
+            os.environ.setdefault(name, value)
 
 # .env нужно прочитать до импорта db (он читает TURSO_* при импорте)
 load_dotenv()

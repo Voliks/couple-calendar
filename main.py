@@ -254,7 +254,12 @@ async def event_inline_action(call: CallbackQuery):
     if event["status"] == status:
         await call.answer("Уже отмечено")
         return
+        
     await db.set_status(event_id, status)
+    
+    # 🔥 ВАЖНО: Увеличиваем rev пары, чтобы клиент понял, что данные изменились
+    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
+    
     icon = "✅" if status == "accepted" else "❌"
     who = call.from_user.first_name
     notify(

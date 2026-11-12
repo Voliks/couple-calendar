@@ -76,7 +76,6 @@ async function handleStartParam() {
       if (ev) {
         selected = ev.date;
         renderList();
-        // Плавный скролл к карточке после отрисовки
         requestAnimationFrame(() => {
           document.querySelector(`.card[data-id="${id}"]`)
             ?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -95,8 +94,8 @@ async function bootstrap() {
   const slow = setTimeout(() => { hint.textContent = "Сервер просыпается, это может занять до минуты…"; }, 5000);
   for (;;) {
     try { 
-      await loadConfig(); // Загружаем статику (цвета, реакции) один раз
-      await load();       // Первый state уже содержит sex_ideas
+      await loadConfig();
+      await load();
       break; 
     }
     catch (e) {
@@ -115,7 +114,7 @@ async function bootstrap() {
   $("loading").hidden = true;
   render();
   startPolling();
-  await handleStartParam(); // ← deep-link: открыть челлендж/событие, если пришли по ссылке
+  await handleStartParam(); 
 }
 
 function render() {
@@ -133,13 +132,11 @@ function render() {
       badge.hidden = !state.has_new_challenges;
     }
 
-    // Показываем баннер мягкой отвязки, если он есть
     const restoreBlock = $("restoreBlock");
     if (restoreBlock) {
       restoreBlock.hidden = !state.is_unlinking;
     }
 
-    // Плашка «сегодня» + настроение дня (mood.js)
     if (typeof window.refreshMoodAndBanner === "function") {
       window.refreshMoodAndBanner();
     }
@@ -227,7 +224,6 @@ $("restoreBtn")?.addEventListener("click", async () => {
 
 /* ---------- ТУРБО-ЗАГРУЗКА МОДУЛЕЙ ---------- */
 
-// Читаем версии из <meta name="asset-versions">
 let ASSET_V = {};
 try {
   const meta = document.querySelector('meta[name="asset-versions"]');
@@ -294,7 +290,6 @@ function startPolling() {
   const canPoll = () => !sessionDead && !document.hidden && !anyOverlayOpen()
     && pendingOps === 0 && !reactionPickerEl && !dragState && !gridDrag;
 
-  // Интервал зависит от наличия партнёра: без партнёра — реже
   const baseDelay = () => state.has_partner ? 20000 : 60000;
   const maxDelay = () => state.has_partner ? 60000 : 120000;
 

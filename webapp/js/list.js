@@ -93,7 +93,6 @@ function commentsListHtml(comments) {
 
 function eventCommentsHtml(e) {
   if (e.category !== "rest" && e.category !== "sex") return "";
-  // комментарии приходят вместе со state — отдельных запросов на каждую карточку нет
   return `
     <div class="event-comments-block" data-event-id="${e.id}">
       <div class="event-comments-list" id="comments-list-${e.id}">${commentsListHtml(e.comments || [])}</div>
@@ -138,7 +137,6 @@ function cardHtml(e) {
       : `<div class="tag" style="margin-top:2px;color:rgb(var(--personal));font-weight:600;">🌐 Общее с партнёром</div>`;
   }
 
-  // Блок с предложенным временем
   let altTimeHtml = "";
   if (e.status === "declined" && e.alt_date) {
     altTimeHtml = `<div style="margin-top:8px; padding:8px 10px; border-radius:8px; background:rgba(36,129,204,0.1); font-size:13px; color:var(--accent); font-weight:600;">
@@ -200,7 +198,6 @@ function reconcile(container, items) {
   return true;
 }
 
-// Обновление комментариев одной карточки (после отправки своего комментария)
 async function loadEventComments(eventId) {
   try {
     const res = await api(`/events/${eventId}/comments`);
@@ -214,19 +211,13 @@ async function loadEventComments(eventId) {
   }
 }
 
-// Отправка комментария
 async function sendEventComment(eventId, inputEl) {
   const text = inputEl.value.trim();
   if (!text) return;
-
   inputEl.value = "";
   inputEl.disabled = true;
-
   try {
-    await api(`/events/${eventId}/comments`, {
-      method: "POST",
-      body: { text }
-    });
+    await api(`/events/${eventId}/comments`, { method: "POST", body: { text } });
     await loadEventComments(eventId);
   } catch (e) {
     toast(e.message);
@@ -236,25 +227,21 @@ async function sendEventComment(eventId, inputEl) {
   }
 }
 
-// Сохраняем позицию скролла страницы между перерисовками списка —
-// иначе длинный список «прыгает», когда reconcile заменяет карточки.
-let _savedScrollY = 0;
 function renderList() {
+  const prevScrollY = window.scrollY;
   $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
   const items = state.events
     .filter((e) => dayHasDate(e, selected))
     .map((e) => ({ id: String(e.id), html: cardHtml(e) }));
 
-  _savedScrollY = window.scrollY;
   const ok = reconcile($("list"), items);
   if (!ok) {
     $("list").innerHTML = `<div class="empty">На этот день ничего нет. Нажмите «+», чтобы добавить событие.</div>`;
   }
-  // Восстанавливаем позицию скролла (если ещё актуальна — reconcile мог укоротить список)
-  if (_savedScrollY > 0) {
+  if (prevScrollY > 0) {
     requestAnimationFrame(() => {
       const max = document.documentElement.scrollHeight - window.innerHeight;
-      window.scrollTo(0, Math.min(_savedScrollY, Math.max(0, max)));
+      window.scrollTo(0, Math.min(prevScrollY, Math.max(0, max)));
     });
   }
 }
@@ -534,18 +521,37 @@ $("list").addEventListener("click", async (ev) => {
               body: { status: "declined", comment, alt_date: altDate, alt_time: altTime } 
             });
             replaceEvent(updated);
+            
+            // Принудительное обновление state
+            etag = null;
+            etagKey = "";
+            await load(true);
+
             tg.HapticFeedback?.notificationOccurred("success");
-          } catch (e) { toast(e.message); await load(); }
+          } catch (e) { 
+            toast(e.message); 
+            await load(true); 
+          }
         }
       );
       return;
     }
+    
     statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
     try {
       const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: newStatus } });
       replaceEvent(updated);
+      
+      // Принудительное обновление state
+      etag = null;
+      etagKey = "";
+      await load(true);
+
       tg.HapticFeedback?.notificationOccurred("success");
-    } catch (e) { toast(e.message); await load(); }
+    } catch (e) { 
+      toast(e.message); 
+      await load(true); 
+    }
     return;
   }
 
