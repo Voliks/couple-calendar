@@ -599,11 +599,16 @@ async def api_state(request: web.Request) -> web.Response:
     has_partner = bool(user["partner_id"])
     pk = db.pair_key(tg_user.id, user["partner_id"]) if has_partner else ""
 
-    rev = await db.get_pair_rev(pk) if has_partner else 0
-    etag = f'"{rev}"'
+    etag_in = request.headers.get("If-None-Match")
 
-    if request.headers.get("If-None-Match") == etag:
-        return web.Response(status=304, headers={"ETag": etag, "Cache-Control": "no-store"})
+    # Быстрый путь: клиент прислал ETag → проверяем только rev (1 RTT)
+    if has_partner and etag_in:
+        rev = await db.get_pair_rev(pk)
+        etag = f'"{rev}"'
+        if etag_in == etag:
+            return web.Response(status=304, headers={"ETag": etag, "Cache-Control": "no-store"})
+    else:
+        rev = None  # получим параллельно ниже
 
     start, end = parse_month(request.query.get("month"))
     link = ""
@@ -649,15 +654,24 @@ async def api_state(request: web.Request) -> web.Response:
         _new_cache_put(tg_user.id, val)
         return val
 
-    # Всё параллельно: события, статистика, баланс, настроения, идеи, новые челленджи
-    events, stats, balance, moods_raw, sex_ideas, has_new = await asyncio.gather(
+    # Собираем все задачи, включая get_pair_rev если он ещё не получен
+    tasks = [
         db.list_events_range(tg_user.id, start, end),
         _safe_stats(),
         db.get_user_balance(tg_user.id),
         _safe_moods_raw(),
         _safe_sex_ideas(),
         _has_new_cached(),
-    )
+    ]
+    if rev is None:
+        tasks.append(db.get_pair_rev(pk) if has_partner else asyncio.sleep(0, 0))
+
+    results = await asyncio.gather(*tasks)
+    events, stats, balance, moods_raw, sex_ideas, has_new = results[:6]
+    if rev is None:
+        rev = results[6]
+
+    etag = f'"{rev}"'
 
     # Собираем moods в нужный формат
     moods = None

@@ -233,15 +233,18 @@ function startPolling() {
   const canPoll = () => !sessionDead && !document.hidden && !anyOverlayOpen()
     && pendingOps === 0 && !reactionPickerEl && !dragState && !gridDrag;
 
-  const BASE = 20000, MAX = 60000;
-  let delay = BASE;
+  // Интервал зависит от наличия партнёра: без партнёра — реже
+  const baseDelay = () => state.has_partner ? 20000 : 60000;
+  const maxDelay = () => state.has_partner ? 60000 : 120000;
+
+  let delay = baseDelay();
   let pollTimer = null;
 
   const tick = async () => {
     if (canPoll()) {
       try {
         const changed = await load(true);
-        delay = changed ? BASE : Math.min(delay * 2, MAX);
+        delay = changed ? baseDelay() : Math.min(delay * 2, maxDelay());
       } catch (e) {}
     }
     scheduleNext();
@@ -249,13 +252,13 @@ function startPolling() {
 
   const scheduleNext = () => {
     if (pollTimer) clearTimeout(pollTimer);
-    if (document.hidden) return; 
+    if (document.hidden) return;
     pollTimer = setTimeout(tick, delay);
   };
 
   scheduleNext();
 
-  document.addEventListener("pointerdown", () => { delay = BASE; }, { passive: true });
+  document.addEventListener("pointerdown", () => { delay = baseDelay(); }, { passive: true });
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
@@ -264,7 +267,7 @@ function startPolling() {
         pollTimer = null;
       }
     } else {
-      delay = BASE;
+      delay = baseDelay();
       if (canPoll()) {
         load(true).finally(() => scheduleNext());
       } else {

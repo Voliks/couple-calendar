@@ -840,7 +840,11 @@ async def _attach_items(events: list[dict]) -> list[dict]:
             tuple(chat_ids),
         ))
 
-    results = await _batch(stmts)
+    try:
+        results = await _batch(stmts)
+    except DbError:
+        log.exception("Не удалось загрузить вложения событий (graceful degradation)")
+        return events  # отдаём события без вложений вместо 500
 
     if "comments" in pos:
         for event_id, cid, uid, text, created_at in results[pos["comments"]].rows:
