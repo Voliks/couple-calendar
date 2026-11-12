@@ -597,12 +597,9 @@ async def api_state(request: web.Request) -> web.Response:
         await db.set_timezone(tg_user.id, tz)
 
     has_partner = bool(user["partner_id"])
-
-    etag_in = request.headers.get("If-None-Match")
-
     pk = db.pair_key(tg_user.id, user["partner_id"]) if has_partner else ""
 
-    rev: int | None = None
+    etag_in = request.headers.get("If-None-Match")
 
     # Быстрый путь: клиент прислал ETag → проверяем только rev (1 RTT)
     if has_partner and etag_in:
@@ -610,26 +607,93 @@ async def api_state(request: web.Request) -> web.Response:
         etag = f'"{rev}"'
         if etag_in == etag:
             return web.Response(status=304, headers={"ETag": etag, "Cache-Control": "no-store"})
+    else:
+        rev = None  # получим параллельно ниже
 
+    start, end = parse_month(request.query.get("month"))
     link = ""
     if not has_partner:
         user = await db.ensure_invite(user)
         link = invite_link(user["invite_code"])
 
-    if rev is None and has_partner:
-        rev = await db.get_pair_rev(pk)
+    # Локальная дата пользователя для moods
+    tz_obj = get_zone(user["tz"]) or timezone.utc
+    local_now = datetime.now(timezone.utc).astimezone(tz_obj)
+    today_local = local_now.strftime("%Y-%m-%d")
+
+    async def _safe_stats():
+        if not has_partner:
+            return None
+        try:
+            return await db.pair_stats(tg_user.id, user["partner_id"])
+        except Exception:
+            logging.exception("Не удалось получить статистику")
+            return None
+
+    async def _safe_moods_raw():
+        if not has_partner:
+            return []
+        try:
+            return await db.get_moods(pk, today_local)
+        except Exception:
+            logging.exception("Не удалось получить настроение")
+            return []
+
+    async def _safe_sex_ideas():
+        try:
+            return await db.get_sex_ideas(tg_user.id, user["partner_id"] if has_partner else None)
+        except Exception:
+            logging.exception("Не удалось получить идеи")
+            return []
+
+    async def _has_new_cached():
+        hit = _new_cache.get(tg_user.id)
+        if hit and time.monotonic() - hit[0] < NEW_ACTIVITY_TTL:
+            return hit[1]
+        val = await db.has_new_activity(tg_user.id)
+        _new_cache_put(tg_user.id, val)
+        return val
+
+    # Все задачи параллельно, включая get_pair_rev если он ещё не получен
+    tasks = [
+        db.list_events_range(tg_user.id, start, end),
+        _safe_stats(),
+        db.get_user_balance(tg_user.id),
+        _safe_moods_raw(),
+        _safe_sex_ideas(),
+        _has_new_cached(),
+    ]
+    if rev is None:
+        tasks.append(db.get_pair_rev(pk) if has_partner else asyncio.sleep(0, 0))
+
+    results = await asyncio.gather(*tasks)
+    events, stats, balance, moods_raw, sex_ideas, has_new = results[:6]
+    if rev is None:
+        rev = results[6]
 
     etag = f'"{rev}"'
 
-    has_new = await _has_new_cached(tg_user.id)
+    # Собираем moods в нужный формат
+    moods = None
+    if has_partner:
+        by_user = {m["user_id"]: m for m in moods_raw}
+        mine = by_user.get(tg_user.id) or {"emoji": "", "text": "", "updated_at": 0}
+        partner = by_user.get(user["partner_id"]) or {"emoji": "", "text": "", "updated_at": 0}
+        moods = {"date": today_local, "mine": mine, "partner": partner}
 
     body = json.dumps(
         {
             "has_partner": has_partner,
             "is_unlinking": bool(user.get("unlinked_at")),
             "invite_link": link,
-            "has_new_challenges": has_new,
+            "month": start[:7],
+            "events": [event_to_dict(e, tg_user.id) for e in events],
+            "stats": stats,
             "my_id": tg_user.id,
+            "balance": balance,
+            "has_new_challenges": has_new,
+            "moods": moods,
+            "sex_ideas": sex_ideas,
         },
         ensure_ascii=False,
         sort_keys=True,
