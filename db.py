@@ -272,12 +272,31 @@ async def close_db() -> None:
         await _backend.close()
         _backend = None
 
+_ALLOWED_TABLES = {
+    "users", "events", "checklist_items", "reminders", "sex_ideas",
+    "hidden_ideas", "archived_ideas", "reactions", "idea_responses",
+    "user_challenges", "challenge_messages", "shop_items",
+    "event_comments", "moods", "pair_rev", "schema_version",
+}
+
+_ALLOWED_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_identifier(value: str) -> str:
+    if value not in _ALLOWED_TABLES and not _ALLOWED_IDENTIFIER.fullmatch(value):
+        raise DbError(f"Недопустимый идентификатор: {value}")
+    return value
+
+
 async def _columns(table: str) -> set[str]:
+    table = _validate_identifier(table)
     rows = (await _exec(f"PRAGMA table_info({table})")).rows
     return {r[1] for r in rows}
 
 
 async def _add_column(table: str, name: str, ddl: str) -> bool:
+    table = _validate_identifier(table)
+    name = _validate_identifier(name)
     if name in await _columns(table):
         return False
     await _exec(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
@@ -482,6 +501,39 @@ async def _m29_pair_rev() -> None:
     await _exec("CREATE TABLE IF NOT EXISTS pair_rev (pair_key TEXT PRIMARY KEY, rev INTEGER NOT NULL DEFAULT 1)")
 
 
+async def _m30_reliable_unlink() -> None:
+    await _add_column("users", "previous_partner_id", "INTEGER")
+
+    rs = await _exec(
+        """
+        SELECT telegram_id, unlinked_at
+        FROM users
+        WHERE unlinked_at > 0 AND partner_id IS NULL
+        """
+    )
+
+    stmts = []
+
+    for user_id, unlinked_at in rs.rows:
+        stmts.append((
+            """
+            UPDATE users
+            SET previous_partner_id = (
+                SELECT u2.telegram_id
+                FROM users u2
+                WHERE u2.unlinked_at = ?
+                  AND u2.telegram_id != ?
+                LIMIT 1
+            )
+            WHERE telegram_id = ?
+            """,
+            (unlinked_at, user_id, user_id),
+        ))
+
+    if stmts:
+        await _batch(stmts)
+
+
 MIGRATIONS = [
     (1, _m1_base), (2, _m2_features), (3, _m3_sex_ideas), (4, _m4_ideas_source), (5, _m5_fix_checklist),
     (6, _m6_hidden_ideas), (7, _m7_archived_ideas), (8, _m8_todo), (9, _m9_reactions), (10, _m10_two_comments),
@@ -490,6 +542,7 @@ MIGRATIONS = [
     (19, _m19_challenge_deadline), (20, _m20_shop_items), (21, _m21_event_comments), (22, _m22_last_viewed),
     (23, _m23_performance_indexes), (24, _m24_moods), (25, _m25_alt_time), (26, _m26_fix_schema),
     (27, _m16_add_done_status), (28, _m28_soft_unlink), (29, _m29_pair_rev),
+    (30, _m30_reliable_unlink),
 ]
 
 _REQUIRED_COLUMNS = {15: [("events", "date_end", "TEXT NOT NULL DEFAULT ''"), ("events", "visibility", "TEXT NOT NULL DEFAULT 'shared'")]}
@@ -592,7 +645,7 @@ def _user_cache_put(uid: int, value: dict) -> None:
     _user_cache[uid] = (time.monotonic(), value)
 
 
-USER_COLS = "telegram_id, partner_id, invite_code, invite_expires, tz, unlinked_at"
+USER_COLS = "telegram_id, partner_id, invite_code, invite_expires, tz, unlinked_at, previous_partner_id"
 
 
 def _user(r) -> dict | None:
@@ -605,6 +658,7 @@ def _user(r) -> dict | None:
         "invite_expires": r[3] or 0,
         "tz": r[4] or "",
         "unlinked_at": r[5] or 0,
+        "previous_partner_id": r[6],
     }
 
 
@@ -630,18 +684,24 @@ async def get_user(telegram_id: int) -> dict | None:
 
 
 async def get_or_create_user(telegram_id: int) -> dict:
-    user = await get_user(telegram_id)
-    if user:
-        return user
+    invite_expires = int(time.time()) + INVITE_TTL
+
     for _ in range(5):
         await _exec(
-            "INSERT OR IGNORE INTO users (telegram_id, invite_code, invite_expires) VALUES (?, ?, ?)",
-            (telegram_id, _new_code(), int(time.time()) + INVITE_TTL),
+            """
+            INSERT OR IGNORE INTO users
+                (telegram_id, invite_code, invite_expires)
+            VALUES (?, ?, ?)
+            """,
+            (telegram_id, _new_code(), invite_expires),
         )
+
         user = await get_user(telegram_id)
+
         if user:
             _invalidate_user_cache(telegram_id)
             return user
+
     raise DbError("Не удалось создать пользователя")
 
 
@@ -687,31 +747,61 @@ async def unlink_partners(user_id: int) -> int | None:
     user = await get_user(user_id)
     if not user or user["partner_id"] is None:
         return None
-    p = user["partner_id"]
+
+    partner_id = user["partner_id"]
     now = int(time.time())
+
     await _exec(
-        "UPDATE users SET partner_id = NULL, invite_expires = 0, unlinked_at = ? WHERE telegram_id IN (?, ?)",
-        (now, user_id, p),
+        """
+        UPDATE users
+        SET partner_id = NULL,
+            invite_expires = 0,
+            unlinked_at = ?,
+            previous_partner_id = CASE
+                WHEN telegram_id = ? THEN ?
+                ELSE ?
+            END
+        WHERE telegram_id IN (?, ?)
+        """,
+        (now, user_id, partner_id, user_id, user_id, partner_id),
     )
-    _invalidate_user_cache(user_id, p)
-    return p
+
+    _invalidate_user_cache(user_id, partner_id)
+    return partner_id
 
 
 async def restore_partners(user_id: int) -> int | None:
     user = await get_user(user_id)
     if not user or not user.get("unlinked_at"):
         return None
-    rs = await _exec(
-        "SELECT telegram_id FROM users WHERE unlinked_at = ? AND telegram_id != ?",
-        (user["unlinked_at"], user_id),
-    )
-    if not rs.rows:
+
+    partner_id = user.get("previous_partner_id")
+    if not partner_id:
         return None
-    partner_id = rs.rows[0][0]
+
+    partner = await get_user(partner_id)
+
+    if (
+        not partner
+        or not partner.get("unlinked_at")
+        or partner.get("previous_partner_id") != user_id
+    ):
+        return None
+
     await _exec(
-        "UPDATE users SET partner_id = CASE telegram_id WHEN ? THEN ? ELSE ? END, unlinked_at = 0 WHERE telegram_id IN (?, ?)",
+        """
+        UPDATE users
+        SET partner_id = CASE
+                WHEN telegram_id = ? THEN ?
+                ELSE ?
+            END,
+            unlinked_at = 0,
+            previous_partner_id = NULL
+        WHERE telegram_id IN (?, ?)
+        """,
         (user_id, partner_id, user_id, user_id, partner_id),
     )
+
     _invalidate_user_cache(user_id, partner_id)
     return partner_id
 
@@ -720,16 +810,13 @@ async def finalize_unlink(user_id: int) -> None:
     user = await get_user(user_id)
     if not user or not user.get("unlinked_at"):
         return
-    p = None
-    rs = await _exec(
-        "SELECT telegram_id FROM users WHERE unlinked_at = ? AND telegram_id != ?",
-        (user["unlinked_at"], user_id),
-    )
-    if rs.rows:
-        p = rs.rows[0][0]
+
+    p = user.get("previous_partner_id")
+
     pair = "(created_by = ? AND target_user = ?) OR (created_by = ? AND target_user = ?)"
     pargs = (user_id, p, p, user_id) if p else (user_id, user_id, user_id, user_id)
     pk = pair_key(user_id, p) if p else ""
+
     stmts = [
         (f"DELETE FROM checklist_items WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
         (f"DELETE FROM reminders WHERE event_id IN (SELECT id FROM events WHERE {pair})", pargs),
@@ -746,9 +833,23 @@ async def finalize_unlink(user_id: int) -> None:
         ])
     await _batch(stmts)
     if p:
-        await _exec("UPDATE users SET unlinked_at = 0 WHERE telegram_id IN (?, ?)", (user_id, p))
+        await _exec(
+            """
+            UPDATE users
+            SET unlinked_at = 0, previous_partner_id = NULL
+            WHERE telegram_id IN (?, ?)
+            """,
+            (user_id, p),
+        )
     else:
-        await _exec("UPDATE users SET unlinked_at = 0 WHERE telegram_id = ?", (user_id,))
+        await _exec(
+            """
+            UPDATE users
+            SET unlinked_at = 0, previous_partner_id = NULL
+            WHERE telegram_id = ?
+            """,
+            (user_id,),
+        )
     _invalidate_user_cache(user_id)
     if p:
         _invalidate_user_cache(p)
@@ -917,6 +1018,23 @@ async def set_status(event_id: int, status: str) -> None:
     if status not in ("pending", "accepted", "declined", "done"):
         raise ValueError("bad status")
     await _exec("UPDATE events SET status = ?, alt_date = '', alt_time = '' WHERE id = ?", (status, event_id))
+
+
+async def mark_event_done(event_id: int, user_id: int) -> bool:
+    rs = await _exec(
+        """
+        UPDATE events
+        SET status = 'done',
+            alt_date = '',
+            alt_time = ''
+        WHERE id = ?
+          AND (created_by = ? OR target_user = ?)
+          AND status = 'accepted'
+        """,
+        (event_id, user_id, user_id),
+    )
+
+    return rs.affected == 1
 
 
 async def set_target_user(event_id: int, target_user: int) -> None:

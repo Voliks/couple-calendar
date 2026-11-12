@@ -597,9 +597,12 @@ async def api_state(request: web.Request) -> web.Response:
         await db.set_timezone(tg_user.id, tz)
 
     has_partner = bool(user["partner_id"])
-    pk = db.pair_key(tg_user.id, user["partner_id"]) if has_partner else ""
 
     etag_in = request.headers.get("If-None-Match")
+
+    pk = db.pair_key(tg_user.id, user["partner_id"]) if has_partner else ""
+
+    rev: int | None = None
 
     # Быстрый путь: клиент прислал ETag → проверяем только rev (1 RTT)
     if has_partner and etag_in:
@@ -607,93 +610,26 @@ async def api_state(request: web.Request) -> web.Response:
         etag = f'"{rev}"'
         if etag_in == etag:
             return web.Response(status=304, headers={"ETag": etag, "Cache-Control": "no-store"})
-    else:
-        rev = None  # получим параллельно ниже
 
-    start, end = parse_month(request.query.get("month"))
     link = ""
     if not has_partner:
         user = await db.ensure_invite(user)
         link = invite_link(user["invite_code"])
 
-    # Локальная дата пользователя для moods
-    tz_obj = get_zone(user["tz"]) or timezone.utc
-    local_now = datetime.now(timezone.utc).astimezone(tz_obj)
-    today_local = local_now.strftime("%Y-%m-%d")
-
-    async def _safe_stats():
-        if not has_partner:
-            return None
-        try:
-            return await db.pair_stats(tg_user.id, user["partner_id"])
-        except Exception:
-            logging.exception("Не удалось получить статистику")
-            return None
-
-    async def _safe_moods_raw():
-        if not has_partner:
-            return []
-        try:
-            return await db.get_moods(pk, today_local)
-        except Exception:
-            logging.exception("Не удалось получить настроение")
-            return []
-
-    async def _safe_sex_ideas():
-        try:
-            return await db.get_sex_ideas(tg_user.id, user["partner_id"] if has_partner else None)
-        except Exception:
-            logging.exception("Не удалось получить идеи")
-            return []
-
-    async def _has_new_cached():
-        hit = _new_cache.get(tg_user.id)
-        if hit and time.monotonic() - hit[0] < NEW_ACTIVITY_TTL:
-            return hit[1]
-        val = await db.has_new_activity(tg_user.id)
-        _new_cache_put(tg_user.id, val)
-        return val
-
-    # Собираем все задачи, включая get_pair_rev если он ещё не получен
-    tasks = [
-        db.list_events_range(tg_user.id, start, end),
-        _safe_stats(),
-        db.get_user_balance(tg_user.id),
-        _safe_moods_raw(),
-        _safe_sex_ideas(),
-        _has_new_cached(),
-    ]
-    if rev is None:
-        tasks.append(db.get_pair_rev(pk) if has_partner else asyncio.sleep(0, 0))
-
-    results = await asyncio.gather(*tasks)
-    events, stats, balance, moods_raw, sex_ideas, has_new = results[:6]
-    if rev is None:
-        rev = results[6]
+    if rev is None and has_partner:
+        rev = await db.get_pair_rev(pk)
 
     etag = f'"{rev}"'
 
-    # Собираем moods в нужный формат
-    moods = None
-    if has_partner:
-        by_user = {m["user_id"]: m for m in moods_raw}
-        mine = by_user.get(tg_user.id) or {"emoji": "", "text": "", "updated_at": 0}
-        partner = by_user.get(user["partner_id"]) or {"emoji": "", "text": "", "updated_at": 0}
-        moods = {"date": today_local, "mine": mine, "partner": partner}
+    has_new = await _has_new_cached(tg_user.id)
 
     body = json.dumps(
         {
             "has_partner": has_partner,
             "is_unlinking": bool(user.get("unlinked_at")),
             "invite_link": link,
-            "month": start[:7],
-            "events": [event_to_dict(e, tg_user.id) for e in events],
-            "stats": stats,
-            "my_id": tg_user.id,
-            "balance": balance,
             "has_new_challenges": has_new,
-            "moods": moods,
-            "sex_ideas": sex_ideas,
+            "my_id": tg_user.id,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -701,6 +637,82 @@ async def api_state(request: web.Request) -> web.Response:
 
     headers = {"ETag": etag, "Cache-Control": "no-store"}
     return web.Response(text=body, content_type="application/json", headers=headers)
+
+
+async def _has_new_cached(user_id: int) -> bool:
+    hit = _new_cache.get(user_id)
+    if hit and time.monotonic() - hit[0] < NEW_ACTIVITY_TTL:
+        return hit[1]
+    val = await db.has_new_activity(user_id)
+    _new_cache_put(user_id, val)
+    return val
+
+
+async def api_events(request: web.Request) -> web.Response:
+    tg_user = authenticate(request)
+    user = await db.get_or_create_user(tg_user.id)
+
+    start, end = parse_month(request.query.get("month"))
+    events = await db.list_events_range(tg_user.id, start, end)
+
+    return web.json_response({
+        "month": start[:7],
+        "events": [
+            event_to_dict(e, tg_user.id)
+            for e in events
+        ],
+    })
+
+
+async def api_pair_summary(request: web.Request) -> web.Response:
+    tg_user = authenticate(request)
+    user = await db.get_or_create_user(tg_user.id)
+
+    if not user["partner_id"]:
+        return web.json_response({
+            "has_partner": False,
+            "stats": None,
+            "balance": await db.get_user_balance(tg_user.id),
+        })
+
+    stats = None
+
+    try:
+        stats = await db.pair_stats(tg_user.id, user["partner_id"])
+    except Exception:
+        logging.exception("Не удалось получить статистику")
+
+    return web.json_response({
+        "has_partner": True,
+        "stats": stats,
+        "balance": await db.get_user_balance(tg_user.id),
+    })
+
+
+async def api_moods_today(request: web.Request) -> web.Response:
+    tg_user = authenticate(request)
+    user = await db.get_or_create_user(tg_user.id)
+
+    if not user["partner_id"]:
+        raise ApiError("Сначала свяжитесь с партнёром", 409)
+
+    tz_obj = get_zone(user["tz"]) or timezone.utc
+    today_local = datetime.now(timezone.utc).astimezone(tz_obj).strftime("%Y-%m-%d")
+
+    pk = db.pair_key(tg_user.id, user["partner_id"])
+    moods_raw = await db.get_moods(pk, today_local)
+
+    by_user = {m["user_id"]: m for m in moods_raw}
+    mine = by_user.get(tg_user.id) or {"emoji": "", "text": "", "updated_at": 0}
+    partner = by_user.get(user["partner_id"]) or {
+        "emoji": "", "text": "", "updated_at": 0
+    }
+
+    return web.json_response({
+        "date": today_local,
+        "mine": mine,
+        "partner": partner,
+    })
 
 
 async def api_create_event(request: web.Request) -> web.Response:
@@ -846,6 +858,30 @@ async def api_respond(request: web.Request) -> web.Response:
         event = await db.get_event(event["id"])
 
     return web.json_response(event_to_dict(event, tg_user.id))
+
+
+async def api_mark_event_done(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    event = await member_event(request, tg_user.id)
+
+    if event["category"] in ("shop", "todo", "personal"):
+        raise ApiError("Это событие не требует отметки выполнения", 409)
+
+    if event["status"] != "accepted":
+        raise ApiError(
+            "Отметить выполненным можно только принятое событие",
+            409,
+        )
+
+    if not await db.mark_event_done(event["id"], tg_user.id):
+        raise ApiError("Не удалось отметить событие выполненным", 409)
+
+    await db.bump_pair_rev(
+        db.pair_key(event["created_by"], event["target_user"])
+    )
+
+    updated = await db.get_event(event["id"])
+    return web.json_response(event_to_dict(updated, tg_user.id))
 
 
 async def api_set_idea_response(request: web.Request) -> web.Response:
@@ -1742,6 +1778,9 @@ async def main() -> None:
     
     app.router.add_get("/api/config", api_config)
     app.router.add_get("/api/state", api_state)
+    app.router.add_get("/api/events", api_events)
+    app.router.add_get("/api/pair-summary", api_pair_summary)
+    app.router.add_get("/api/moods/today", api_moods_today)
     
     app.router.add_get("/api/archive.json", api_archive)
     app.router.add_get("/api/todos/archive", api_archived_todos)
@@ -1750,6 +1789,7 @@ async def main() -> None:
     app.router.add_put("/api/events/{id}", api_update_event)
     app.router.add_delete("/api/events/{id}", api_delete_event)
     app.router.add_post("/api/events/{id}/respond", api_respond)
+    app.router.add_post("/api/events/{id}/done", api_mark_event_done)
     app.router.add_post("/api/events/{id}/idea", api_set_idea_response)
     app.router.add_post("/api/events/{id}/reaction", api_set_reaction)
     app.router.add_post("/api/events/{id}/comment", api_set_decline_comment)
