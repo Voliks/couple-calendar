@@ -1,4 +1,5 @@
 let gridDrag = null;
+let lastCalendarHash = ""; // Хэш для предотвращения лишних перерисовок
 
 function dayElFromPoint(x, y) {
   const el = document.elementFromPoint(x, y);
@@ -20,8 +21,7 @@ function clearMultiSelect() {
   syncGridClasses();
 }
 
-// Выделение диапазона меняет только классы существующих кнопок, а не пересобирает всю сетку:
-// иначе при перетаскивании пальцем на каждый шаг заново строится весь innerHTML.
+// Выделение диапазона меняет только классы существующих кнопок, а не пересобирает всю сетку
 function syncGridClasses() {
   const multi = state.multi_select || new Set();
   for (const el of $("grid").children) {
@@ -66,20 +66,23 @@ function renderCalendar() {
   const today = todayStr();
   const keyOf = (e) => (e.status === "pending" && e.date < today ? "expired" : e.status);
 
-  // Один проход по событиям: раскладываем их по дням строковыми датами, без циклов по Date.
-  // События идут по возрастанию id, поэтому «последнее» для заливки — с наибольшим id.
   const byDay = {};
   const events = state.events.slice().sort((a, b) => a.id - b.id);
+  let hashParts = [];
+
   for (const e of events) {
     if (!e.date) continue;
     const end = e.date_end || e.date;
-    const lo = e.date > first ? e.date : first;   // обрезаем по границам видимого месяца
+    const lo = e.date > first ? e.date : first;
     const hi = end < last ? end : last;
     if (lo > hi) continue;
+    
     const cat = e.category;
     const isRange = end !== e.date;
-    // заливку дают личные события и диапазоны дел/отдыха/секса
     const fills = cat === "personal" || (isRange && (cat === "todo" || cat === "rest" || cat === "sex"));
+    
+    hashParts.push(`${e.id}:${cat}:${isRange ? '1' : '0'}:${e.color || ''}:${e.status}`);
+    
     for (let d = Number(lo.slice(8)); d <= Number(hi.slice(8)); d++) {
       const slot = (byDay[prefix + pad(d)] ||= { n: 0, fill: {}, todos: [], st: new Set() });
       slot.n++;
@@ -89,9 +92,25 @@ function renderCalendar() {
     }
   }
 
+  hashParts.push(`view:${view.y}-${view.m}`);
+  hashParts.push(`sel:${selected}`);
+  hashParts.push(`today:${today}`);
+  if (state.multi_select) {
+    hashParts.push(`multi:${[...state.multi_select].sort().join(",")}`);
+  }
+
+  const newHash = hashParts.join("|");
+  
+  // Если хэш совпадает и сетка уже существует — ничего не перерисовываем
+  if (newHash === lastCalendarHash && $("grid").children.length > 0) {
+    return;
+  }
+  lastCalendarHash = newHash;
+
   const offset = (new Date(view.y, view.m, 1).getDay() + 6) % 7;
   const multi = state.multi_select || new Set();
   let html = "<div></div>".repeat(offset);
+  
   for (let d = 1; d <= days; d++) {
     const date = prefix + pad(d);
     const s = byDay[date];
@@ -135,8 +154,6 @@ function cancelLongPress() {
   if (gridDrag && gridDrag.timer) { clearTimeout(gridDrag.timer); gridDrag.timer = null; }
 }
 
-// Мышь: тянем сразу. Палец: горизонтальный свайп или долгое нажатие включают выбор диапазона,
-// а обычное вертикальное движение остаётся прокруткой страницы.
 $("grid").addEventListener("pointerdown", (ev) => {
   if (ev.button !== undefined && ev.button !== 0) return;
   const day = ev.target.closest(".day");
@@ -177,8 +194,8 @@ $("grid").addEventListener("pointermove", (ev) => {
   if (!gridDrag.active) {
     if (!gridDrag.moved) return;
     cancelLongPress();
-    if (dx <= dy) return;       // вертикальное движение — это прокрутка
-    gridDrag.active = true;     // горизонтальный свайп — выбираем диапазон
+    if (dx <= dy) return;
+    gridDrag.active = true;
   }
 
   const day = dayElFromPoint(ev.clientX, ev.clientY);
@@ -199,7 +216,6 @@ $("grid").addEventListener("pointermove", (ev) => {
   applyMultiSelect(dates);
 });
 
-// Пока идёт выбор диапазона пальцем, страница не должна прокручиваться
 $("grid").addEventListener("touchmove", (ev) => {
   if (gridDrag && gridDrag.active) ev.preventDefault();
 }, { passive: false });
@@ -233,7 +249,6 @@ $("grid").addEventListener("pointercancel", (ev) => {
   clearMultiSelect();
 });
 
-// Клавиатура и скринридеры: Enter/Space на кнопке дня даёт click без pointer-событий
 $("grid").addEventListener("click", (ev) => {
   if (ev.detail !== 0) return;
   const day = ev.target.closest(".day");
