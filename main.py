@@ -335,8 +335,23 @@ async def api_middleware(request: web.Request, handler):
     except Exception:
         logging.exception("Необработанная ошибка в API")
         response = web.json_response({"error": "Внутренняя ошибка сервера"}, status=500)
+
+    # Кэширование статики
     if request.path.startswith(("/css/", "/js/")):
         response.headers.setdefault("Cache-Control", "no-cache")
+
+    # Безопасность: CSP и защита от MIME-sniffing
+    if not response.headers.get("Content-Security-Policy"):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://telegram.org; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob: https://*.supabase.co; "
+            "connect-src 'self' https://*.supabase.co https://api.telegram.org; "
+            "frame-ancestors https://web.telegram.org https://*.telegram.org;"
+        )
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+
     _add_cors(request, response)
     return response
 
