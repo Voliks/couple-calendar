@@ -83,22 +83,55 @@ function declineCommentHtml(e) {
   return `${lines.join("")}${button}`;
 }
 
-// Отображение комментариев с поддержкой фото и кнопки удаления
+// ---------- Кэш подписанных ссылок на фото (живут 60 мин на сервере, держим 50) ----------
+const PHOTO_TTL = 50 * 60 * 1000;
+const photoUrlCache = new Map();   // path -> { url, exp }
+const photoInflight = new Map();   // path -> Promise<url|null>
+
+function cachedPhotoUrl(path) {
+  const hit = photoUrlCache.get(path);
+  if (hit && hit.exp > Date.now()) return hit.url;
+  if (hit) photoUrlCache.delete(path);
+  return "";
+}
+
+function fetchPhotoUrl(path) {
+  const cached = cachedPhotoUrl(path);
+  if (cached) return Promise.resolve(cached);
+  let p = photoInflight.get(path);
+  if (!p) {
+    p = api(`/comments/photo-url?path=${encodeURIComponent(path)}`)
+      .then((res) => {
+        if (res.view_url) photoUrlCache.set(path, { url: res.view_url, exp: Date.now() + PHOTO_TTL });
+        return res.view_url || null;
+      })
+      .catch(() => null)
+      .finally(() => photoInflight.delete(path));
+    photoInflight.set(path, p);
+  }
+  return p;
+}
+
+// Отображение комментариев с поддержкой фото, кнопки удаления и «отправляется…»
 function commentsListHtml(comments) {
   if (!comments.length) return `<div class="cm-empty">Нет комментариев</div>`;
   const myId = state?.my_id || 0;
   return comments.map((c) => {
+    const pending = c.pending === true;
     let imgHtml = "";
     if (c.photo_id) {
+      const known = cachedPhotoUrl(c.photo_id);
       imgHtml = `<div style="margin-top:6px;">
-        <img data-src="${esc(c.photo_id)}" class="comment-img" alt="Фото">
+        <img data-src="${esc(c.photo_id)}" class="comment-img" alt="Фото" loading="lazy" decoding="async"${known ? ` src="${esc(known)}"` : ""}>
       </div>`;
+    } else if (pending && c.uploading) {
+      imgHtml = `<div class="cm-empty" style="margin-top:4px;">📷 Загружается…</div>`;
     }
     const isMine = c.sender_id === myId;
-    const delBtn = isMine
+    const delBtn = isMine && !pending
       ? `<button type="button" class="cm-del" data-cm-del="${c.id}" aria-label="Удалить комментарий">×</button>`
       : "";
-    return `<div class="cm${isMine ? " mine" : ""}" data-cm-id="${c.id}">
+    return `<div class="cm${isMine ? " mine" : ""}" data-cm-id="${c.id}"${pending ? ' style="opacity:.6"' : ""}>
       <div class="cm-text">${c.text ? esc(c.text) : ""}</div>
       ${imgHtml}
       ${delBtn}
@@ -215,34 +248,100 @@ function reconcile(container, items) {
   return true;
 }
 
+// Точечная перерисовка ТОЛЬКО списка комментариев: поле ввода, фокус и клавиатура не трогаются
+function paintComments(eventId) {
+  const ev = findEvent(eventId);
+  if (!ev) return;
+  const card = document.querySelector(`#list .card[data-id="${eventId}"]`);
+  const list = card?.querySelector(".event-comments-list");
+  if (!list) { renderList(); return; }
+  list.innerHTML = commentsListHtml(ev.comments || []);
+  sigs.set(card, cardHtml(ev));      // подпись карточки синхронна с DOM, лишней пересборки не будет
+  loadCommentImages(list);
+}
+
+// Полная перезагрузка комментариев одного события (нужна редко — например, после ошибки)
 async function loadEventComments(eventId) {
   try {
     const res = await api(`/events/${eventId}/comments`);
-    const comments = res.comments || [];
     const ev = findEvent(eventId);
-    if (ev) ev.comments = comments;
-    const list = document.getElementById(`comments-list-${eventId}`);
-    if (list) list.innerHTML = commentsListHtml(comments);
-    if (typeof loadCommentImages === "function") loadCommentImages();
+    if (ev) ev.comments = res.comments || [];
+    paintComments(eventId);
   } catch (e) {
     console.error("Ошибка загрузки комментариев", e);
   }
 }
 
-async function sendEventComment(eventId, inputEl) {
+let tmpCommentSeq = 0;
+
+// Отправка: комментарий появляется мгновенно, запрос уходит в фоне
+function sendEventComment(eventId, inputEl, photo = null) {
   const text = inputEl.value.trim();
-  if (!text) return;
-  inputEl.value = "";
-  inputEl.disabled = true;
-  try {
-    await api(`/events/${eventId}/comments`, { method: "POST", body: { text } });
-    await loadEventComments(eventId);
-  } catch (e) {
-    toast(e.message);
-  } finally {
-    inputEl.disabled = false;
-    inputEl.focus();
-  }
+  if (!text && !photo) return;
+  const ev = findEvent(eventId);
+  if (!ev) return;
+  inputEl.value = "";                       // поле НЕ блокируем и фокус не теряем — клавиатура остаётся
+
+  const tmpId = `t${++tmpCommentSeq}`;
+  const temp = {
+    id: tmpId, sender_id: state.my_id, text, photo_id: "", created_at: Math.floor(Date.now() / 1000),
+    pending: true, uploading: !!photo,
+  };
+  ev.comments = [...(ev.comments || []), temp];
+  paintComments(eventId);
+  tg.HapticFeedback?.impactOccurred?.("light");
+
+  return queueOp(async () => {
+    try {
+      let photo_id = "";
+      if (photo) photo_id = await uploadCommentPhoto(photo);
+      const res = await api(`/events/${eventId}/comments`, { method: "POST", body: { text, photo_id }, adopt: true });
+      const cur = findEvent(eventId);
+      if (cur) {
+        const arr = cur.comments || [];
+        const next = arr.some((c) => c.id === tmpId)
+          ? arr.map((c) => (c.id === tmpId ? res.comment : c))
+          : [...arr, res.comment];            // state успели перезагрузить — временного уже нет
+        const seen = new Set();
+        cur.comments = next.filter((c) => !seen.has(c.id) && seen.add(c.id));   // без дублей
+      }
+      paintComments(eventId);
+    } catch (e) {
+      const cur = findEvent(eventId);
+      if (cur) cur.comments = (cur.comments || []).filter((c) => c.id !== tmpId);
+      paintComments(eventId);
+      if (text && !inputEl.value) inputEl.value = text;   // вернуть набранный текст
+      toast(e.message);
+    }
+  });
+}
+
+// Удаление: исчезает сразу, при ошибке возвращается на место
+function deleteEventComment(eventId, cmId) {
+  const ev = findEvent(eventId);
+  if (!ev) return;
+  const list = ev.comments || [];
+  const idx = list.findIndex((c) => String(c.id) === String(cmId));
+  if (idx < 0) return;
+  const removed = list[idx];
+  ev.comments = list.filter((c) => c !== removed);
+  paintComments(eventId);
+
+  return queueOp(async () => {
+    try {
+      await api(`/events/${eventId}/comments/${cmId}`, { method: "DELETE", adopt: true });
+      tg.HapticFeedback?.notificationOccurred("success");
+    } catch (e) {
+      const cur = findEvent(eventId);
+      if (e.status === 404) {
+        toast("Комментарий уже удалён");      // уже нет на сервере — возвращать не нужно
+      } else if (cur) {
+        cur.comments = [...(cur.comments || []), removed].sort((x, y) => (x.created_at - y.created_at) || (Number(x.id) - Number(y.id)));
+        paintComments(eventId);
+        toast(e.message);
+      }
+    }
+  });
 }
 
 function renderList() {
@@ -285,7 +384,6 @@ function replaceEvent(updated) {
   const i = state.events.findIndex((e) => e.id === updated.id);
   if (i >= 0) state.events[i] = updated; else state.events.push(updated);
   monthCache[monthKey()] = state.events;
-  etag = null;
   renderCalendar();
   renderList();
 }
@@ -310,7 +408,7 @@ function toggleItem(eventId, itemId, checked) {
   renderList();
   queueOp(async () => {
     try {
-      const updated = await api(`/events/${eventId}/items/${itemId}`, { method: "PUT", body: { checked } });
+      const updated = await api(`/events/${eventId}/items/${itemId}`, { method: "PUT", body: { checked }, adopt: true });
       tg.HapticFeedback?.selectionChanged();
       if (lastOp()) replaceEvent(updated);
     } catch (e) { toast(e.message); await load(); }
@@ -324,7 +422,7 @@ function removeItem(eventId, itemId) {
   renderList();
   queueOp(async () => {
     try {
-      const updated = await api(`/events/${eventId}/items/${itemId}`, { method: "DELETE" });
+      const updated = await api(`/events/${eventId}/items/${itemId}`, { method: "DELETE", adopt: true });
       if (lastOp()) replaceEvent(updated);
     } catch (e) { toast(e.message); await load(); }
   });
@@ -336,7 +434,7 @@ function addItem(eventId, input) {
   input.value = "";
   queueOp(async () => {
     try {
-      const updated = await api(`/events/${eventId}/items`, { method: "POST", body: { text } });
+      const updated = await api(`/events/${eventId}/items`, { method: "POST", body: { text }, adopt: true });
       tg.HapticFeedback?.selectionChanged();
       if (lastOp()) replaceEvent(updated);
     } catch (e) {
@@ -362,7 +460,7 @@ function moveItem(eventId, itemId, newPosition) {
     try {
       const updated = await api(
         `/events/${eventId}/items/${itemId}/move`,
-        { method: "POST", body: { position: newPosition } }
+        { method: "POST", body: { position: newPosition }, adopt: true }
       );
       if (lastOp()) replaceEvent(updated);
     } catch (e) { toast(e.message); await load(); }
@@ -461,7 +559,7 @@ function openReactionPicker(event) {
     const emoji = b.dataset.r;
     closeReactionPicker();
     try {
-      const updated = await api(`/events/${event.id}/reaction`, { method: "POST", body: { emoji } });
+      const updated = await api(`/events/${event.id}/reaction`, { method: "POST", body: { emoji }, adopt: true });
       replaceEvent(updated);
       tg.HapticFeedback?.notificationOccurred("success");
     } catch (err) { toast(err.message); }
@@ -576,13 +674,7 @@ $("list").addEventListener("click", async (ev) => {
     const block = delBtn.closest(".event-comments-block");
     const eventId = block?.dataset.eventId;
     if (!eventId) return;
-    confirmDialog("Удалить этот комментарий?", async () => {
-      try {
-        await api(`/events/${eventId}/comments/${cmId}`, { method: "DELETE" });
-        await loadEventComments(eventId);
-        tg.HapticFeedback?.notificationOccurred("success");
-      } catch (e) { toast(e.message); }
-    });
+    confirmDialog("Удалить этот комментарий?", () => deleteEventComment(eventId, cmId));
     return;
   }
 
@@ -611,6 +703,7 @@ $("list").addEventListener("click", async (ev) => {
     try {
       const updated = await api(`/events/${eventId}/idea`, { method: "POST", body: { idx, status } });
       replaceEvent(updated);
+      etag = null;
       tg.HapticFeedback?.notificationOccurred("success");
     } catch (err) {
       toast(err.message);
@@ -708,7 +801,7 @@ $("list").addEventListener("keydown", (ev) => {
     ev.preventDefault();
     addItem(ev.target.closest(".card").dataset.id, ev.target);
   }
-  if (ev.key === "Enter" && ev.target.classList?.contains("comment-input")) {
+  if (ev.key === "Enter" && !ev.isComposing && ev.target.classList?.contains("comment-input")) {
     ev.preventDefault();
     const block = ev.target.closest(".event-comments-block");
     sendEventComment(block.dataset.eventId, ev.target);
@@ -716,6 +809,41 @@ $("list").addEventListener("keydown", (ev) => {
 });
 
 /* ---------- ЗАГРУЗКА ФОТО В КОММЕНТАРИИ ---------- */
+
+// Сжимаем фото до 1600px / JPEG 0.82 прямо в браузере: вместо 4–8 МБ уходит ~200–400 КБ
+async function compressImage(file, maxSide = 1600, quality = 0.82) {
+  if (!file.type.startsWith("image/") || file.type === "image/gif" || file.size < 300 * 1024) return file;
+  try {
+    const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+    const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    canvas.getContext("2d").drawImage(bmp, 0, 0, w, h);
+    bmp.close?.();
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
+    return blob && blob.size < file.size ? blob : file;
+  } catch (e) {
+    return file;   // например HEIC без поддержки в браузере — отправим как есть
+  }
+}
+
+// Сжатие и получение upload-url идут параллельно; возвращает path в хранилище
+async function uploadCommentPhoto(file) {
+  const [blob, up] = await Promise.all([
+    compressImage(file),
+    api("/comments/upload-url", { method: "POST", body: { filename: uploadFilename(file) } }),
+  ]);
+  const form = new FormData();
+  form.append("cacheControl", "3600");
+  form.append("", blob);
+  const resp = await fetch(up.upload_url, { method: "PUT", body: form });
+  if (!resp.ok) throw new Error("Ошибка загрузки фото");
+  return up.path;
+}
+// большие фото сжимаются в JPEG; маленькие и GIF уходят как есть
+function uploadFilename(file) { return file.size < 300 * 1024 || file.type === "image/gif" ? file.name : "photo.jpg"; }
 
 const commentFileInput = document.createElement("input");
 commentFileInput.type = "file";
@@ -728,10 +856,8 @@ let pendingCommentContext = null;
 $("list").addEventListener("click", (ev) => {
   const btn = ev.target.closest(".btn-attach-comment");
   if (!btn) return;
-  const row = btn.closest(".comment-row");
-  const input = row.querySelector(".comment-input");
+  const input = btn.closest(".comment-row").querySelector(".comment-input");
   const block = btn.closest(".event-comments-block");
-  
   pendingCommentContext = { eventId: block.dataset.eventId, inputEl: input };
   commentFileInput.click();
 });
@@ -741,19 +867,14 @@ commentFileInput.addEventListener("change", async (ev) => {
   if (!file) return;
   ev.target.value = "";
 
+  // чат челленджа использует тот же input
   if (typeof currentChallenge !== "undefined" && currentChallenge) {
     const btn = $("chatSendBtn");
     btn.disabled = true;
     try {
-      const up = await api("/comments/upload-url", { method: "POST", body: { filename: file.name } });
-      const form = new FormData();
-      form.append("cacheControl", "3600");
-      form.append("", file);
-      const resp = await fetch(up.upload_url, { method: "PUT", body: form });
-      if (!resp.ok) throw new Error("Ошибка загрузки фото");
-      
+      const path = await uploadCommentPhoto(file);
       const text = $("chatMessageInput").value.trim();
-      await api(`/challenges/${currentChallenge.id}/messages`, { method: "POST", body: { text, photo_id: up.path } });
+      await api(`/challenges/${currentChallenge.id}/messages`, { method: "POST", body: { text, photo_id: path } });
       $("chatMessageInput").value = "";
       await loadMessages(currentChallenge.id, true, true);
       tg.HapticFeedback?.notificationOccurred("success");
@@ -768,58 +889,28 @@ commentFileInput.addEventListener("change", async (ev) => {
   if (pendingCommentContext) {
     const { eventId, inputEl } = pendingCommentContext;
     pendingCommentContext = null;
-    const sendBtn = inputEl.closest(".comment-row").querySelector(".btn-send-comment");
-    
-    sendBtn.disabled = true;
-    sendBtn.textContent = "⏳";
-    try {
-      const up = await api("/comments/upload-url", { method: "POST", body: { filename: file.name } });
-      const form = new FormData();
-      form.append("cacheControl", "3600");
-      form.append("", file);
-      const resp = await fetch(up.upload_url, { method: "PUT", body: form });
-      if (!resp.ok) throw new Error("Ошибка загрузки фото");
-      
-      const text = inputEl.value.trim();
-      await api(`/events/${eventId}/comments`, { method: "POST", body: { text, photo_id: up.path } });
-      inputEl.value = "";
-      await loadEventComments(eventId);
-      tg.HapticFeedback?.notificationOccurred("success");
-    } catch (e) {
-      toast(e.message);
-    } finally {
-      sendBtn.disabled = false;
-      sendBtn.textContent = "➤";
-    }
+    sendEventComment(eventId, inputEl, file);   // оптимистично: «📷 Загружается…» сразу
   }
 });
 
-async function loadCommentImages() {
-  const images = document.querySelectorAll('img.comment-img[data-src]:not([src])');
-  for (const img of images) {
+// Подтягивает ссылки только для картинок без src; параллельно, с кэшем и дедупликацией запросов
+async function loadCommentImages(root = document) {
+  const images = root.querySelectorAll("img.comment-img[data-src]:not([src])");
+  await Promise.all([...images].map(async (img) => {
     const path = img.dataset.src;
-    if (!path) continue;
-    try {
-      const res = await api(`/comments/photo-url?path=${encodeURIComponent(path)}`);
-      if (res.view_url) {
-        img.src = res.view_url;
-        img.onclick = () => window.open(res.view_url, "_blank");
-      }
-    } catch (e) {
-      console.warn("Не удалось загрузить фото", e);
+    if (!path) return;
+    const url = await fetchPhotoUrl(path);
+    if (!img.isConnected) return;
+    if (url) {
+      img.src = url;
+    } else {
       img.alt = "Ошибка загрузки";
     }
-  }
+  }));
 }
 
-const originalRenderList = renderList;
-renderList = function() {
-  originalRenderList();
-  loadCommentImages();
-};
-
-const originalLoadEventComments = loadEventComments;
-loadEventComments = async function(id) {
-  await originalLoadEventComments(id);
-  loadCommentImages();
-};
+// открытие фото — одним делегированным обработчиком (а не onclick на каждой картинке)
+$("list").addEventListener("click", (ev) => {
+  const img = ev.target.closest("img.comment-img[src]");
+  if (img) window.open(img.src, "_blank");
+});

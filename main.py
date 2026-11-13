@@ -288,7 +288,7 @@ def _add_cors(request: web.Request, response: web.StreamResponse) -> None:
         h["Vary"] = "Origin"
         h["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
         h["Access-Control-Allow-Headers"] = "Content-Type, X-Init-Data, X-TZ, If-None-Match"
-        h["Access-Control-Expose-Headers"] = "ETag"
+        h["Access-Control-Expose-Headers"] = "ETag, X-Rev"
         h["Access-Control-Max-Age"] = "86400"
 
 
@@ -317,6 +317,8 @@ async def gzip_middleware(request: web.Request, handler):
 
 @web.middleware
 async def api_middleware(request: web.Request, handler):
+    rev_box: dict = {}
+    db.rev_holder.set(rev_box)
     try:
         if request.method == "OPTIONS":
             response = web.Response(status=204)
@@ -332,6 +334,9 @@ async def api_middleware(request: web.Request, handler):
     except Exception:
         logging.exception("Необработанная ошибка в API")
         response = web.json_response({"error": "Внутренняя ошибка сервера"}, status=500)
+
+    if rev_box.get("rev") and response.status < 400:
+        response.headers["X-Rev"] = str(rev_box["rev"])
 
     if request.path.startswith(("/css/", "/js/")):
         response.headers.setdefault("Cache-Control", "no-cache")
@@ -698,7 +703,6 @@ async def api_state(request: web.Request) -> web.Response:
             "sex_ideas": sex_ideas,
         },
         ensure_ascii=False,
-        sort_keys=True,
     )
 
     headers = {"ETag": etag, "Cache-Control": "no-store"}
@@ -1137,58 +1141,62 @@ async def api_set_mood(request: web.Request) -> web.Response:
 
 # --- КОММЕНТАРИИ К СОБЫТИЯМ ---
 
+async def _member_event_meta(request: web.Request, uid: int) -> dict:
+    """Как member_event, но без загрузки чеклистов/реакций/комментариев (один лёгкий запрос)."""
+    event = await db.get_event_meta(_int_param(request, "id"))
+    if event is None:
+        raise ApiError("Событие не найдено", 404)
+    if uid not in (event["created_by"], event["target_user"]):
+        raise ApiError("Нет доступа", 403)
+    return event
+
+
 async def api_get_event_comments(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
-    event_id = _int_param(request, "id")
-    event = await member_event(request, tg_user.id)
-    
+    event = await _member_event_meta(request, tg_user.id)
     if event["category"] == "shop":
         return web.json_response({"comments": []})
-        
-    comments = await db.get_event_comments(event_id)
+    comments = await db.get_event_comments(event["id"])
     return web.json_response({"comments": comments})
 
 
 async def api_post_event_comment(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
-    event_id = _int_param(request, "id")
-    event = await member_event(request, tg_user.id)
-    
+    event = await _member_event_meta(request, tg_user.id)
     if event["category"] == "shop":
         raise ApiError("Комментарии недоступны для списка покупок", 403)
 
     body = await read_json(request)
     text = str(body.get("text") or "").strip()[:500]
     photo_id = str(body.get("photo_id") or "").strip()
-    
     if not text and not photo_id:
         raise ApiError("Введите текст или прикрепите фото", 400)
-
     if photo_id and not photo_id.startswith(f"comment_{tg_user.id}_"):
         raise ApiError("Некорректный путь к фото", 400)
 
-    await db.add_event_comment(event_id, tg_user.id, text, photo_id)
-    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
-    
+    pk = db.pair_key(event["created_by"], event["target_user"])
+    comment, rev = await db.add_event_comment(event["id"], tg_user.id, text, photo_id, pk)
+
     partner_id = event["target_user"] if tg_user.id == event["created_by"] else event["created_by"]
-    preview = text if text else "📷 Фото"
-    notify(partner_id, f"💬 Новый комментарий к событию «{event['title']}»:\n\n{preview}")
-    return web.json_response({"status": "ok"})
+    if partner_id != tg_user.id:
+        preview = text if text else "📷 Фото"
+        notify(partner_id, f"💬 Новый комментарий к событию «{event['title']}»:\n\n{preview}")
+    return web.json_response({"status": "ok", "comment": comment, "rev": rev})
 
 
 async def api_delete_event_comment(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
-    event = await member_event(request, tg_user.id)
+    event = await _member_event_meta(request, tg_user.id)
     if event["category"] == "shop":
         raise ApiError("Комментарии недоступны для списка покупок", 403)
 
     comment_id = _int_param(request, "comment_id")
-    deleted = await db.delete_event_comment(comment_id, tg_user.id)
+    pk = db.pair_key(event["created_by"], event["target_user"])
+    deleted, rev = await db.delete_event_comment(comment_id, event["id"], tg_user.id, pk)
     if not deleted:
         raise ApiError("Комментарий не найден или вы не его автор", 404)
+    return web.json_response({"status": "deleted", "rev": rev})
 
-    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
-    return web.json_response({"status": "deleted"})
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
@@ -1377,17 +1385,47 @@ async def api_challenge_photo_url(request: web.Request) -> web.Response:
     return web.json_response({"view_url": view_url})
 
 
+_comment_photo_cache: dict = {}   # (uid, path) -> (expires_monotonic, view_url)
+_COMMENT_PHOTO_TTL = 50 * 60       # ссылка живёт 60 мин, отдаём не дольше 50
+
+
 async def api_get_comment_photo_url(request: web.Request) -> web.Response:
-    authenticate(request)
+    tg_user = authenticate(request)
     path = request.query.get("path", "").strip()
-    if not path or not path.startswith("comment_"):
+    if not path or not path.startswith("comment_") or "/" in path or ".." in path:
         raise ApiError("Некорректный путь", 400)
+
+    key = (tg_user.id, path)
+    now = time.monotonic()
+    hit = _comment_photo_cache.get(key)
+    if hit and hit[0] > now:
+        return web.json_response({"view_url": hit[1]})
+
+    # доступ: фото должно принадлежать комментарию к событию этой пары
+    rs = await db._exec(
+        "SELECT 1 FROM ("
+        " SELECT 1 FROM event_comments c JOIN events e ON e.id = c.event_id "
+        " WHERE c.photo_id = ? AND (e.created_by = ? OR e.target_user = ?) "
+        " UNION ALL "
+        " SELECT 1 FROM challenge_messages m JOIN user_challenges ch ON ch.id = m.challenge_id "
+        " WHERE m.photo_id = ? AND (ch.creator_id = ? OR ch.target_id = ?)"
+        ") LIMIT 1",
+        (path, tg_user.id, tg_user.id, path, tg_user.id, tg_user.id),
+    )
+    if not rs.rows:
+        raise ApiError("Фото не найдено", 404)
 
     res = await _supabase_request("POST", f"/object/sign/{PHOTO_BUCKET}/{path}", {"expiresIn": 3600})
     view_url = _storage_url(res.get("signedURL") or res.get("signedUrl"))
-    
     if not view_url:
         raise ApiError("Ошибка получения ссылки", 502)
+
+    if len(_comment_photo_cache) > 500:
+        for k in [k for k, v in _comment_photo_cache.items() if v[0] <= now]:
+            _comment_photo_cache.pop(k, None)
+        if len(_comment_photo_cache) > 500:
+            _comment_photo_cache.clear()
+    _comment_photo_cache[key] = (now + _COMMENT_PHOTO_TTL, view_url)
     return web.json_response({"view_url": view_url})
 
 
@@ -1571,13 +1609,13 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
     if photo_id and not photo_id.startswith(f"comment_{tg_user.id}_"):
         raise ApiError("Некорректный путь к фото", 400)
         
-    await db.add_challenge_message(challenge_id, tg_user.id, text, photo_id)
-    await db.bump_pair_rev(db.pair_key(challenge["creator_id"], challenge["target_id"]))
-    
+    pk = db.pair_key(challenge["creator_id"], challenge["target_id"])
+    message = await db.add_challenge_message(challenge_id, tg_user.id, text, photo_id, pk)
+
     preview = text if text else "📷 Фото"
     notify(partner_id, f"💬 Новое сообщение по челленджу «{_short_text(challenge['text'])}»:\n\n{preview}")
-    
-    return web.json_response({"status": "ok"})
+
+    return web.json_response({"status": "ok", "message": message})
 
 
 async def api_delete_challenge_message(request: web.Request) -> web.Response:
@@ -1588,11 +1626,10 @@ async def api_delete_challenge_message(request: web.Request) -> web.Response:
         raise ApiError("Челлендж не найден", 404)
 
     message_id = _int_param(request, "message_id")
-    deleted = await db.delete_challenge_message(message_id, tg_user.id)
+    pk = db.pair_key(challenge["creator_id"], challenge["target_id"])
+    deleted = await db.delete_challenge_message(message_id, challenge_id, tg_user.id, pk)
     if not deleted:
         raise ApiError("Сообщение не найдено или вы не его автор", 404)
-
-    await db.bump_pair_rev(db.pair_key(challenge["creator_id"], challenge["target_id"]))
     return web.json_response({"status": "deleted"})
 
 

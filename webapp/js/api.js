@@ -78,7 +78,7 @@ async function request(path, { method = "GET", body, etag } = {}) {
     const data = await res.json().catch(() => ({}));
     if (res.status === 401) throw new HttpError("Сессия истекла. Закройте и снова откройте приложение через бота.", 401);
     if (!res.ok) throw new HttpError(data.error || "Что-то пошло не так", res.status);
-    return { status: res.status, data, etag: res.headers.get("ETag") };
+    return { status: res.status, data, etag: res.headers.get("ETag"), rev: res.headers.get("X-Rev") };
   } catch (e) {
     if (e instanceof HttpError) throw e;
     throw new HttpError(e.name === "AbortError" ? "Сервер не отвечает." : "Нет соединения с сервером.", 0);
@@ -86,7 +86,18 @@ async function request(path, { method = "GET", body, etag } = {}) {
     clearTimeout(timer);
   }
 }
-const api = async (path, opts) => (await request(path, opts)).data;
+// opts.adopt = true: запись — «своя» и локальный state уже обновлён, поэтому если сервер сообщил
+// rev ровно на единицу больше нашего ETag, принимаем его и поллинг не перекачивает весь /state.
+const api = async (path, opts) => {
+  const r = await request(path, opts);
+  if (opts && opts.adopt && r.rev) adoptRev(Number(r.rev));
+  return r.data;
+};
+function adoptRev(rev) {
+  if (!rev || etag == null || etagKey !== monthKey()) return;
+  const cur = Number(String(etag).replace(/"/g, ""));
+  if (rev === cur + 1) etag = `"${rev}"`;
+}
 
 // Загрузка и кэширование статики (цвета, реакции, время напоминаний)
 // Идеи для секса приходят в /api/state и всегда актуальны.

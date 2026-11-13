@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import importlib
 import json
@@ -862,14 +863,30 @@ async def finalize_unlink(user_id: int) -> None:
         _invalidate_user_cache(p)
 
 
-async def bump_pair_rev(pair_key_value: str) -> None:
+# Держатель «последнего rev» на время одного HTTP-запроса. Middleware кладёт сюда dict,
+# любой bump_pair_rev записывает в него новый rev, и middleware отдаёт его заголовком X-Rev.
+# Клиент по нему понимает, что изменение его собственное, и не перекачивает весь /state.
+rev_holder: contextvars.ContextVar = contextvars.ContextVar("rev_holder", default=None)
+
+
+def _note_rev(rev: int) -> None:
+    holder = rev_holder.get()
+    if holder is not None and rev:
+        holder["rev"] = rev
+
+
+async def bump_pair_rev(pair_key_value: str) -> int:
+    """Увеличивает rev пары и возвращает новое значение (bump + чтение одним запросом)."""
     if not pair_key_value:
-        return
-    await _exec(
-        "INSERT INTO pair_rev (pair_key, rev) VALUES (?, 1) "
-        "ON CONFLICT(pair_key) DO UPDATE SET rev = rev + 1",
-        (pair_key_value,),
-    )
+        return 0
+    res = await _batch([
+        ("INSERT INTO pair_rev (pair_key, rev) VALUES (?, 1) "
+         "ON CONFLICT(pair_key) DO UPDATE SET rev = rev + 1", (pair_key_value,)),
+        ("SELECT rev FROM pair_rev WHERE pair_key = ?", (pair_key_value,)),
+    ])
+    rev = res[1].rows[0][0] if res[1].rows else 0
+    _note_rev(rev)
+    return rev
 
 
 async def get_pair_rev(pair_key_value: str) -> int:
@@ -1218,19 +1235,47 @@ async def set_last_viewed_challenges(user_id: int) -> None:
     )
 
 
+async def get_event_meta(event_id: int) -> dict | None:
+    """Лёгкая проверка доступа: одна строка без вложений (чеклисты, реакции, комментарии)."""
+    rs = await _exec(
+        "SELECT created_by, target_user, category, title FROM events WHERE id = ?",
+        (event_id,),
+    )
+    if not rs.rows:
+        return None
+    r = rs.rows[0]
+    return {"id": event_id, "created_by": r[0], "target_user": r[1], "category": r[2], "title": r[3]}
+
+
+_BUMP_SQL = (
+    "INSERT INTO pair_rev (pair_key, rev) VALUES (?, 1) "
+    "ON CONFLICT(pair_key) DO UPDATE SET rev = rev + 1"
+)
+
+
 async def get_event_comments(event_id: int) -> list[dict]:
     rs = await _exec(
-        "SELECT id, user_id, text, photo_id, created_at FROM event_comments WHERE event_id = ? ORDER BY created_at ASC",
+        "SELECT id, user_id, text, photo_id, created_at FROM event_comments "
+        "WHERE event_id = ? ORDER BY created_at ASC, id ASC",
         (event_id,),
     )
     return [{"id": r[0], "sender_id": r[1], "text": r[2], "photo_id": r[3], "created_at": r[4]} for r in rs.rows]
 
 
-async def add_event_comment(event_id: int, user_id: int, text: str, photo_id: str = "") -> None:
-    await _exec(
-        "INSERT INTO event_comments (event_id, user_id, text, photo_id, created_at) VALUES (?, ?, ?, ?, ?)",
-        (event_id, user_id, text, photo_id, int(time.time())),
-    )
+async def add_event_comment(event_id: int, user_id: int, text: str, photo_id: str,
+                            pair_key_value: str) -> tuple[dict, int]:
+    """INSERT + bump rev + чтение rev: одна транзакция, один сетевой запрос к Turso."""
+    now = int(time.time())
+    res = await _batch([
+        ("INSERT INTO event_comments (event_id, user_id, text, photo_id, created_at) VALUES (?, ?, ?, ?, ?)",
+         (event_id, user_id, text, photo_id, now)),
+        (_BUMP_SQL, (pair_key_value,)),
+        ("SELECT rev FROM pair_rev WHERE pair_key = ?", (pair_key_value,)),
+    ])
+    rev = res[2].rows[0][0] if res[2].rows else 0
+    _note_rev(rev)
+    comment = {"id": res[0].last_id, "sender_id": user_id, "text": text, "photo_id": photo_id, "created_at": now}
+    return comment, rev
 
 
 async def get_challenge_messages(challenge_id: int, after: int = 0) -> list[dict]:
@@ -1242,11 +1287,19 @@ async def get_challenge_messages(challenge_id: int, after: int = 0) -> list[dict
     return [{"id": r[0], "sender_id": r[1], "text": r[2], "photo_id": r[3], "created_at": r[4]} for r in rs.rows]
 
 
-async def add_challenge_message(challenge_id: int, sender_id: int, text: str, photo_id: str = "") -> None:
-    await _exec(
-        "INSERT INTO challenge_messages (challenge_id, sender_id, text, photo_id, created_at) VALUES (?, ?, ?, ?, ?)",
-        (challenge_id, sender_id, text, photo_id, int(time.time())),
-    )
+async def add_challenge_message(challenge_id: int, sender_id: int, text: str, photo_id: str,
+                                pair_key_value: str) -> dict:
+    """INSERT + bump rev + чтение rev: одна транзакция, один запрос к Turso."""
+    now = int(time.time())
+    res = await _batch([
+        ("INSERT INTO challenge_messages (challenge_id, sender_id, text, photo_id, created_at) VALUES (?, ?, ?, ?, ?)",
+         (challenge_id, sender_id, text, photo_id, now)),
+        ("INSERT INTO pair_rev (pair_key, rev) VALUES (?, 1) "
+         "ON CONFLICT(pair_key) DO UPDATE SET rev = rev + 1", (pair_key_value,)),
+        ("SELECT rev FROM pair_rev WHERE pair_key = ?", (pair_key_value,)),
+    ])
+    _note_rev(res[2].rows[0][0] if res[2].rows else 0)
+    return {"id": res[0].last_id, "sender_id": sender_id, "text": text, "photo_id": photo_id, "created_at": now}
 
 
 async def delete_challenge_messages(challenge_id: int) -> None:
@@ -1574,20 +1627,36 @@ async def process_expired_challenges() -> list[dict]:
         expired.append({"id": cid, "creator_id": creator_id, "target_id": target_id, "text": text, "reward": reward, "penalty": actual_penalty})
     return expired
 
-async def delete_event_comment(comment_id: int, user_id: int) -> bool:
-    rs = await _exec(
-        "DELETE FROM event_comments WHERE id = ? AND user_id = ?",
-        (comment_id, user_id),
-    )
-    return rs.affected == 1
+async def delete_event_comment(comment_id: int, event_id: int, user_id: int,
+                               pair_key_value: str) -> tuple[bool, int]:
+    """DELETE + (если удалили) bump rev + чтение rev: одним запросом."""
+    res = await _batch([
+        ("DELETE FROM event_comments WHERE id = ? AND event_id = ? AND user_id = ?",
+         (comment_id, event_id, user_id)),
+        ("INSERT INTO pair_rev (pair_key, rev) SELECT ?, 1 WHERE changes() > 0 "
+         "ON CONFLICT(pair_key) DO UPDATE SET rev = rev + 1",
+         (pair_key_value,)),
+        ("SELECT rev FROM pair_rev WHERE pair_key = ?", (pair_key_value,)),
+    ])
+    rev = res[2].rows[0][0] if res[2].rows else 0
+    if res[0].affected == 1:
+        _note_rev(rev)
+    return res[0].affected == 1, rev
 
 
-async def delete_challenge_message(message_id: int, user_id: int) -> bool:
-    rs = await _exec(
-        "DELETE FROM challenge_messages WHERE id = ? AND sender_id = ?",
-        (message_id, user_id),
-    )
-    return rs.affected == 1
+async def delete_challenge_message(message_id: int, challenge_id: int, user_id: int,
+                                   pair_key_value: str) -> bool:
+    """DELETE + (если удалили) bump rev: один запрос. Сообщение должно принадлежать этому челленджу."""
+    res = await _batch([
+        ("DELETE FROM challenge_messages WHERE id = ? AND challenge_id = ? AND sender_id = ?",
+         (message_id, challenge_id, user_id)),
+        ("INSERT INTO pair_rev (pair_key, rev) SELECT ?, 1 WHERE changes() > 0 "
+         "ON CONFLICT(pair_key) DO UPDATE SET rev = rev + 1", (pair_key_value,)),
+        ("SELECT rev FROM pair_rev WHERE pair_key = ?", (pair_key_value,)),
+    ])
+    if res[0].affected == 1:
+        _note_rev(res[2].rows[0][0] if res[2].rows else 0)
+    return res[0].affected == 1
 
 async def dump_all_tables() -> dict:
     tables = ["users", "events", "checklist_items", "reminders", "sex_ideas", "hidden_ideas", "archived_ideas", "reactions", "idea_responses", "user_challenges", "challenge_messages", "shop_items", "event_comments", "moods"]

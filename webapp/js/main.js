@@ -93,10 +93,10 @@ async function bootstrap() {
   const hint = $("loadingHint");
   const slow = setTimeout(() => { hint.textContent = "Сервер просыпается, это может занять до минуты…"; }, 5000);
   for (;;) {
-    try { 
-      await loadConfig();
-      await load();
-      break; 
+    try {
+      // конфиг и состояние независимы — грузим параллельно (минус один сетевой круг при старте)
+      await Promise.all([loadConfig(), load()]);
+      break;
     }
     catch (e) {
       if (e.status === 401) {

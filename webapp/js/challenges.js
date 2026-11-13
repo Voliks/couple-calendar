@@ -4,6 +4,9 @@ let currentChallenge = null;
 let chatPollTimer = null;
 let chatPollGen = 0;
 let chatMessages = [];
+let chatPending = [];      // отправляемые сообщения (показываются сразу, полупрозрачные)
+let chatTmpSeq = 0;
+let chatOpChain = Promise.resolve();   // отправки идут строго по порядку
 let showArchive = false;
 let selectedIdeaData = null;
 let selectedCustomChallengeText = "";
@@ -280,6 +283,7 @@ function stopChatPolling() {
 function closeChallengeDetails() {
   $("challengeChatOverlay").hidden = true;
   currentChallenge = null;
+  chatPending = [];
   chatRequestSeq++;
   chatLoadPromise = null;
   stopChatPolling();
@@ -289,34 +293,41 @@ function closeChallengeDetails() {
 
 /* ---------- Логика чата (сообщения) ---------- */
 
-function renderChatMessages(list) {
-  if (!chatMessages.length) {
+function renderChatMessages(list, forceScroll = false) {
+  const ownIds = new Set(chatMessages.map((m) => m.id));
+  // отправленное, но ещё не подтянутое опросом, показываем как «в пути»; уже пришедшее — скрываем
+  const pending = chatPending.filter((p) => !(p.serverId && ownIds.has(p.serverId)));
+  const all = chatMessages.concat(pending);
+  if (!all.length) {
     list.innerHTML = `<div style="text-align:center; color:var(--hint); font-size:12px; padding:10px;">Сообщений пока нет.</div>`;
     return;
   }
+  // не дёргаем прокрутку, если человек читает историю выше
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 90;
   const myId = state?.my_id || 0;
-  list.innerHTML = chatMessages.map(m => {
+  list.innerHTML = all.map(m => {
     const isMine = m.sender_id === myId;
     const align = isMine ? "align-self: flex-end; background: var(--accent); color: #fff;" : "align-self: flex-start; background: var(--bg2); color: var(--text);";
-    
+
     let imgHtml = "";
     if (m.photo_id) {
-      imgHtml = `<img data-src="${esc(m.photo_id)}" class="comment-img" alt="Фото">`;
+      const known = typeof cachedPhotoUrl === "function" ? cachedPhotoUrl(m.photo_id) : "";
+      imgHtml = `<img data-src="${esc(m.photo_id)}" class="comment-img" alt="Фото" loading="lazy" decoding="async"${known ? ` src="${esc(known)}"` : ""}>`;
     }
 
-    const delBtn = isMine
+    const delBtn = isMine && !m.pending
       ? `<button type="button" class="msg-del" data-msg-del="${m.id}" aria-label="Удалить сообщение" style="background:none; border:none; color:inherit; font-size:14px; padding:0 4px; opacity:0.7; cursor:pointer;">×</button>`
       : "";
 
-    return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; position: relative; ${align}">
+    return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; position: relative; ${align}${m.pending ? " opacity:.6;" : ""}">
       ${m.text ? `<div>${esc(m.text)}</div>` : ""}
       ${imgHtml}
       ${delBtn}
     </div>`;
   }).join("");
-  list.scrollTop = list.scrollHeight;
-  
-  if (typeof loadCommentImages === "function") loadCommentImages();
+  if (forceScroll || nearBottom) list.scrollTop = list.scrollHeight;
+
+  if (typeof loadCommentImages === "function") loadCommentImages(list);
 }
 
 async function loadMessages(challengeId, silent = false, force = false) {
@@ -337,8 +348,9 @@ async function loadMessages(challengeId, silent = false, force = false) {
       const lastId = chatMessages.length ? chatMessages[chatMessages.length - 1].id : 0;
       const fresh = (res.messages || []).filter(m => m.id > lastId);
       if (!fresh.length && silent) return 0;
+      const first = chatMessages.length === 0;
       chatMessages = chatMessages.concat(fresh);
-      renderChatMessages(list);
+      renderChatMessages(list, first);
       return fresh.length;
     } catch (e) {
       if (requestId === chatRequestSeq && !silent) list.innerHTML = `<div style="text-align:center; color:rgb(var(--declined)); font-size:12px; padding:10px;">Ошибка: ${esc(e.message)}</div>`;
@@ -350,17 +362,33 @@ async function loadMessages(challengeId, silent = false, force = false) {
   finally { if (chatLoadPromise === request) chatLoadPromise = null; }
 }
 
-async function sendMessage() {
+// Сообщение появляется мгновенно; поле ввода не блокируется, клавиатура остаётся открытой
+function sendMessage() {
   if (!currentChallenge) return;
   const input = $("chatMessageInput");
   const text = input.value.trim();
   if (!text) return;
-  input.value = ""; input.disabled = true;
-  try {
-    const challengeId = currentChallenge.id;
-    await api(`/challenges/${challengeId}/messages`, { method: "POST", body: { text } });
-    if (currentChallenge?.id === challengeId) await loadMessages(challengeId, true, true);
-  } catch (e) { toast(e.message); } finally { input.disabled = false; input.focus(); }
+  input.value = "";
+  const challengeId = currentChallenge.id;
+  const tmp = { id: `t${++chatTmpSeq}`, sender_id: state.my_id, text, photo_id: "", pending: true, serverId: 0 };
+  chatPending.push(tmp);
+  renderChatMessages($("chatMessagesList"), true);
+  tg.HapticFeedback?.impactOccurred?.("light");
+
+  chatOpChain = chatOpChain.then(async () => {
+    try {
+      const res = await api(`/challenges/${challengeId}/messages`, { method: "POST", body: { text }, adopt: true });
+      tmp.serverId = res.message?.id || 0;
+      // подтягиваем инкрементально (вдруг есть и сообщения партнёра) — так порядок и `after` не ломаются
+      if (currentChallenge?.id === challengeId) await loadMessages(challengeId, true, true);
+    } catch (e) {
+      toast(e.message);
+      if (!input.value) input.value = text;
+    } finally {
+      chatPending = chatPending.filter((p) => p !== tmp);
+      if (currentChallenge?.id === challengeId) renderChatMessages($("chatMessagesList"));
+    }
+  });
 }
 
 /* ---------- Загрузка фото ---------- */
@@ -677,12 +705,21 @@ try {
     ev.stopPropagation();
     const msgId = btn.dataset.msgDel;
     confirmDialog("Удалить это сообщение?", async () => {
+      const challengeId = currentChallenge?.id;
+      const removed = chatMessages.find(m => String(m.id) === String(msgId));
+      if (!challengeId || !removed) return;
+      chatMessages = chatMessages.filter(m => m !== removed);
+      renderChatMessages($("chatMessagesList"));
       try {
-        await api(`/challenges/${currentChallenge.id}/messages/${msgId}`, { method: "DELETE" });
-        chatMessages = chatMessages.filter(m => String(m.id) !== String(msgId));
-        renderChatMessages($("chatMessagesList"));
+        await api(`/challenges/${challengeId}/messages/${msgId}`, { method: "DELETE", adopt: true });
         tg.HapticFeedback?.notificationOccurred("success");
-      } catch (e) { toast(e.message); }
+      } catch (e) {
+        if (e.status !== 404 && currentChallenge?.id === challengeId) {   // 404 — уже удалено, откат не нужен
+          chatMessages = chatMessages.concat(removed).sort((x, y) => x.id - y.id);
+          renderChatMessages($("chatMessagesList"));
+        }
+        toast(e.message);
+      }
     });
   });
 })();

@@ -100,8 +100,10 @@ async function quickSetMood() {
     await api("/mood", {
       method: "POST",
       body: { date: moodDateStr(), emoji, text },
+      adopt: true,
     });
     moodState.mine = { emoji, text };
+    if (state.moods) state.moods.mine = { ...(state.moods.mine || {}), emoji, text };
     $("moodQuickText").value = "";
     $("moodQuickEmoji").value = "";
     renderMood();
