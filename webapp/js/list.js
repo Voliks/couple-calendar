@@ -17,10 +17,9 @@ function answerHtml(e, expired) {
   if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
   if (e.is_creator) return "";
   if (e.status === "pending") {
-    return expired ? "" : `<div class="answer multi">
+    return expired ? "" : `<div class="answer">
       <button class="yes" data-status="accepted">Да</button>
-      <button class="no" data-status="declined">Нет</button>
-      <button class="soft" data-status="reschedule">Предложить перенос</button></div>`;
+      <button class="no" data-status="declined">Нет</button></div>`;
   }
   if (e.status === "accepted") {
     return `<div class="answer one"><button class="soft" data-status="declined">Отказаться</button></div>`;
@@ -474,94 +473,91 @@ function closeReactionPicker() {
   document.removeEventListener("pointerdown", outsideCloseReaction);
 }
 
-/* ---------- ДИАЛОГИ ОТВЕТА (Отказ / Перенос) ---------- */
+/* ---------- ЕДИНОЕ ОКНО ОТКАЗА / ПЕРЕНОСА ---------- */
 
 function openDeclineDialog(event, onConfirm) {
-  const overlay = document.createElement("div");
-  overlay.className = "overlay";
-  overlay.innerHTML = `
-    <div class="sheet" role="dialog" aria-modal="true">
-      <h2>Отклонить событие</h2>
-      <label for="declineComment">Комментарий (необязательно)</label>
-      <textarea id="declineComment" maxlength="500" placeholder="Например: не смогу в этот день..."></textarea>
-      <div class="row">
-        <button class="btn ghost" id="declineCancel">Отмена</button>
-        <button class="btn primary" id="declineOk">Отклонить</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-  const ta = overlay.querySelector("#declineComment");
-  ta.value = event.my_decline_comment || "";
-  
-  const close = () => overlay.remove();
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-  overlay.querySelector("#declineCancel").onclick = close;
-  overlay.querySelector("#declineOk").onclick = () => {
-    const comment = ta.value.trim().slice(0, 500);
-    close();
-    onConfirm(comment);
-  };
-  setTimeout(() => ta.focus(), 50);
-}
+  const overlay = $("declineOverlay");
+  const commentEl = $("declineComment");
+  const offerNewEl = $("declineOfferNew");
+  const newDateBlock = $("declineNewDateBlock");
+  const newDateEl = $("declineNewDate");
+  const newTimeEl = $("declineNewTime");
+  const errorEl = $("declineError");
+  const confirmBtn = $("declineConfirm");
 
-function openRescheduleDialog(event) {
-  const overlay = $("rescheduleOverlay");
-  const dateInput = $("rescheduleDate");
-  const timeInput = $("rescheduleTime");
-  const commentInput = $("rescheduleComment");
-  const errorEl = $("rescheduleError");
-  
-  dateInput.value = event.date;
-  timeInput.value = event.time || "";
-  commentInput.value = event.my_decline_comment || "";
+  // Начальные значения
+  commentEl.value = event.my_decline_comment || "";
+  offerNewEl.checked = false;
+  newDateBlock.hidden = true;
+  newDateEl.value = event.date;
+  newTimeEl.value = event.time || "";
   errorEl.textContent = "";
-  
+  confirmBtn.textContent = "Отклонить";
+
   overlay.hidden = false;
   tg.BackButton?.show();
-  
-  const close = () => { overlay.hidden = true; tg.BackButton?.hide(); };
-  
-  $("rescheduleCancel").onclick = close;
-  overlay.onclick = (e) => { if (e.target === overlay) close(); };
-  
-  $("rescheduleConfirm").onclick = async () => {
-    const newDate = dateInput.value;
-    const newTime = timeInput.value;
-    const comment = commentInput.value.trim();
-    
-    if (!newDate) { errorEl.textContent = "Выберите дату"; return; }
-    if (newDate === event.date && newTime === (event.time || "")) {
-      errorEl.textContent = "Дата и время не изменились"; return;
-    }
-    
-    const btn = $("rescheduleConfirm");
-    btn.disabled = true;
-    btn.textContent = "Отправка...";
-    
-    try {
-      const updated = await api(`/events/${event.id}/respond`, {
-        method: "POST",
-        body: { 
-          status: "declined", 
-          comment, 
-          alt_date: newDate, 
-          alt_time: newTime 
-        }
-      });
-      close();
-      replaceEvent(updated);
-      etag = null; etagKey = "";
-      await load(true);
-      tg.HapticFeedback?.notificationOccurred("success");
-      toast("Предложение о переносе отправлено");
-    } catch (e) {
-      errorEl.textContent = e.message;
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "Предложить перенос";
+
+  const close = () => {
+    overlay.hidden = true;
+    tg.BackButton?.hide();
+    // Сбрасываем обработчики, чтобы не висели
+    offerNewEl.onchange = null;
+    $("declineCancel").onclick = null;
+    $("declineConfirm").onclick = null;
+    overlay.onclick = null;
+  };
+
+  offerNewEl.onchange = () => {
+    newDateBlock.hidden = !offerNewEl.checked;
+    confirmBtn.textContent = offerNewEl.checked ? "Отклонить и перенести" : "Отклонить";
+    if (offerNewEl.checked) {
+      // По умолчанию — текущая дата + 1 день, время то же
+      if (!newDateEl.value) {
+        const d = parse(event.date);
+        d.setDate(d.getDate() + 1);
+        newDateEl.value = fmt(d.getFullYear(), d.getMonth(), d.getDate());
+      }
+      if (!newTimeEl.value) newTimeEl.value = event.time || "";
     }
   };
+
+  $("declineCancel").onclick = close;
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+
+  $("declineConfirm").onclick = async () => {
+    const comment = commentEl.value.trim();
+    let altDate = "";
+    let altTime = "";
+
+    if (offerNewEl.checked) {
+      altDate = newDateEl.value;
+      altTime = newTimeEl.value;
+      if (!altDate) {
+        errorEl.textContent = "Выберите новую дату";
+        return;
+      }
+      if (altDate === event.date && (altTime || "") === (event.time || "")) {
+        errorEl.textContent = "Новая дата и время совпадают с текущими";
+        return;
+      }
+    }
+
+    confirmBtn.disabled = true;
+    const originalText = confirmBtn.textContent;
+    confirmBtn.textContent = "Отправка...";
+
+    try {
+      await onConfirm(comment, altDate, altTime);
+      close();
+    } catch (err) {
+      errorEl.textContent = err.message || "Ошибка";
+    } finally {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = originalText;
+    }
+  };
+
+  setTimeout(() => commentEl.focus(), 50);
 }
 
 /* ---------- ОБРАБОТЧИК КЛИКОВ ---------- */
@@ -610,12 +606,13 @@ $("list").addEventListener("click", async (ev) => {
   if (ev.target.closest("[data-comment-open]")) {
     if (event.category === "shop" || event.category === "todo" || event.category === "personal") return;
     if (event.status !== "declined") return;
-    openDeclineDialog(event, async (comment) => {
-      try {
-        const updated = await api(`/events/${eventId}/comment`, { method: "POST", body: { comment } });
-        replaceEvent(updated);
-        tg.HapticFeedback?.notificationOccurred("success");
-      } catch (err) { toast(err.message); }
+    openDeclineDialog(event, async (comment, altDate, altTime) => {
+      const updated = await api(`/events/${eventId}/comment`, {
+        method: "POST",
+        body: { comment }
+      });
+      replaceEvent(updated);
+      tg.HapticFeedback?.notificationOccurred("success");
     });
     return;
   }
@@ -631,33 +628,28 @@ $("list").addEventListener("click", async (ev) => {
   const statusBtn = ev.target.closest("[data-status]");
   if (statusBtn) {
     const newStatus = statusBtn.dataset.status;
-       
-    // --- ОТКАЗ ---
+
+    // --- ОТКАЗ (с опциональным переносом) ---
     if (newStatus === "declined") {
-      openDeclineDialog(event, async (comment) => {
-        try {
-          const updated = await api(`/events/${eventId}/respond`, { 
-            method: "POST", 
-            body: { status: "declined", comment } 
-          });
-          replaceEvent(updated);
-          etag = null; etagKey = "";
-          await load(true);
-          tg.HapticFeedback?.notificationOccurred("success");
-        } catch (e) { 
-          toast(e.message); 
-          await load(true); 
-        }
+      openDeclineDialog(event, async (comment, altDate, altTime) => {
+        const updated = await api(`/events/${eventId}/respond`, {
+          method: "POST",
+          body: {
+            status: "declined",
+            comment,
+            alt_date: altDate || "",
+            alt_time: altTime || ""
+          }
+        });
+        replaceEvent(updated);
+        etag = null; etagKey = "";
+        await load(true);
+        tg.HapticFeedback?.notificationOccurred("success");
+        toast(altDate ? "Отклонено с предложением переноса" : "Отклонено");
       });
       return;
     }
 
-    // --- ПЕРЕНОС ---
-    if (newStatus === "reschedule") {
-      openRescheduleDialog(event);
-      return;
-    }
-    
     // --- ПРИНЯТИЕ ---
     statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
     try {
@@ -666,9 +658,9 @@ $("list").addEventListener("click", async (ev) => {
       etag = null; etagKey = "";
       await load(true);
       tg.HapticFeedback?.notificationOccurred("success");
-    } catch (e) { 
-      toast(e.message); 
-      await load(true); 
+    } catch (e) {
+      toast(e.message);
+      await load(true);
     }
     return;
   }

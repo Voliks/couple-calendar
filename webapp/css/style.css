@@ -111,10 +111,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .answer .soft { background: rgba(0,0,0,.07); color: var(--text); font-size: 15px; padding: 10px 0; }
 .answer button:disabled { opacity: .5; }
 
-/* Ответ на 3 кнопки (Да, Нет, Перенос) */
-.answer.multi { display: flex; flex-direction: column; gap: 10px; }
-.answer.multi button { width: 100%; }
-
 .link-btn { display: block; margin: 24px auto 0; padding: 8px; color: var(--hint); font-size: 14px; text-decoration: underline; }
 
 .stats { margin: 18px 0 4px; padding: 12px 14px; border-radius: 14px; background: var(--bg2); }
@@ -418,5 +414,43 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
 @media (max-width: 380px) {
   .comment-img {
     height: 150px !important;
+  }
+}
+
+/* ============================================================
+   Модальное окно отказа/переноса (#declineOverlay)
+   ============================================================ */
+#declineOverlay .sheet {
+  /* По умолчанию наследует .sheet, ничего дополнительно не нужно */
+}
+
+/* Чекбокс «Предложить другую дату» использует .public-check — уже стилизован выше */
+
+/* Блок новой даты/времени: чуть отступа сверху, чтобы отделить от чекбокса */
+#declineNewDateBlock {
+  margin-top: 12px;
+}
+
+#declineNewDateBlock .two {
+  gap: 10px;
+}
+
+#declineNewDateBlock label {
+  margin-top: 0;
+}
+
+/* Ошибка в этом окне */
+#declineError {
+  min-height: 1em;
+  margin-top: 8px;
+}
+
+/* Кнопка подтверждения: на узких экранах чуть уменьшаем шрифт, чтобы не ломался текст */
+#declineConfirm {
+  white-space: nowrap;
+}
+@media (max-width: 380px) {
+  #declineConfirm {
+    font-size: 14px;
   }
 }

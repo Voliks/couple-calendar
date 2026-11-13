@@ -376,27 +376,36 @@
   </div>
 </div>
 
-<!-- Модалка переноса события -->
-<div class="overlay" id="rescheduleOverlay" hidden style="z-index: 40;">
+<!-- Единое окно отказа с опциональным переносом -->
+<div class="overlay" id="declineOverlay" hidden style="z-index: 40;">
   <div class="sheet" role="dialog" aria-modal="true">
-    <h2>Перенести событие</h2>
-    <p style="color: var(--hint); font-size: 14px; margin-bottom: 16px;">Предложите партнёру новую дату и время.</p>
-    <div class="two">
-      <div>
-        <label for="rescheduleDate">Новая дата</label>
-        <input type="date" id="rescheduleDate">
-      </div>
-      <div>
-        <label for="rescheduleTime">Новое время</label>
-        <input type="time" id="rescheduleTime">
+    <h2>Отклонить событие</h2>
+    
+    <label for="declineComment">Комментарий (необязательно)</label>
+    <textarea id="declineComment" maxlength="500" placeholder="Например: не смогу в этот день..."></textarea>
+    
+    <label class="public-check" style="margin-top: 16px;">
+      <input type="checkbox" id="declineOfferNew">
+      <span class="pc-text">Предложить другую дату</span>
+    </label>
+    
+    <div id="declineNewDateBlock" hidden style="margin-top: 12px;">
+      <div class="two">
+        <div>
+          <label for="declineNewDate">Новая дата</label>
+          <input type="date" id="declineNewDate">
+        </div>
+        <div>
+          <label for="declineNewTime">Новое время</label>
+          <input type="time" id="declineNewTime">
+        </div>
       </div>
     </div>
-    <label for="rescheduleComment">Комментарий (необязательно)</label>
-    <textarea id="rescheduleComment" maxlength="500" placeholder="Почему переносим?"></textarea>
-    <div class="error" id="rescheduleError" role="alert"></div>
+    
+    <div class="error" id="declineError" role="alert"></div>
     <div class="row" style="margin-top: 18px;">
-      <button class="btn ghost" id="rescheduleCancel">Отмена</button>
-      <button class="btn primary" id="rescheduleConfirm">Предложить перенос</button>
+      <button class="btn ghost" id="declineCancel">Отмена</button>
+      <button class="btn primary" id="declineConfirm">Отклонить</button>
     </div>
   </div>
 </div>
