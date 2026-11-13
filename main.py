@@ -1590,19 +1590,14 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
 async def api_delete_challenge_message(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
     challenge_id = _int_param(request, "id")
-    message_id = _int_param(request, "message_id")
     challenge = await db.get_user_challenge(challenge_id)
     if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
         raise ApiError("Челлендж не найден", 404)
 
-    messages = await db.get_challenge_messages(challenge_id)
-    message = next((m for m in messages if m.get("id") == message_id), None)
-    if message is None:
-        raise ApiError("Сообщение не найдено", 404)
-    if message.get("user_id") != tg_user.id:
-        raise ApiError("Удалить можно только своё сообщение", 403)
-    if not await db.delete_challenge_message(message_id, tg_user.id):
-        raise ApiError("Сообщение не найдено", 404)
+    message_id = _int_param(request, "message_id")
+    deleted = await db.delete_challenge_message(message_id, tg_user.id)
+    if not deleted:
+        raise ApiError("Сообщение не найдено или вы не его автор", 404)
 
     await db.bump_pair_rev(db.pair_key(challenge["creator_id"], challenge["target_id"]))
     return web.json_response({"status": "deleted"})
