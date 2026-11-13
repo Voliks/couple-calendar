@@ -393,28 +393,7 @@ function sendMessage() {
 
 /* ---------- Загрузка фото ---------- */
 
-async function prepareImage(file) {
-  try {
-    const bmp = await createImageBitmap(file);
-    const k = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(bmp.width * k);
-    canvas.height = Math.round(bmp.height * k);
-    
-    const ctx = canvas.getContext("2d");
-    if (!ctx) { bmp.close?.(); return file; }
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-    bmp.close?.();
-
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
-    if (blob && blob.size < file.size) {
-      return new File([blob], "photo.jpg", { type: "image/jpeg" });
-    }
-  } catch (e) { console.warn("Не удалось сжать фото", e); }
-  return file;
-}
+// Сжатие фото — общая compressImage из list.js (1600 px, JPEG 0.82), чтобы настройки были в одном месте
 
 $("challengePhotoInput").addEventListener("change", async (ev) => {
   const pickedFiles = Array.from(ev.target.files || []);
@@ -440,7 +419,7 @@ $("challengePhotoInput").addEventListener("change", async (ev) => {
       const file = validFiles[index];
       try {
         btn.textContent = `Подготовка ${completed + 1}/${validFiles.length}…`;
-        const preparedFile = await prepareImage(file);
+        const preparedFile = await compressImage(file);
         const up = await api("/challenges/upload-url", { method: "POST", body: { filename: "photo.jpg", challenge_id: c.id } });
         const form = new FormData();
         form.append("cacheControl", "3600");
