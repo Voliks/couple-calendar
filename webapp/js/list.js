@@ -83,7 +83,7 @@ function declineCommentHtml(e) {
   return `${lines.join("")}${button}`;
 }
 
-// Отображение комментариев с поддержкой фото
+// Отображение комментариев с поддержкой фото и кнопки удаления
 function commentsListHtml(comments) {
   if (!comments.length) return `<div class="cm-empty">Нет комментариев</div>`;
   const myId = state?.my_id || 0;
@@ -516,7 +516,6 @@ function openDeclineDialog(event, onConfirm) {
     newDateBlock.hidden = !offerNewEl.checked;
     confirmBtn.textContent = offerNewEl.checked ? "Отклонить и перенести" : "Отклонить";
     if (offerNewEl.checked) {
-      // По умолчанию — текущая дата + 1 день, время то же
       if (!newDateEl.value) {
         const d = parse(event.date);
         d.setDate(d.getDate() + 1);

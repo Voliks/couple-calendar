@@ -1178,21 +1178,14 @@ async def api_post_event_comment(request: web.Request) -> web.Response:
 
 async def api_delete_event_comment(request: web.Request) -> web.Response:
     tg_user = authenticate(request, write=True)
-    event_id = _int_param(request, "id")
-    comment_id = _int_param(request, "comment_id")
     event = await member_event(request, tg_user.id)
-
     if event["category"] == "shop":
         raise ApiError("Комментарии недоступны для списка покупок", 403)
 
-    comments = await db.get_event_comments(event_id)
-    comment = next((c for c in comments if c.get("id") == comment_id), None)
-    if comment is None:
-        raise ApiError("Комментарий не найден", 404)
-    if comment.get("user_id") != tg_user.id:
-        raise ApiError("Удалить можно только свой комментарий", 403)
-    if not await db.delete_event_comment(comment_id, tg_user.id):
-        raise ApiError("Комментарий не найден", 404)
+    comment_id = _int_param(request, "comment_id")
+    deleted = await db.delete_event_comment(comment_id, tg_user.id)
+    if not deleted:
+        raise ApiError("Комментарий не найден или вы не его автор", 404)
 
     await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
     return web.json_response({"status": "deleted"})
