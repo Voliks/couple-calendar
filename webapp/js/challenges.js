@@ -303,10 +303,15 @@ function renderChatMessages(list) {
     if (m.photo_id) {
       imgHtml = `<img data-src="${esc(m.photo_id)}" class="comment-img" alt="Фото">`;
     }
-    
-    return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; ${align}">
+
+    const delBtn = isMine
+      ? `<button type="button" class="msg-del" data-msg-del="${m.id}" aria-label="Удалить сообщение" style="background:none; border:none; color:inherit; font-size:14px; padding:0 4px; opacity:0.7; cursor:pointer;">×</button>`
+      : "";
+
+    return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; position: relative; ${align}">
       ${m.text ? `<div>${esc(m.text)}</div>` : ""}
       ${imgHtml}
+      ${delBtn}
     </div>`;
   }).join("");
   list.scrollTop = list.scrollHeight;
@@ -663,4 +668,21 @@ try {
       }
     };
   }
+
+  // 🗑 Удаление сообщения в чате челленджа
+  $("chatMessagesList").addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("[data-msg-del]");
+    if (!btn || !currentChallenge) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const msgId = btn.dataset.msgDel;
+    confirmDialog("Удалить это сообщение?", async () => {
+      try {
+        await api(`/challenges/${currentChallenge.id}/messages/${msgId}`, { method: "DELETE" });
+        chatMessages = chatMessages.filter(m => String(m.id) !== String(msgId));
+        renderChatMessages($("chatMessagesList"));
+        tg.HapticFeedback?.notificationOccurred("success");
+      } catch (e) { toast(e.message); }
+    });
+  });
 })();

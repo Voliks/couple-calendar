@@ -94,9 +94,14 @@ function commentsListHtml(comments) {
         <img data-src="${esc(c.photo_id)}" class="comment-img" alt="Фото">
       </div>`;
     }
-    return `<div class="cm${c.sender_id === myId ? " mine" : ""}">
-      ${c.text ? `<div>${esc(c.text)}</div>` : ""}
+    const isMine = c.sender_id === myId;
+    const delBtn = isMine
+      ? `<button type="button" class="cm-del" data-cm-del="${c.id}" aria-label="Удалить комментарий">×</button>`
+      : "";
+    return `<div class="cm${isMine ? " mine" : ""}" data-cm-id="${c.id}">
+      <div class="cm-text">${c.text ? esc(c.text) : ""}</div>
       ${imgHtml}
+      ${delBtn}
     </div>`;
   }).join("");
 }
@@ -563,6 +568,25 @@ function openDeclineDialog(event, onConfirm) {
 /* ---------- ОБРАБОТЧИК КЛИКОВ ---------- */
 
 $("list").addEventListener("click", async (ev) => {
+  // Удаление комментария
+  const delBtn = ev.target.closest("[data-cm-del]");
+  if (delBtn) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const cmId = delBtn.dataset.cmDel;
+    const block = delBtn.closest(".event-comments-block");
+    const eventId = block?.dataset.eventId;
+    if (!eventId) return;
+    confirmDialog("Удалить этот комментарий?", async () => {
+      try {
+        await api(`/events/${eventId}/comments/${cmId}`, { method: "DELETE" });
+        await loadEventComments(eventId);
+        tg.HapticFeedback?.notificationOccurred("success");
+      } catch (e) { toast(e.message); }
+    });
+    return;
+  }
+
   const card = ev.target.closest(".card");
   if (!card) return;
   const eventId = card.dataset.id;

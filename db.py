@@ -1574,6 +1574,20 @@ async def process_expired_challenges() -> list[dict]:
         expired.append({"id": cid, "creator_id": creator_id, "target_id": target_id, "text": text, "reward": reward, "penalty": actual_penalty})
     return expired
 
+async def delete_event_comment(comment_id: int, user_id: int) -> bool:
+    rs = await _exec(
+        "DELETE FROM event_comments WHERE id = ? AND user_id = ?",
+        (comment_id, user_id),
+    )
+    return rs.affected == 1
+
+
+async def delete_challenge_message(message_id: int, user_id: int) -> bool:
+    rs = await _exec(
+        "DELETE FROM challenge_messages WHERE id = ? AND sender_id = ?",
+        (message_id, user_id),
+    )
+    return rs.affected == 1
 
 async def dump_all_tables() -> dict:
     tables = ["users", "events", "checklist_items", "reminders", "sex_ideas", "hidden_ideas", "archived_ideas", "reactions", "idea_responses", "user_challenges", "challenge_messages", "shop_items", "event_comments", "moods"]

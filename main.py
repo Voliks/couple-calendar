@@ -1175,6 +1175,28 @@ async def api_post_event_comment(request: web.Request) -> web.Response:
     notify(partner_id, f"💬 Новый комментарий к событию «{event['title']}»:\n\n{preview}")
     return web.json_response({"status": "ok"})
 
+
+async def api_delete_event_comment(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    event_id = _int_param(request, "id")
+    comment_id = _int_param(request, "comment_id")
+    event = await member_event(request, tg_user.id)
+
+    if event["category"] == "shop":
+        raise ApiError("Комментарии недоступны для списка покупок", 403)
+
+    comments = await db.get_event_comments(event_id)
+    comment = next((c for c in comments if c.get("id") == comment_id), None)
+    if comment is None:
+        raise ApiError("Комментарий не найден", 404)
+    if comment.get("user_id") != tg_user.id:
+        raise ApiError("Удалить можно только свой комментарий", 403)
+    if not await db.delete_event_comment(comment_id, tg_user.id):
+        raise ApiError("Комментарий не найден", 404)
+
+    await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
+    return web.json_response({"status": "deleted"})
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
 PHOTO_BUCKET = os.getenv("SUPABASE_BUCKET", "challenges").strip() or "challenges"
@@ -1565,6 +1587,27 @@ async def api_post_challenge_message(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def api_delete_challenge_message(request: web.Request) -> web.Response:
+    tg_user = authenticate(request, write=True)
+    challenge_id = _int_param(request, "id")
+    message_id = _int_param(request, "message_id")
+    challenge = await db.get_user_challenge(challenge_id)
+    if not challenge or tg_user.id not in (challenge["creator_id"], challenge["target_id"]):
+        raise ApiError("Челлендж не найден", 404)
+
+    messages = await db.get_challenge_messages(challenge_id)
+    message = next((m for m in messages if m.get("id") == message_id), None)
+    if message is None:
+        raise ApiError("Сообщение не найдено", 404)
+    if message.get("user_id") != tg_user.id:
+        raise ApiError("Удалить можно только своё сообщение", 403)
+    if not await db.delete_challenge_message(message_id, tg_user.id):
+        raise ApiError("Сообщение не найдено", 404)
+
+    await db.bump_pair_rev(db.pair_key(challenge["creator_id"], challenge["target_id"]))
+    return web.json_response({"status": "deleted"})
+
+
 async def api_get_shop_items(request: web.Request) -> web.Response:
     tg_user = authenticate(request)
     items = db.get_shop_items_json()
@@ -1899,6 +1942,7 @@ async def main() -> None:
     app.router.add_delete("/api/challenges/{id}", api_delete_challenge)
     app.router.add_get("/api/challenges/{id}/messages", api_get_challenge_messages)
     app.router.add_post("/api/challenges/{id}/messages", api_post_challenge_message)
+    app.router.add_delete("/api/challenges/{id}/messages/{message_id}", api_delete_challenge_message)
     app.router.add_post("/api/challenges/{id}/archive", api_archive_challenge_manually)
     
     app.router.add_get("/api/shop", api_get_shop_items)
@@ -1906,6 +1950,7 @@ async def main() -> None:
     
     app.router.add_get("/api/events/{id}/comments", api_get_event_comments)
     app.router.add_post("/api/events/{id}/comments", api_post_event_comment)
+    app.router.add_delete("/api/events/{id}/comments/{comment_id}", api_delete_event_comment)
 
     app.router.add_post("/api/comments/upload-url", api_upload_comment_photo_url)
     app.router.add_get("/api/comments/photo-url", api_get_comment_photo_url)
