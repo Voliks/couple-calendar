@@ -17,9 +17,10 @@ function answerHtml(e, expired) {
   if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
   if (e.is_creator) return "";
   if (e.status === "pending") {
-    return expired ? "" : `<div class="answer">
+    return expired ? "" : `<div class="answer multi">
       <button class="yes" data-status="accepted">Да</button>
-      <button class="no" data-status="declined">Нет</button></div>`;
+      <button class="no" data-status="declined">Нет</button>
+      <button class="soft" data-status="reschedule">Предложить перенос</button></div>`;
   }
   if (e.status === "accepted") {
     return `<div class="answer one"><button class="soft" data-status="declined">Отказаться</button></div>`;
@@ -218,7 +219,7 @@ async function loadEventComments(eventId) {
     if (ev) ev.comments = comments;
     const list = document.getElementById(`comments-list-${eventId}`);
     if (list) list.innerHTML = commentsListHtml(comments);
-    if (typeof loadCommentImages === "function") loadCommentImages(); // Загружаем картинки
+    if (typeof loadCommentImages === "function") loadCommentImages();
   } catch (e) {
     console.error("Ошибка загрузки комментариев", e);
   }
@@ -244,21 +245,19 @@ function renderList() {
   const prevScrollY = window.scrollY;
   $("listTitle").textContent = "События · " + DAY_FORMAT.format(parse(selected));
   
-  // Фильтруем события на выбранный день
   const dayEvents = state.events.filter((e) => dayHasDate(e, selected));
 
-  // 🔥 МАГИЯ СОРТИРОВКИ:
   const weight = (status) => {
-    if (status === "declined" || status === "expired") return 2; // В самый низ
-    if (status === "pending") return 0; // Вверх
-    return 1; // Accepted и остальные
+    if (status === "declined" || status === "expired") return 2;
+    if (status === "pending") return 0;
+    return 1;
   };
 
   dayEvents.sort((a, b) => {
     const wA = weight(statusKey(a));
     const wB = weight(statusKey(b));
     if (wA !== wB) return wA - wB;
-    return b.id - a.id; // Новые сверху
+    return b.id - a.id;
   });
 
   const items = dayEvents.map((e) => ({ id: String(e.id), html: cardHtml(e) }));
@@ -275,7 +274,6 @@ function renderList() {
     });
   }
 
-  // Загружаем картинки в комментариях
   if (typeof loadCommentImages === "function") loadCommentImages();
 }
 
@@ -476,6 +474,98 @@ function closeReactionPicker() {
   document.removeEventListener("pointerdown", outsideCloseReaction);
 }
 
+/* ---------- ДИАЛОГИ ОТВЕТА (Отказ / Перенос) ---------- */
+
+function openDeclineDialog(event, onConfirm) {
+  const overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.innerHTML = `
+    <div class="sheet" role="dialog" aria-modal="true">
+      <h2>Отклонить событие</h2>
+      <label for="declineComment">Комментарий (необязательно)</label>
+      <textarea id="declineComment" maxlength="500" placeholder="Например: не смогу в этот день..."></textarea>
+      <div class="row">
+        <button class="btn ghost" id="declineCancel">Отмена</button>
+        <button class="btn primary" id="declineOk">Отклонить</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const ta = overlay.querySelector("#declineComment");
+  ta.value = event.my_decline_comment || "";
+  
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector("#declineCancel").onclick = close;
+  overlay.querySelector("#declineOk").onclick = () => {
+    const comment = ta.value.trim().slice(0, 500);
+    close();
+    onConfirm(comment);
+  };
+  setTimeout(() => ta.focus(), 50);
+}
+
+function openRescheduleDialog(event) {
+  const overlay = $("rescheduleOverlay");
+  const dateInput = $("rescheduleDate");
+  const timeInput = $("rescheduleTime");
+  const commentInput = $("rescheduleComment");
+  const errorEl = $("rescheduleError");
+  
+  dateInput.value = event.date;
+  timeInput.value = event.time || "";
+  commentInput.value = event.my_decline_comment || "";
+  errorEl.textContent = "";
+  
+  overlay.hidden = false;
+  tg.BackButton?.show();
+  
+  const close = () => { overlay.hidden = true; tg.BackButton?.hide(); };
+  
+  $("rescheduleCancel").onclick = close;
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  
+  $("rescheduleConfirm").onclick = async () => {
+    const newDate = dateInput.value;
+    const newTime = timeInput.value;
+    const comment = commentInput.value.trim();
+    
+    if (!newDate) { errorEl.textContent = "Выберите дату"; return; }
+    if (newDate === event.date && newTime === (event.time || "")) {
+      errorEl.textContent = "Дата и время не изменились"; return;
+    }
+    
+    const btn = $("rescheduleConfirm");
+    btn.disabled = true;
+    btn.textContent = "Отправка...";
+    
+    try {
+      const updated = await api(`/events/${event.id}/respond`, {
+        method: "POST",
+        body: { 
+          status: "declined", 
+          comment, 
+          alt_date: newDate, 
+          alt_time: newTime 
+        }
+      });
+      close();
+      replaceEvent(updated);
+      etag = null; etagKey = "";
+      await load(true);
+      tg.HapticFeedback?.notificationOccurred("success");
+      toast("Предложение о переносе отправлено");
+    } catch (e) {
+      errorEl.textContent = e.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Предложить перенос";
+    }
+  };
+}
+
+/* ---------- ОБРАБОТЧИК КЛИКОВ ---------- */
+
 $("list").addEventListener("click", async (ev) => {
   const card = ev.target.closest(".card");
   if (!card) return;
@@ -520,7 +610,7 @@ $("list").addEventListener("click", async (ev) => {
   if (ev.target.closest("[data-comment-open]")) {
     if (event.category === "shop" || event.category === "todo" || event.category === "personal") return;
     if (event.status !== "declined") return;
-    openCommentDialog(event.my_decline_comment || "", async (comment) => {
+    openDeclineDialog(event, async (comment) => {
       try {
         const updated = await api(`/events/${eventId}/comment`, { method: "POST", body: { comment } });
         replaceEvent(updated);
@@ -542,44 +632,39 @@ $("list").addEventListener("click", async (ev) => {
   if (statusBtn) {
     const newStatus = statusBtn.dataset.status;
        
+    // --- ОТКАЗ ---
     if (newStatus === "declined") {
-      openCommentDialog(
-        event.my_decline_comment || "",
-        event.alt_date || event.date,
-        event.alt_time || event.time,
-        async (comment, altDate, altTime) => {
-          try {
-            const updated = await api(`/events/${eventId}/respond`, { 
-              method: "POST", 
-              body: { status: "declined", comment, alt_date: altDate, alt_time: altTime } 
-            });
-            replaceEvent(updated);
-            
-            // Принудительное обновление state
-            etag = null;
-            etagKey = "";
-            await load(true);
-
-            tg.HapticFeedback?.notificationOccurred("success");
-          } catch (e) { 
-            toast(e.message); 
-            await load(true); 
-          }
+      openDeclineDialog(event, async (comment) => {
+        try {
+          const updated = await api(`/events/${eventId}/respond`, { 
+            method: "POST", 
+            body: { status: "declined", comment } 
+          });
+          replaceEvent(updated);
+          etag = null; etagKey = "";
+          await load(true);
+          tg.HapticFeedback?.notificationOccurred("success");
+        } catch (e) { 
+          toast(e.message); 
+          await load(true); 
         }
-      );
+      });
+      return;
+    }
+
+    // --- ПЕРЕНОС ---
+    if (newStatus === "reschedule") {
+      openRescheduleDialog(event);
       return;
     }
     
+    // --- ПРИНЯТИЕ ---
     statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
     try {
       const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: newStatus } });
       replaceEvent(updated);
-      
-      // Принудительное обновление state
-      etag = null;
-      etagKey = "";
+      etag = null; etagKey = "";
       await load(true);
-
       tg.HapticFeedback?.notificationOccurred("success");
     } catch (e) { 
       toast(e.message); 
@@ -639,9 +724,8 @@ $("list").addEventListener("click", (ev) => {
 commentFileInput.addEventListener("change", async (ev) => {
   const file = ev.target.files[0];
   if (!file) return;
-  ev.target.value = ""; // Сброс
+  ev.target.value = "";
 
-  // Если открыт чат челленджа
   if (typeof currentChallenge !== "undefined" && currentChallenge) {
     const btn = $("chatSendBtn");
     btn.disabled = true;
@@ -666,7 +750,6 @@ commentFileInput.addEventListener("change", async (ev) => {
     return;
   }
 
-  // Если это комментарий в списке (события)
   if (pendingCommentContext) {
     const { eventId, inputEl } = pendingCommentContext;
     pendingCommentContext = null;
@@ -696,7 +779,6 @@ commentFileInput.addEventListener("change", async (ev) => {
   }
 });
 
-// Автозагрузка изображений
 async function loadCommentImages() {
   const images = document.querySelectorAll('img.comment-img[data-src]:not([src])');
   for (const img of images) {
@@ -715,14 +797,12 @@ async function loadCommentImages() {
   }
 }
 
-// Вызываем после каждого рендера списка
 const originalRenderList = renderList;
 renderList = function() {
   originalRenderList();
   loadCommentImages();
 };
 
-// Вызываем после обновления комментариев
 const originalLoadEventComments = loadEventComments;
 loadEventComments = async function(id) {
   await originalLoadEventComments(id);

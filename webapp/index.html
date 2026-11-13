@@ -376,6 +376,31 @@
   </div>
 </div>
 
+<!-- Модалка переноса события -->
+<div class="overlay" id="rescheduleOverlay" hidden style="z-index: 40;">
+  <div class="sheet" role="dialog" aria-modal="true">
+    <h2>Перенести событие</h2>
+    <p style="color: var(--hint); font-size: 14px; margin-bottom: 16px;">Предложите партнёру новую дату и время.</p>
+    <div class="two">
+      <div>
+        <label for="rescheduleDate">Новая дата</label>
+        <input type="date" id="rescheduleDate">
+      </div>
+      <div>
+        <label for="rescheduleTime">Новое время</label>
+        <input type="time" id="rescheduleTime">
+      </div>
+    </div>
+    <label for="rescheduleComment">Комментарий (необязательно)</label>
+    <textarea id="rescheduleComment" maxlength="500" placeholder="Почему переносим?"></textarea>
+    <div class="error" id="rescheduleError" role="alert"></div>
+    <div class="row" style="margin-top: 18px;">
+      <button class="btn ghost" id="rescheduleCancel">Отмена</button>
+      <button class="btn primary" id="rescheduleConfirm">Предложить перенос</button>
+    </div>
+  </div>
+</div>
+
 <input type="file" id="challengePhotoInput" accept="image/*" multiple style="display: none;">
 
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
