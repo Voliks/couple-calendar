@@ -91,7 +91,7 @@ function commentsListHtml(comments) {
     let imgHtml = "";
     if (c.photo_id) {
       imgHtml = `<div style="margin-top:6px;">
-        <img data-src="${esc(c.photo_id)}" class="comment-img" style="max-width:100%; border-radius:8px; min-height:40px; background:rgba(0,0,0,0.05); cursor:pointer;" alt="Фото">
+        <img data-src="${esc(c.photo_id)}" class="comment-img" alt="Фото">
       </div>`;
     }
     return `<div class="cm${c.sender_id === myId ? " mine" : ""}">

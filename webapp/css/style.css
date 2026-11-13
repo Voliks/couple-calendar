@@ -412,3 +412,25 @@ input[type="date"], input[type="time"] { min-width: 0; width: 100%; }
   color: var(--text);
 }
 .btn-send-comment { background: var(--accent); color: #fff; border-radius: 8px; padding: 0 12px; font-weight: 700; }
+
+/* ============================================================
+   ФОТО В КОММЕНТАРИЯХ (Компактное отображение)
+   ============================================================ */
+.comment-img {
+  display: block;
+  width: 100% !important;
+  max-width: 280px !important;
+  height: 180px !important;
+  object-fit: cover !important;
+  object-position: center !important;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  margin-top: 6px;
+}
+
+@media (max-width: 380px) {
+  .comment-img {
+    height: 150px !important;
+  }
+}

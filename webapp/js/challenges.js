@@ -301,7 +301,7 @@ function renderChatMessages(list) {
     
     let imgHtml = "";
     if (m.photo_id) {
-      imgHtml = `<img data-src="${esc(m.photo_id)}" class="comment-img" style="max-width:200px; border-radius:8px; margin-top:6px; display:block; background:rgba(0,0,0,0.1); min-height:50px; cursor:pointer;">`;
+      imgHtml = `<img data-src="${esc(m.photo_id)}" class="comment-img" alt="Фото">`;
     }
     
     return `<div style="max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px; word-break: break-word; ${align}">
