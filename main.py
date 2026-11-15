@@ -864,13 +864,14 @@ async def api_respond(request: web.Request) -> web.Response:
         event["category"], comment[:80], alt_date, alt_time,
     )
 
-    # Запрет переигрывания: отвечать можно только пока событие в статусе pending.
-    if event["status"] not in ("pending",):
+    # Ответ можно менять (принято <-> отклонено), как и предлагает интерфейс
+    # («Отказаться» / «Всё-таки принять»). Нельзя только после отметки «выполнено».
+    if event["status"] == "done":
         logging.warning(
-            "api respond rejected (not pending): event=%s caller=%s prev=%s new=%s",
-            event["id"], tg_user.id, event["status"], status,
+            "api respond rejected (done): event=%s caller=%s new=%s",
+            event["id"], tg_user.id, status,
         )
-        raise ApiError("Событие уже обработано. Изменить ответ нельзя.", 409)
+        raise ApiError("Событие уже выполнено. Изменить ответ нельзя.", 409)
 
     slot = "creator" if event["created_by"] == tg_user.id else "target"
 
