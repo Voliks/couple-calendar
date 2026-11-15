@@ -16,6 +16,9 @@ function checklistHtml(e) {
 function answerHtml(e, expired) {
   if (e.category === "shop" || e.category === "todo" || e.category === "personal") return "";
   if (e.is_creator) return "";
+  // Для секс-событий кнопки ответа живут только в отдельном диалоге/экране —
+  // в карточке их не показываем, чтобы случайный тап при скролле не подтверждал/отклонял событие.
+  if (e.category === "sex") return "";
   if (e.status === "pending") {
     return expired ? "" : `<div class="answer">
       <button class="yes" data-status="accepted">Да</button>
@@ -61,7 +64,30 @@ function ideasHtml(e) {
       <span class="idea-actions">${buttons}</span>
     </div>`;
   }).join("");
-  return `<div class="ideas-list-card">${rows}</div>`;
+
+  // Для секс-события, ожидающего ответа target-а, добавляем одну общую кнопку
+  // «Ответить на событие» с явным подтверждением — чтобы не было случайных тапов
+  // по «Да/Нет» в карточке при скролле.
+  let respondBlock = "";
+  if (e.can_respond_ideas || (e.status === "pending" && !e.is_creator)) {
+    respondBlock = `
+      <div class="answer sex-answer" style="margin-top:8px">
+        <button class="yes" data-sex-answer="accepted">✅ Принять событие</button>
+        <button class="no"  data-sex-answer="declined">❌ Отклонить</button>
+      </div>`;
+  } else if (e.status === "accepted" && !e.is_creator) {
+    respondBlock = `
+      <div class="answer one sex-answer" style="margin-top:8px">
+        <button class="soft" data-sex-answer="declined">Отказаться</button>
+      </div>`;
+  } else if (e.status === "declined" && !e.is_creator) {
+    respondBlock = `
+      <div class="answer one sex-answer" style="margin-top:8px">
+        <button class="soft" data-sex-answer="accepted">Всё-таки принять</button>
+      </div>`;
+  }
+
+  return `<div class="ideas-list-card">${rows}</div>${respondBlock}`;
 }
 
 function declineCommentHtml(e) {
@@ -664,6 +690,23 @@ function openDeclineDialog(event, onConfirm) {
 
 /* ---------- ОБРАБОТЧИК КЛИКОВ ---------- */
 
+// Двухшаговое подтверждение для действий над секс-событием,
+// чтобы случайный тап по кнопке при скролле не менял статус.
+function confirmSexAnswer(event, targetStatus, onConfirm) {
+  const verb = targetStatus === "accepted" ? "принять" : "отклонить";
+  const wasDeclined = event.status === "declined";
+  const wasAccepted = event.status === "accepted";
+  let question;
+  if (targetStatus === "accepted" && wasDeclined) {
+    question = "Всё-таки принять это событие?";
+  } else if (targetStatus === "declined" && wasAccepted) {
+    question = "Отказаться от этого события? Оно перейдёт в статус «Отклонено».";
+  } else {
+    question = `Точно ${verb} это событие?`;
+  }
+  confirmDialog(question, onConfirm);
+}
+
 $("list").addEventListener("click", async (ev) => {
   // Удаление комментария
   const delBtn = ev.target.closest("[data-cm-del]");
@@ -709,6 +752,40 @@ $("list").addEventListener("click", async (ev) => {
       toast(err.message);
       await load(true);
     }
+    return;
+  }
+
+  // Общая кнопка ответа для sex-события (data-sex-answer)
+  const sexAnswerBtn = ev.target.closest("[data-sex-answer]");
+  if (sexAnswerBtn) {
+    const newStatus = sexAnswerBtn.dataset.sexAnswer;
+    confirmSexAnswer(event, newStatus, async () => {
+      if (newStatus === "declined") {
+        // Для отказа открываем диалог с комментарием и опциональным переносом
+        openDeclineDialog(event, async (comment, altDate, altTime) => {
+          const updated = await api(`/events/${eventId}/respond`, {
+            method: "POST",
+            body: { status: "declined", comment, alt_date: altDate || "", alt_time: altTime || "" }
+          });
+          replaceEvent(updated);
+          etag = null; etagKey = "";
+          await load(true);
+          tg.HapticFeedback?.notificationOccurred("success");
+          toast(altDate ? "Отклонено с предложением переноса" : "Отклонено");
+        });
+      } else {
+        try {
+          const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: newStatus } });
+          replaceEvent(updated);
+          etag = null; etagKey = "";
+          await load(true);
+          tg.HapticFeedback?.notificationOccurred("success");
+        } catch (e) {
+          toast(e.message);
+          await load(true);
+        }
+      }
+    });
     return;
   }
 
@@ -767,17 +844,21 @@ $("list").addEventListener("click", async (ev) => {
     }
 
     // --- ПРИНЯТИЕ ---
-    statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
-    try {
-      const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: newStatus } });
-      replaceEvent(updated);
-      etag = null; etagKey = "";
-      await load(true);
-      tg.HapticFeedback?.notificationOccurred("success");
-    } catch (e) {
-      toast(e.message);
-      await load(true);
-    }
+    // Для rest-событий оставляем один тап (это не критично), но добавим
+    // двухшаговое подтверждение на всякий случай, чтобы исключить случайные тапы.
+    confirmDialog("Принять это событие?", async () => {
+      statusBtn.parentElement.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      try {
+        const updated = await api(`/events/${eventId}/respond`, { method: "POST", body: { status: newStatus } });
+        replaceEvent(updated);
+        etag = null; etagKey = "";
+        await load(true);
+        tg.HapticFeedback?.notificationOccurred("success");
+      } catch (e) {
+        toast(e.message);
+        await load(true);
+      }
+    });
     return;
   }
 

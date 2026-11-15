@@ -239,9 +239,17 @@ async def event_inline_action(call: CallbackQuery):
         await call.answer("Событие не найдено", show_alert=True)
         return
     if call.from_user.id != event["target_user"]:
+        logging.warning(
+            "inline respond rejected: event=%s caller=%s target=%s action=%s",
+            event_id, call.from_user.id, event["target_user"], action,
+        )
         await call.answer("Отвечать может только приглашённый", show_alert=True)
         return
     if event["category"] in ("shop", "todo", "personal", "sex"):
+        logging.info(
+            "inline respond ignored (category=%s): event=%s caller=%s action=%s",
+            event["category"], event_id, call.from_user.id, action,
+        )
         await call.answer("Это не требует ответа", show_alert=True)
         return
     if action == "accept":
@@ -251,12 +259,25 @@ async def event_inline_action(call: CallbackQuery):
     else:
         await call.answer("Неизвестное действие", show_alert=False)
         return
+
+    logging.info(
+        "inline respond: event=%s caller=%s action=%s prev_status=%s",
+        event_id, call.from_user.id, action, event["status"],
+    )
+
+    if event["status"] != "pending":
+        logging.warning(
+            "inline respond rejected (not pending): event=%s caller=%s prev=%s action=%s",
+            event_id, call.from_user.id, event["status"], action,
+        )
+        await call.answer("Событие уже обработано", show_alert=True)
+        return
     if event["status"] == status:
         await call.answer("Уже отмечено")
         return
     await db.set_status(event_id, status)
     await db.bump_pair_rev(db.pair_key(event["created_by"], event["target_user"]))
-    
+
     icon = "✅" if status == "accepted" else "❌"
     who = call.from_user.first_name
     notify(
@@ -822,15 +843,34 @@ async def api_respond(request: web.Request) -> web.Response:
         raise ApiError("Некорректный статус.")
 
     if event["target_user"] != tg_user.id:
+        logging.warning(
+            "api respond rejected (non-target): event=%s caller=%s target=%s status=%s",
+            event["id"], tg_user.id, event["target_user"], status,
+        )
         raise ApiError("Отвечать на событие может только приглашённый", 403)
 
     comment = str(body.get("comment") or "").strip()[:500]
     alt_date = str(body.get("alt_date") or "").strip()
     alt_time = str(body.get("alt_time") or "").strip()
-    
+
     if alt_date and not valid_date(alt_date):
         alt_date = ""
         alt_time = ""
+
+    logging.info(
+        "api respond: event=%s caller=%s prev_status=%s new_status=%s "
+        "category=%s comment=%r alt=%r/%r",
+        event["id"], tg_user.id, event["status"], status,
+        event["category"], comment[:80], alt_date, alt_time,
+    )
+
+    # Запрет переигрывания: отвечать можно только пока событие в статусе pending.
+    if event["status"] not in ("pending",):
+        logging.warning(
+            "api respond rejected (not pending): event=%s caller=%s prev=%s new=%s",
+            event["id"], tg_user.id, event["status"], status,
+        )
+        raise ApiError("Событие уже обработано. Изменить ответ нельзя.", 409)
 
     slot = "creator" if event["created_by"] == tg_user.id else "target"
 
@@ -887,6 +927,10 @@ async def api_set_idea_response(request: web.Request) -> web.Response:
     if event["status"] != "pending":
         raise ApiError("Общий ответ уже дан — изменить отдельные нельзя")
     if event["target_user"] != tg_user.id:
+        logging.warning(
+            "idea respond rejected (non-target): event=%s caller=%s target=%s",
+            event["id"], tg_user.id, event["target_user"],
+        )
         raise ApiError("Отвечать по идеям может только приглашённый")
     body = await read_json(request)
     try:
@@ -899,6 +943,12 @@ async def api_set_idea_response(request: web.Request) -> web.Response:
     idea_lines = _extract_idea_lines(event["description"])
     if not (0 <= idx < len(idea_lines)):
         raise ApiError("Идея не найдена", 404)
+
+    logging.info(
+        "api idea respond: event=%s caller=%s idx=%s status=%s prev_event_status=%s",
+        event["id"], tg_user.id, idx, status, event["status"],
+    )
+
     await db.set_idea_response(event["id"], idx, status, tg_user.id)
     updated = await db.get_event(event["id"])
     return web.json_response(event_to_dict(updated, tg_user.id))
@@ -915,6 +965,12 @@ async def api_set_reaction(request: web.Request) -> web.Response:
         raise ApiError("Реакция доступна только для принятого события")
     if emoji and emoji not in ALLOWED_REACTIONS:
         raise ApiError("Недопустимая реакция")
+
+    logging.info(
+        "api reaction: event=%s caller=%s emoji=%r status=%s",
+        event["id"], tg_user.id, emoji, event["status"],
+    )
+
     await db.set_reaction(event["id"], emoji, tg_user.id)
     updated = await db.get_event(event["id"])
     return web.json_response(event_to_dict(updated, tg_user.id))
