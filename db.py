@@ -997,7 +997,7 @@ async def count_events_created(user_id: int) -> int:
 async def create_event(created_by, target_user, title, description, date, event_time, category,
                        items=None, color: str = "", remind_before: int = 0,
                        date_end: str = "", visibility: str = "shared"):
-    initial_status = "accepted" if category in ("shop", "todo", "personal", "sex") else "pending"
+    initial_status = "accepted" if category in ("shop", "todo", "personal") else "pending"
     rs = await _exec(
         "INSERT INTO events (created_by, target_user, title, description, date, date_end, time, category, status, color, remind_before, visibility) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

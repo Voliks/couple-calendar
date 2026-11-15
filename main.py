@@ -245,7 +245,7 @@ async def event_inline_action(call: CallbackQuery):
         )
         await call.answer("Отвечать может только приглашённый", show_alert=True)
         return
-    if event["category"] in ("shop", "todo", "personal", "sex"):
+    if event["category"] in ("shop", "todo", "personal"):
         logging.info(
             "inline respond ignored (category=%s): event=%s caller=%s action=%s",
             event["category"], event_id, call.from_user.id, action,
